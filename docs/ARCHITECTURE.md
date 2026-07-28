@@ -66,3 +66,22 @@ The game imports `DirectInputCreateA` from legacy `DINPUT.dll`. Our DLL exports
 the same seven public functions and forwards them to the Windows x86 system
 library. A smoke test calls the forwarded factory and requires a real
 DirectInput object before a build is packaged.
+
+## Modern mouse action bridge
+
+`Dungeon.dll` already polls relative DirectInput mouse deltas and exposes
+native sources named `MOUSE_HORIZ_LEFT`, `MOUSE_HORIZ_RIGHT` and
+`MOUSE_LBUTTON`. The retail binding file uses these sources for menus only.
+
+The optional modern-mouse layer adds those existing sources to the native
+`ACTION_TURN_LEFT`, `ACTION_TURN_RIGHT` and `ACTION_ATTACK_1` bindings after
+the engine has evaluated its input table. It does not synthesize keyboard
+events, move the camera directly or run input during render-only subframes.
+The character turns through the original player controller; the original
+follow camera consequently remains behind the character in the normal game
+fashion. Existing menu mouse bindings remain untouched.
+
+The engine may rebuild its action map after control redefinition. The input
+hook therefore verifies the three injected bindings once per real input tick
+and restores only a missing entry. This work never runs on either of the two
+synthetic native-render phases.

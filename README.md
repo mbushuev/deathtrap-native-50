@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.15`.
+Current development version: `0.0.16`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -19,6 +19,7 @@ This repository contains only our Deathtrap-specific work:
 - the `DINPUT.dll` loader and system-DirectInput forwarder;
 - the minimal D3D11/DXGI presentation bridge;
 - the corrupt/black native-phase guard;
+- an opt-in native mouse-to-character-turn and left-click attack layer;
 - configuration, build, verification and installation material.
 
 dgVoodoo and optional presentation launchers remain independent external
@@ -85,6 +86,10 @@ D3D11 settings, first-run verification and troubleshooting.
 - `NativeRender/Enabled=0`: disable it before process startup.
 - `NativeRender/Subframes=3`: approximately 50 FPS, the recommended mode.
 - `NativeRender/Subframes=2`: conservative approximately 33 FPS fallback.
+- `ModernMouse/HorizontalTurn=1`: map relative horizontal mouse motion to
+  the game's native left/right turn actions.
+- `ModernMouse/LeftClickAttack=1`: map the left mouse button to the game's
+  native primary melee attack action.
 - `Diagnostics/DebugLog=1`: write `deathtrap_native_render.log` and
   `deathtrap_native_present.log`. Logging is off by default.
 
