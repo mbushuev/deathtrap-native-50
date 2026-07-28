@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -22,12 +21,10 @@ constexpr DWORD kExpectedDungeonTimestamp = 0x35752434u;
 constexpr DWORD kExpectedDungeonImageSize = 0x00367000u;
 
 constexpr uintptr_t kInputUpdateRva = 0x0005DC40u;
-constexpr uintptr_t kGameplayInputStageRva = 0x00040420u;
 constexpr uintptr_t kActionBindingsRva = 0x001F4B30u;
 constexpr uintptr_t kMouseSourcesRva = 0x000DF9D8u;
 constexpr uintptr_t kMouseStateRva = 0x001F6B20u;
 constexpr uintptr_t kActionStateRva = 0x001F6B40u;
-constexpr uintptr_t kPlayerPointerRva = 0x0034F9D0u;
 
 // The definition table stores zero-based public action IDs, but the runtime
 // binding map reserves slot zero and returns public ID + 1 from its name
@@ -36,6 +33,8 @@ constexpr uint32_t kActionLeftSidestep = 7u;
 constexpr uint32_t kActionRightSidestep = 8u;
 constexpr uint32_t kActionTurnLeft = 9u;
 constexpr uint32_t kActionTurnRight = 10u;
+constexpr uint32_t kActionTurnFastLeft = 11u;
+constexpr uint32_t kActionTurnFastRight = 12u;
 constexpr uint32_t kActionAttackRanged = 13u;
 constexpr uint32_t kActionAttack1 = 14u;
 constexpr uint32_t kActionParry = 18u;
@@ -71,7 +70,6 @@ static_assert(sizeof(NativeActionBinding) == 0x1Cu);
 static_assert(sizeof(NativeActionBindings) == 0x90u);
 
 using InputUpdateFn = void(__cdecl*)();
-using GameplayInputStageFn = void(__cdecl*)();
 
 enum class ControlMode : uint32_t {
   kClassic,
@@ -88,16 +86,8 @@ std::atomic<bool> g_debug_log{false};
 std::atomic<bool> g_hook_installed{false};
 std::atomic<ControlMode> g_control_mode{ControlMode::kClassic};
 std::atomic<bool> g_modern_wasd{false};
-std::atomic<bool> g_invert_x{false};
-std::atomic<bool> g_block_turn_during_combat{true};
-std::atomic<int32_t> g_pending_mouse_dx{0};
 uint8_t* g_dungeon_base = nullptr;
 InputUpdateFn g_original_input_update = nullptr;
-GameplayInputStageFn g_original_gameplay_input_stage = nullptr;
-double g_sensitivity_degrees = 0.08;
-double g_max_degrees_per_tick = 35.0;
-double g_fractional_angle_units = 0.0;
-int32_t g_jitter_threshold = 0;
 uintptr_t g_left_key_source = 0;
 uintptr_t g_right_key_source = 0;
 uint64_t g_input_tick = 0;
@@ -133,16 +123,6 @@ std::wstring ConfiguredString(const wchar_t* key, const wchar_t* value) {
   GetPrivateProfileStringW(L"ModernMouse", key, value, buffer,
                            static_cast<DWORD>(std::size(buffer)), path.c_str());
   return buffer;
-}
-
-double ConfiguredDouble(const wchar_t* key, double default_value) {
-  wchar_t fallback[32] = {};
-  swprintf_s(fallback, L"%.6f", default_value);
-  const std::wstring value = ConfiguredString(key, fallback);
-  wchar_t* end = nullptr;
-  const double parsed = wcstod(value.c_str(), &end);
-  return end != value.c_str() && std::isfinite(parsed) ? parsed
-                                                       : default_value;
 }
 
 bool ConfiguredDiagnostic(const wchar_t* key, bool default_value) {
@@ -322,7 +302,11 @@ void EnsureModernMouseBindings() {
     if (modern) {
       RemoveBinding(kActionTurnLeft, MouseSource(kMouseHorizontalLeft));
       RemoveBinding(kActionTurnRight, MouseSource(kMouseHorizontalRight));
+      EnsureBinding(kActionTurnFastLeft, MouseSource(kMouseHorizontalLeft));
+      EnsureBinding(kActionTurnFastRight, MouseSource(kMouseHorizontalRight));
     } else {
+      RemoveBinding(kActionTurnFastLeft, MouseSource(kMouseHorizontalLeft));
+      RemoveBinding(kActionTurnFastRight, MouseSource(kMouseHorizontalRight));
       EnsureBinding(kActionTurnLeft, MouseSource(kMouseHorizontalLeft));
       EnsureBinding(kActionTurnRight, MouseSource(kMouseHorizontalRight));
     }
@@ -363,107 +347,6 @@ void EnsureModernMouseBindings() {
   }
 }
 
-void AccumulateMouseDelta() {
-  if (!g_dungeon_base ||
-      g_control_mode.load(std::memory_order_relaxed) != ControlMode::kModern ||
-      !g_turn_enabled.load(std::memory_order_relaxed)) {
-    return;
-  }
-  const auto* mouse =
-      reinterpret_cast<const int32_t*>(g_dungeon_base + kMouseStateRva);
-  int32_t dx = mouse[0];
-  if (std::abs(dx) <= g_jitter_threshold) {
-    return;
-  }
-  dx = std::clamp(dx, -2048, 2048);
-  int32_t pending = g_pending_mouse_dx.load(std::memory_order_relaxed);
-  for (;;) {
-    const int32_t next = std::clamp(pending + dx, -4096, 4096);
-    if (g_pending_mouse_dx.compare_exchange_weak(
-            pending, next, std::memory_order_release,
-            std::memory_order_relaxed)) {
-      break;
-    }
-  }
-}
-
-uint32_t* PlayerTransform() {
-  if (!g_dungeon_base) {
-    return nullptr;
-  }
-  const uintptr_t player = *reinterpret_cast<const uintptr_t*>(
-      g_dungeon_base + kPlayerPointerRva);
-  if (!player) {
-    return nullptr;
-  }
-  const uintptr_t transform_holder =
-      *reinterpret_cast<const uintptr_t*>(player + 0x10u);
-  if (!transform_holder) {
-    return nullptr;
-  }
-  return reinterpret_cast<uint32_t*>(
-      *reinterpret_cast<const uintptr_t*>(transform_holder));
-}
-
-void ApplyModernHeading() {
-  if (g_control_mode.load(std::memory_order_relaxed) != ControlMode::kModern ||
-      !g_turn_enabled.load(std::memory_order_relaxed)) {
-    g_pending_mouse_dx.store(0, std::memory_order_relaxed);
-    return;
-  }
-  const int32_t dx =
-      g_pending_mouse_dx.exchange(0, std::memory_order_acq_rel);
-  if (!dx) {
-    return;
-  }
-  if (g_block_turn_during_combat.load(std::memory_order_relaxed)) {
-    const auto* mouse =
-        reinterpret_cast<const int32_t*>(g_dungeon_base + kMouseStateRva);
-    if (mouse[3] != 0 || mouse[7] != 0) {
-      // Native turn actions are locked while an attack/parry pose owns the
-      // player transform. Directly changing heading inside that pose can
-      // deadlock the retail animation controller. Discard, never defer, the
-      // delta so releasing the button cannot cause a delayed camera jump.
-      AppendInputLog("modern-heading blocked combat dx=%ld lb=%ld rb=%ld\r\n",
-                     static_cast<long>(dx), static_cast<long>(mouse[3]),
-                     static_cast<long>(mouse[7]));
-      g_fractional_angle_units = 0.0;
-      return;
-    }
-  }
-  uint32_t* const transform = PlayerTransform();
-  if (!transform) {
-    return;
-  }
-
-  constexpr double kAngleUnitsPerDegree = 1024.0 / 360.0;
-  const double direction =
-      g_invert_x.load(std::memory_order_relaxed) ? -1.0 : 1.0;
-  const double requested_degrees = std::clamp(
-      static_cast<double>(dx) * g_sensitivity_degrees * direction,
-      -g_max_degrees_per_tick, g_max_degrees_per_tick);
-  const double exact_units =
-      requested_degrees * kAngleUnitsPerDegree + g_fractional_angle_units;
-  const int32_t whole_units = static_cast<int32_t>(std::trunc(exact_units));
-  g_fractional_angle_units = exact_units - whole_units;
-  if (!whole_units) {
-    return;
-  }
-
-  // Dungeon stores the canonical Y-axis heading as a 10-bit turn at +0x1C.
-  // This runs after input collection and before the movement dispatcher, so
-  // collision, attacks and animation observe the same authoritative heading.
-  const uint32_t old_yaw = transform[0x1Cu / sizeof(uint32_t)] & 0x3FFu;
-  const uint32_t new_yaw =
-      static_cast<uint32_t>(static_cast<int32_t>(old_yaw) + whole_units) &
-      0x3FFu;
-  transform[0x1Cu / sizeof(uint32_t)] = new_yaw;
-  AppendInputLog("modern-heading dx=%ld units=%ld yaw=%lu->%lu\r\n",
-                 static_cast<long>(dx), static_cast<long>(whole_units),
-                 static_cast<unsigned long>(old_yaw),
-                 static_cast<unsigned long>(new_yaw));
-}
-
 void LogInputState() {
   if (!g_debug_log.load(std::memory_order_relaxed) || !g_dungeon_base) {
     return;
@@ -488,11 +371,14 @@ void LogInputState() {
 
   const NativeActionState& turn_left = actions[kActionTurnLeft];
   const NativeActionState& turn_right = actions[kActionTurnRight];
+  const NativeActionState& fast_left = actions[kActionTurnFastLeft];
+  const NativeActionState& fast_right = actions[kActionTurnFastRight];
   const NativeActionState& attack = actions[kActionAttack1];
   const NativeActionState& parry = actions[kActionParry];
   AppendInputLog(
       "tick=%llu dx=%ld dy=%ld lb=%ld rb=%ld turnL=%lu/%ld "
-      "turnR=%lu/%ld attack1=%lu/%ld parry=%lu/%ld\r\n",
+      "turnR=%lu/%ld fastL=%lu/%ld fastR=%lu/%ld "
+      "attack1=%lu/%ld parry=%lu/%ld\r\n",
       static_cast<unsigned long long>(g_input_tick), static_cast<long>(dx),
       static_cast<long>(dy), static_cast<long>(left_button),
       static_cast<long>(right_button),
@@ -500,6 +386,10 @@ void LogInputState() {
       static_cast<long>(turn_left.magnitude),
       static_cast<unsigned long>(turn_right.state),
       static_cast<long>(turn_right.magnitude),
+      static_cast<unsigned long>(fast_left.state),
+      static_cast<long>(fast_left.magnitude),
+      static_cast<unsigned long>(fast_right.state),
+      static_cast<long>(fast_right.magnitude),
       static_cast<unsigned long>(attack.state),
       static_cast<long>(attack.magnitude),
       static_cast<unsigned long>(parry.state),
@@ -513,15 +403,7 @@ void __cdecl HookInputUpdate() {
   // The game can rebuild the action map after redefining controls. Re-checking
   // here is cheap and makes the injected bindings self-healing.
   EnsureModernMouseBindings();
-  AccumulateMouseDelta();
   LogInputState();
-}
-
-void __cdecl HookGameplayInputStage() {
-  if (g_original_gameplay_input_stage) {
-    g_original_gameplay_input_stage();
-  }
-  ApplyModernHeading();
 }
 
 void InitializeState() {
@@ -545,16 +427,6 @@ void InitializeState() {
                        std::memory_order_relaxed);
   g_modern_wasd.store(enabled && Configured(L"ModernWASD", true),
                       std::memory_order_relaxed);
-  g_invert_x.store(Configured(L"InvertX", false),
-                   std::memory_order_relaxed);
-  g_block_turn_during_combat.store(
-      Configured(L"BlockTurnDuringCombat", true), std::memory_order_relaxed);
-  g_sensitivity_degrees =
-      std::clamp(ConfiguredDouble(L"Sensitivity", 0.08), 0.001, 2.0);
-  g_max_degrees_per_tick = std::clamp(
-      ConfiguredDouble(L"MaxDegreesPerTick", 35.0), 1.0, 180.0);
-  g_jitter_threshold = std::clamp(
-      static_cast<int32_t>(ConfiguredDouble(L"JitterThreshold", 0.0)), 0, 32);
   g_debug_log.store(ConfiguredDiagnostic(L"DebugLog", false),
                     std::memory_order_relaxed);
   if (!enabled) {
@@ -566,22 +438,20 @@ void InitializeState() {
   if (IsExpectedDungeonImage(base)) {
     g_dungeon_base = base;
     AppendInputLog(
-        "Deathtrap modern mouse 0.0.20 session enabled=%u mode=%s turn=%u "
-        "wasd=%u attack=%u parry=%u repair=%u sensitivity=%.4f "
-        "invert=%u combat-lock=%u jitter=%ld max-degrees=%.2f\r\n",
+        "Deathtrap modern mouse 0.0.21 session enabled=%u mode=%s turn=%u "
+        "native-fast-turn=%u wasd=%u attack=%u parry=%u repair=%u\r\n",
         enabled ? 1u : 0u,
         g_control_mode.load(std::memory_order_relaxed) == ControlMode::kModern
             ? "modern"
             : "classic",
         g_turn_enabled.load(std::memory_order_relaxed) ? 1u : 0u,
+        g_control_mode.load(std::memory_order_relaxed) == ControlMode::kModern
+            ? 1u
+            : 0u,
         g_modern_wasd.load(std::memory_order_relaxed) ? 1u : 0u,
         g_attack_enabled.load(std::memory_order_relaxed) ? 1u : 0u,
         g_parry_enabled.load(std::memory_order_relaxed) ? 1u : 0u,
-        g_repair_legacy_bindings.load(std::memory_order_relaxed) ? 1u : 0u,
-        g_sensitivity_degrees,
-        g_invert_x.load(std::memory_order_relaxed) ? 1u : 0u,
-        g_block_turn_during_combat.load(std::memory_order_relaxed) ? 1u : 0u,
-        static_cast<long>(g_jitter_threshold), g_max_degrees_per_tick);
+        g_repair_legacy_bindings.load(std::memory_order_relaxed) ? 1u : 0u);
   } else {
     g_enabled.store(false, std::memory_order_relaxed);
   }
@@ -611,18 +481,6 @@ bool InstallDeathtrapModernMouseHook() {
   }
   const MH_STATUS enabled = MH_EnableHook(target);
   if (enabled != MH_OK && enabled != MH_ERROR_ENABLED) {
-    return false;
-  }
-  void* const gameplay_target = g_dungeon_base + kGameplayInputStageRva;
-  const MH_STATUS gameplay_created = MH_CreateHook(
-      gameplay_target, reinterpret_cast<void*>(&HookGameplayInputStage),
-      reinterpret_cast<void**>(&g_original_gameplay_input_stage));
-  if (gameplay_created != MH_OK &&
-      gameplay_created != MH_ERROR_ALREADY_CREATED) {
-    return false;
-  }
-  const MH_STATUS gameplay_enabled = MH_EnableHook(gameplay_target);
-  if (gameplay_enabled != MH_OK && gameplay_enabled != MH_ERROR_ENABLED) {
     return false;
   }
   EnsureModernMouseBindings();
