@@ -101,7 +101,7 @@ Synthetic render phases do not poll or consume input.
 
 ## XInput category bridge
 
-Version 0.0.25 loads XInput dynamically and polls it once at the same real
+Version 0.0.26 loads XInput dynamically and polls it once at the same real
 `Dungeon.dll+0x80600` boundary. D-pad holds write only the retail selector mode
 byte at `+0x1086FC`, whose values 1 through 4 already dispatch the original
 close-combat, ranged, spell, and consumable rows. Direct selection uses the
@@ -110,8 +110,10 @@ Availability is always checked through `+0x7BD30` first. The consumable path is
 reachable only after explicit A confirmation while its D-pad direction stays
 held.
 
-The D3D11 layer draws a minimal eight-direction marker after sampling the
+The D3D11 layer draws a numbered eight-direction marker after sampling the
 native frame for corruption. It does not feed the marker into interpolation or
 the black-frame detector. Base controller bindings are emitted as ordinary
-foreground keyboard/mouse transitions, so the retail action parser remains
-the sole owner of movement, combat, menus, and collision.
+foreground keyboard/mouse transitions. Dedicated J/K bindings call the retail
+side-step actions without the Ctrl+W diagonal collision, and right-stick Y
+stays on the retail relative-mouse path used by first-person view. The retail
+action parser remains the sole owner of movement, combat, menus, and collision.

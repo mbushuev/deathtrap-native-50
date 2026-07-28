@@ -283,6 +283,7 @@ int32_t g_xinput_left_deadzone = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
 int32_t g_xinput_right_deadzone = XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
 int32_t g_xinput_trigger_threshold = XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
 int32_t g_xinput_mouse_pixels = 18;
+bool g_xinput_invert_right_y = false;
 uint64_t g_weapon_wheel_switches = 0;
 uint64_t g_weapon_wheel_rejections = 0;
 uint64_t g_suppressed_midpoints = 0;
@@ -753,6 +754,8 @@ enum class InjectedKey : size_t {
   kS,
   kA,
   kD,
+  kJ,
+  kK,
   kShift,
   kSpace,
   kE,
@@ -773,10 +776,11 @@ ControllerSelectorState g_controller_selector;
 std::array<bool, static_cast<size_t>(InjectedKey::kCount)>
     g_injected_keys{};
 bool g_injected_mouse_left = false;
+bool g_injected_mouse_right = false;
 bool g_xinput_was_connected = false;
 
 constexpr std::array<WORD, static_cast<size_t>(InjectedKey::kCount)>
-    kInjectedVirtualKeys = {L'W', L'S', L'A', L'D', VK_LSHIFT,
+    kInjectedVirtualKeys = {L'W', L'S', L'A', L'D', L'J', L'K', VK_LSHIFT,
                             VK_SPACE, L'E', L'Q', VK_TAB, VK_ESCAPE,
                             VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, VK_RETURN};
 
@@ -820,11 +824,24 @@ void InjectMouseLeft(bool down) {
   }
 }
 
+void InjectMouseRight(bool down) {
+  if (g_injected_mouse_right == down) {
+    return;
+  }
+  INPUT input = {};
+  input.type = INPUT_MOUSE;
+  input.mi.dwFlags = down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
+  if (SendInput(1, &input, sizeof(input)) == 1) {
+    g_injected_mouse_right = down;
+  }
+}
+
 void ReleaseInjectedControllerInput() {
   for (size_t i = 0; i < g_injected_keys.size(); ++i) {
     InjectVirtualKey(static_cast<InjectedKey>(i), false);
   }
   InjectMouseLeft(false);
+  InjectMouseRight(false);
 }
 
 bool LoadXInputRuntime() {
@@ -1121,19 +1138,26 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
   if (gameplay) {
     InjectVirtualKey(InjectedKey::kW, left_y > 0.15);
     InjectVirtualKey(InjectedKey::kS, left_y < -0.15);
-    InjectVirtualKey(InjectedKey::kA, left_x < -0.15);
-    InjectVirtualKey(InjectedKey::kD, left_x > 0.15);
+    // Dedicated retail-format bindings avoid Ctrl+A/D. The latter collides
+    // with the game's Ctrl+W step action whenever a diagonal is requested.
+    InjectVirtualKey(InjectedKey::kA, false);
+    InjectVirtualKey(InjectedKey::kD, false);
+    InjectVirtualKey(InjectedKey::kJ, left_x < -0.15);
+    InjectVirtualKey(InjectedKey::kK, left_x > 0.15);
     InjectVirtualKey(InjectedKey::kShift,
-                     std::max(std::abs(left_x), std::abs(left_y)) > 0.72);
+                     std::abs(left_y) > 0.72);
     InjectVirtualKey(InjectedKey::kSpace,
                      !selector_captures_controls &&
                          (buttons & XINPUT_GAMEPAD_A));
     InjectVirtualKey(InjectedKey::kE, buttons & XINPUT_GAMEPAD_X);
     InjectVirtualKey(InjectedKey::kQ, buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
     InjectVirtualKey(InjectedKey::kTab,
-                     pad.bLeftTrigger >= g_xinput_trigger_threshold);
+                     !selector_captures_controls &&
+                         (buttons & XINPUT_GAMEPAD_RIGHT_THUMB));
     InjectMouseLeft(!selector_captures_controls &&
                     pad.bRightTrigger >= g_xinput_trigger_threshold);
+    InjectMouseRight(!selector_captures_controls &&
+                     pad.bLeftTrigger >= g_xinput_trigger_threshold);
     InjectVirtualKey(InjectedKey::kUp, false);
     InjectVirtualKey(InjectedKey::kDown, false);
     InjectVirtualKey(InjectedKey::kLeft, false);
@@ -1143,12 +1167,18 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     if (!selector_captures_controls) {
       const double right_x =
           NormalizedStick(pad.sThumbRX, g_xinput_right_deadzone);
-      const LONG movement = static_cast<LONG>(
+      const double right_y =
+          NormalizedStick(pad.sThumbRY, g_xinput_right_deadzone);
+      const LONG movement_x = static_cast<LONG>(
           std::lround(right_x * static_cast<double>(g_xinput_mouse_pixels)));
-      if (movement != 0) {
+      const double y_sign = g_xinput_invert_right_y ? 1.0 : -1.0;
+      const LONG movement_y = static_cast<LONG>(std::lround(
+          right_y * y_sign * static_cast<double>(g_xinput_mouse_pixels)));
+      if (movement_x != 0 || movement_y != 0) {
         INPUT input = {};
         input.type = INPUT_MOUSE;
-        input.mi.dx = movement;
+        input.mi.dx = movement_x;
+        input.mi.dy = movement_y;
         input.mi.dwFlags = MOUSEEVENTF_MOVE;
         SendInput(1, &input, sizeof(input));
       }
@@ -1158,12 +1188,15 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     InjectVirtualKey(InjectedKey::kS, false);
     InjectVirtualKey(InjectedKey::kA, false);
     InjectVirtualKey(InjectedKey::kD, false);
+    InjectVirtualKey(InjectedKey::kJ, false);
+    InjectVirtualKey(InjectedKey::kK, false);
     InjectVirtualKey(InjectedKey::kShift, false);
     InjectVirtualKey(InjectedKey::kSpace, false);
     InjectVirtualKey(InjectedKey::kE, false);
     InjectVirtualKey(InjectedKey::kQ, false);
     InjectVirtualKey(InjectedKey::kTab, false);
     InjectMouseLeft(false);
+    InjectMouseRight(false);
     InjectVirtualKey(InjectedKey::kUp,
                      left_y > 0.35 || (buttons & XINPUT_GAMEPAD_DPAD_UP));
     InjectVirtualKey(InjectedKey::kDown,
@@ -4191,6 +4224,8 @@ void InitializePatchState() {
       0, 255);
   g_xinput_mouse_pixels = std::clamp(
       ConfiguredInteger(L"XInput", L"RightStickPixelsPerTick", 18), 1, 80);
+  g_xinput_invert_right_y =
+      ConfiguredInteger(L"XInput", L"InvertRightY", 0) != 0;
   const uint32_t subframes = ConfiguredSubframes();
   g_subframes.store(subframes, std::memory_order_relaxed);
   if (!subframes) {
@@ -4219,7 +4254,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.25 XInput selector prototype "
+      "Deathtrap native render overlay 0.0.26 XInput selector prototype "
       "integer x3 presentation "
       "session: "
       "unchanged v31 "

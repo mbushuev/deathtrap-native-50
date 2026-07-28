@@ -45,10 +45,11 @@ the overlay deliberately does not take cursor ownership.
 - Keep vertical mouse-look disabled unless a later camera investigation can
   preserve framing and collision visibility.
 
-## Phase 5: XInput (experimental in 0.0.25)
+## Phase 5: XInput (experimental in 0.0.26)
 
 - Dynamically support modern Xbox controllers without redistributing XInput.
-- Drive the original keyboard/mouse actions with configurable deadzones.
+- Drive the original keyboard/mouse actions with configurable deadzones,
+  dedicated side-step keys, two-axis first-person look and optional Y invert.
 - Map D-pad to the four native inventory groups and right stick to eight
   direct slots, with an original-row plus radial-marker presentation.
 - Require explicit A confirmation for consumables and allow B/release cancel.

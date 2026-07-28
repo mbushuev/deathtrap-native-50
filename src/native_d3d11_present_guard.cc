@@ -264,6 +264,61 @@ bool IsCorrupt(const VisualSample& exact, const VisualSample& candidate,
   return partial_black;
 }
 
+void DrawSelectorDigit(ID3D11DeviceContext1* context,
+                       ID3D11RenderTargetView* target, LONG center_x,
+                       LONG center_y, LONG scale, uint32_t digit,
+                       const float color[4]) {
+  if (!context || !target || digit < 1u || digit > 8u) {
+    return;
+  }
+  enum Segment : uint8_t {
+    kTop = 1u << 0,
+    kUpperRight = 1u << 1,
+    kLowerRight = 1u << 2,
+    kBottom = 1u << 3,
+    kLowerLeft = 1u << 4,
+    kUpperLeft = 1u << 5,
+    kMiddle = 1u << 6,
+  };
+  constexpr std::array<uint8_t, 9> kSegments = {
+      0u,
+      kUpperRight | kLowerRight,
+      kTop | kUpperRight | kMiddle | kLowerLeft | kBottom,
+      kTop | kUpperRight | kMiddle | kLowerRight | kBottom,
+      kUpperLeft | kMiddle | kUpperRight | kLowerRight,
+      kTop | kUpperLeft | kMiddle | kLowerRight | kBottom,
+      kTop | kUpperLeft | kMiddle | kLowerLeft | kLowerRight | kBottom,
+      kTop | kUpperRight | kLowerRight,
+      kTop | kUpperRight | kLowerRight | kBottom | kLowerLeft |
+          kUpperLeft | kMiddle,
+  };
+  const LONG thickness = std::max<LONG>(1, scale);
+  const LONG half_width = 2 * scale;
+  const LONG half_height = 4 * scale;
+  const LONG left = center_x - half_width;
+  const LONG right = center_x + half_width;
+  const LONG top = center_y - half_height;
+  const LONG middle = center_y;
+  const LONG bottom = center_y + half_height;
+  const uint8_t mask = kSegments[digit];
+  const auto draw = [&](uint8_t segment, const D3D11_RECT& rect) {
+    if (mask & segment) {
+      context->ClearView(target, color, &rect, 1);
+    }
+  };
+  draw(kTop, {left, top, right + 1, top + thickness});
+  draw(kMiddle,
+       {left, middle - thickness / 2, right + 1,
+        middle - thickness / 2 + thickness});
+  draw(kBottom, {left, bottom - thickness, right + 1, bottom});
+  draw(kUpperLeft, {left, top, left + thickness, middle + 1});
+  draw(kUpperRight,
+       {right - thickness + 1, top, right + 1, middle + 1});
+  draw(kLowerLeft, {left, middle, left + thickness, bottom});
+  draw(kLowerRight,
+       {right - thickness + 1, middle, right + 1, bottom});
+}
+
 void DrawControllerSelector(State* state, ID3D11Texture2D* backbuffer) {
   if (!state || !backbuffer) {
     return;
@@ -321,6 +376,10 @@ void DrawControllerSelector(State* state, ID3D11Texture2D* backbuffer) {
       color = {0.95f, 0.05f, 0.04f, 1.0f};
     }
     context1->ClearView(target.Get(), color.data(), &rect, 1);
+    const LONG digit_scale = selected ? 2 : 1;
+    const float digit_color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    DrawSelectorDigit(context1.Get(), target.Get(), x, y, digit_scale,
+                      slot + 1u, digit_color);
   }
   if (selector.confirmation_required) {
     const LONG half = normal_half;

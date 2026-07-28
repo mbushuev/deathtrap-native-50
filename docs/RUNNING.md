@@ -160,21 +160,22 @@ down selects the next one).
 
 ## XInput controller test layer
 
-Version 0.0.25 dynamically loads the first available Microsoft XInput runtime
+Version 0.0.26 dynamically loads the first available Microsoft XInput runtime
 (`xinput1_4`, `xinput1_3`, then `xinput9_1_0`) and polls controller 0 only at a
 real game scheduler boundary. Synthetic native-render phases never poll or
 repeat controller input.
 
-The default layout is left stick movement/turning, right stick horizontal
-turning, A jump/climb, X operate, RT primary attack, LT first-person view, RB
-cast spell and Start menu. Vertical free camera movement is intentionally not
-invented because the original game has no safe camera-pitch action.
+The default layout is left stick forward/backward/side-step, both right-stick
+axes through the game's native relative-mouse actions, A jump/climb, X operate,
+RT primary attack, LT parry/block, right-stick click first-person view, RB cast
+spell and Start menu. Right-stick Y therefore works in the retail first-person
+view without writing camera transforms. Set `InvertRightY=1` to invert it.
 
 D-pad maps to the four retail selectors: up close combat, right ranged, down
 spells, and left potions/charms. A short tap cycles the next available item in
 the first three categories. Holding a direction for `SelectorHoldMs` opens the
-game's original row and a small eight-direction marker. Move the right stick
-to choose the slot and release to equip. An unavailable slot is red.
+game's original icon row and a numbered eight-direction marker. Move the right
+stick to choose slot 1–8 and release to equip. An unavailable slot is red.
 
 The consumable category never activates on release. Keep D-pad left held,
 choose a slot, and press A to use it; B or release cancels. This guard prevents

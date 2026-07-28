@@ -96,12 +96,12 @@ function Add-NativeBinding {
 
     $actionPattern = [regex]::Escape($Action)
     $expressionPattern = [regex]::Escape($Expression)
-    $existingPattern = "(?m)^\s*define\s+$actionPattern\s+DOWN\s+$expressionPattern\s*$"
+    $existingPattern = "(?m)^\s*define\s+$actionPattern\s+DOWN\s+$expressionPattern\s*\r?$"
     if ([regex]::IsMatch($Text, $existingPattern)) {
         return $Text
     }
 
-    $anchorPattern = "(?m)^\s*define\s+$actionPattern\b[^\r\n]*$"
+    $anchorPattern = "(?m)^\s*define\s+$actionPattern\b[^\r\n]*\r?$"
     $matches = [regex]::Matches($Text, $anchorPattern)
     if ($matches.Count -eq 0) {
         throw "Could not locate $Action in $keys"
@@ -133,7 +133,9 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
         @('ACTION_TURN_FAST_LEFT', 'KEY_LSHIFT + MOUSE_HORIZ_LEFT'),
         @('ACTION_TURN_FAST_RIGHT', 'KEY_LSHIFT + MOUSE_HORIZ_RIGHT'),
         @('ACTION_ATTACK_1', 'MOUSE_LBUTTON'),
-        @('ACTION_PARRY', 'MOUSE_RBUTTON')
+        @('ACTION_PARRY', 'MOUSE_RBUTTON'),
+        @('ACTION_LEFT_SIDESTEP', 'KEY_J'),
+        @('ACTION_RIGHT_SIDESTEP', 'KEY_K')
     )) {
         $keyText = Add-NativeBinding -Text $keyText -Action $binding[0] -Expression $binding[1]
     }
