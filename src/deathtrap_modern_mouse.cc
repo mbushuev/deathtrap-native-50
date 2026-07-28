@@ -89,6 +89,7 @@ std::atomic<bool> g_hook_installed{false};
 std::atomic<ControlMode> g_control_mode{ControlMode::kClassic};
 std::atomic<bool> g_modern_wasd{false};
 std::atomic<bool> g_invert_x{false};
+std::atomic<bool> g_block_turn_during_combat{true};
 std::atomic<int32_t> g_pending_mouse_dx{0};
 uint8_t* g_dungeon_base = nullptr;
 InputUpdateFn g_original_input_update = nullptr;
@@ -415,6 +416,21 @@ void ApplyModernHeading() {
   if (!dx) {
     return;
   }
+  if (g_block_turn_during_combat.load(std::memory_order_relaxed)) {
+    const auto* mouse =
+        reinterpret_cast<const int32_t*>(g_dungeon_base + kMouseStateRva);
+    if (mouse[3] != 0 || mouse[7] != 0) {
+      // Native turn actions are locked while an attack/parry pose owns the
+      // player transform. Directly changing heading inside that pose can
+      // deadlock the retail animation controller. Discard, never defer, the
+      // delta so releasing the button cannot cause a delayed camera jump.
+      AppendInputLog("modern-heading blocked combat dx=%ld lb=%ld rb=%ld\r\n",
+                     static_cast<long>(dx), static_cast<long>(mouse[3]),
+                     static_cast<long>(mouse[7]));
+      g_fractional_angle_units = 0.0;
+      return;
+    }
+  }
   uint32_t* const transform = PlayerTransform();
   if (!transform) {
     return;
@@ -531,6 +547,8 @@ void InitializeState() {
                       std::memory_order_relaxed);
   g_invert_x.store(Configured(L"InvertX", false),
                    std::memory_order_relaxed);
+  g_block_turn_during_combat.store(
+      Configured(L"BlockTurnDuringCombat", true), std::memory_order_relaxed);
   g_sensitivity_degrees =
       std::clamp(ConfiguredDouble(L"Sensitivity", 0.08), 0.001, 2.0);
   g_max_degrees_per_tick = std::clamp(
@@ -548,9 +566,9 @@ void InitializeState() {
   if (IsExpectedDungeonImage(base)) {
     g_dungeon_base = base;
     AppendInputLog(
-        "Deathtrap modern mouse 0.0.19 session enabled=%u mode=%s turn=%u "
+        "Deathtrap modern mouse 0.0.20 session enabled=%u mode=%s turn=%u "
         "wasd=%u attack=%u parry=%u repair=%u sensitivity=%.4f "
-        "invert=%u jitter=%ld max-degrees=%.2f\r\n",
+        "invert=%u combat-lock=%u jitter=%ld max-degrees=%.2f\r\n",
         enabled ? 1u : 0u,
         g_control_mode.load(std::memory_order_relaxed) == ControlMode::kModern
             ? "modern"
@@ -562,6 +580,7 @@ void InitializeState() {
         g_repair_legacy_bindings.load(std::memory_order_relaxed) ? 1u : 0u,
         g_sensitivity_degrees,
         g_invert_x.load(std::memory_order_relaxed) ? 1u : 0u,
+        g_block_turn_during_combat.load(std::memory_order_relaxed) ? 1u : 0u,
         static_cast<long>(g_jitter_threshold), g_max_degrees_per_tick);
   } else {
     g_enabled.store(false, std::memory_order_relaxed);

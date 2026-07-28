@@ -125,6 +125,7 @@ Sensitivity=0.08
 InvertX=0
 JitterThreshold=0
 MaxDegreesPerTick=35
+BlockTurnDuringCombat=1
 LeftClickAttack=1
 RightClickParry=1
 RepairLegacyBindings=1
@@ -145,7 +146,7 @@ deathtrap_native_present.log
 deathtrap_native_input.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.19`
+The render log must begin with the `Deathtrap native render overlay 0.0.20`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -165,6 +166,9 @@ the original discrete turn bindings instead. Left click invokes the native
 primary melee attack, right click invokes parry, and menu pointer/click handling
 continues to use the original game path. `RepairLegacyBindings=1` removes only
 the three erroneous pairs written by development build 0.0.16.
+`BlockTurnDuringCombat=1` also preserves the retail animation-controller lock:
+mouse deltas received while attack or parry is held are discarded rather than
+written into the pose-owned heading or replayed after the button is released.
 
 Mouse-wheel weapon cycling is intentionally not part of 0.0.19. The retail
 input table has no wheel source, so it requires a separate native inventory

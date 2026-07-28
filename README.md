@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.19`.
+Current development version: `0.0.20`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -97,6 +97,8 @@ D3D11 settings, first-run verification and troubleshooting.
 - `ModernMouse/JitterThreshold=0`: ignore deltas up to this many counts.
 - `ModernMouse/MaxDegreesPerTick=35`: discard focus-change spikes rather than
   queuing delayed rotation.
+- `ModernMouse/BlockTurnDuringCombat=1`: respect the retail attack/parry pose
+  lock and discard mouse rotation while either combat button is held.
 - `ModernMouse/LeftClickAttack=1`: map the left mouse button to the game's
   native primary melee attack action.
 - `ModernMouse/RightClickParry=1`: map the right mouse button to the game's
@@ -105,7 +107,7 @@ D3D11 settings, first-run verification and troubleshooting.
   bindings persisted by development version 0.0.16.
 - `Diagnostics/DebugLog=1`: write `deathtrap_native_render.log` and
   `deathtrap_native_present.log`, plus `deathtrap_native_input.log` for the
-  mouse test build. Logging is normally off, but enabled in 0.0.19 test config.
+  mouse test build. Logging is normally off, but enabled in 0.0.20 test config.
 
 ## Building
 
