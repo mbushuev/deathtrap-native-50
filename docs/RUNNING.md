@@ -120,9 +120,11 @@ Subframes=3
 Enabled=1
 HorizontalTurn=1
 LeftClickAttack=1
+RightClickParry=1
+RepairLegacyBindings=1
 
 [Diagnostics]
-DebugLog=0
+DebugLog=1
 ```
 
 `Subframes=3` produces two render-only phases plus the real endpoint, or about
@@ -134,9 +136,10 @@ the game normally. The game directory should contain:
 ```text
 deathtrap_native_render.log
 deathtrap_native_present.log
+deathtrap_native_input.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.17`
+The render log must begin with the `Deathtrap native render overlay 0.0.18`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -148,11 +151,14 @@ provides a direct visual A/B test without restarting the game.
 Horizontal mouse motion turns the character through the same native actions
 used by the left and right keys. The stock follow camera is not detached or
 replaced. Left click invokes the native primary melee attack. Menu pointer and
-click handling continue to use the original bindings. The game's existing
+click handling continue to use the original bindings. Right click invokes the
+native parry action. `RepairLegacyBindings=1` removes only the three erroneous
+mouse/action pairs written by development build 0.0.16; it leaves other user
+bindings intact. The game's existing
 `MOUSE_SENSITIVITY` and `INVERT_MOUSE_HORIZ` values in
 `ASYLUM\config.dat` control the first test implementation.
 
-Mouse-wheel weapon cycling is intentionally not part of 0.0.17. The retail
+Mouse-wheel weapon cycling is intentionally not part of 0.0.18. The retail
 input table has no wheel source, so it requires a separate native inventory
 selection bridge rather than an unsafe fake key press. It will be added after
 the turn response and attack semantics have been verified in gameplay.

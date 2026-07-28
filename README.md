@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.17`.
+Current development version: `0.0.18`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -90,8 +90,13 @@ D3D11 settings, first-run verification and troubleshooting.
   the game's native left/right turn actions.
 - `ModernMouse/LeftClickAttack=1`: map the left mouse button to the game's
   native primary melee attack action.
+- `ModernMouse/RightClickParry=1`: map the right mouse button to the game's
+  native parry action.
+- `ModernMouse/RepairLegacyBindings=1`: remove the three incorrect mouse
+  bindings persisted by development version 0.0.16.
 - `Diagnostics/DebugLog=1`: write `deathtrap_native_render.log` and
-  `deathtrap_native_present.log`. Logging is off by default.
+  `deathtrap_native_present.log`, plus `deathtrap_native_input.log` for the
+  mouse test build. Logging is normally off, but enabled in 0.0.18 test config.
 
 ## Building
 

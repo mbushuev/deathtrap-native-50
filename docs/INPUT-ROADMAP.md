@@ -9,7 +9,10 @@
 - Map left click to the original primary melee attack.
 - Verify sensitivity, inversion, focus changes and native-50 compatibility.
 
-Version 0.0.17 implements this phase without adding another input clock.
+Version 0.0.18 implements this phase without adding another input clock. It
+also migrates the incorrect action-index bindings left by development build
+0.0.16, maps right click to the native parry action and adds diagnostic input
+telemetry for validation.
 
 ## Phase 2: wheel weapon selection
 

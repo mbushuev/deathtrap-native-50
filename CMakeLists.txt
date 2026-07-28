@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(deathtrap_native50_overlay VERSION 0.0.17 LANGUAGES C CXX)
+project(deathtrap_native50_overlay VERSION 0.0.18 LANGUAGES C CXX)
 
 if(NOT WIN32 OR NOT MSVC)
   message(FATAL_ERROR "Deathtrap Native 50 requires 32-bit Windows and MSVC")
