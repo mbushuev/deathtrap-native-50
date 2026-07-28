@@ -9,12 +9,11 @@
 - Map left click to the original primary melee attack.
 - Verify sensitivity, inversion, focus changes and native-50 compatibility.
 
-Version 0.0.18 proved the native bindings and added telemetry. Version 0.0.19
-adds the optional `ControlMode=Modern` path: relative DirectInput deltas update
-the character's canonical 10-bit heading once per real simulation tick, after
-input collection and before movement/collision dispatch. It does not turn on
-render-only subframes. A/D are migrated from discrete turning to the game's
-native sidestep actions; W/S and Shift+W retain their original semantics.
+Version 0.0.18 proved the native bindings. Direct heading and live action-table
+experiments in 0.0.19 through 0.0.22 were rejected because combat and menu
+transitions could deadlock. Version 0.0.23 installs only static retail-format
+bindings in `ASYLUM/keys.cfg`; the DLL has no input hook. Shift plus horizontal
+mouse motion selects the game's own fast-turn action while running.
 
 ## Phase 2: wheel weapon selection
 
@@ -29,10 +28,10 @@ native sidestep actions; W/S and Shift+W retain their original semantics.
 - Release it in menus, on focus loss and while task switching.
 - Restore capture without a position jump after focus returns.
 
-## Phase 4: configurable response (implemented in 0.0.19)
+## Phase 4: configurable response (research)
 
-- Horizontal sensitivity, inversion, jitter threshold and focus-spike clamp
-  are exposed in `deathtrap_native.ini`.
+- Investigate sensitivity and inversion without direct transform writes or
+  live action-table mutation.
 - Keep the default response linear and unsmoothed. Add a curve only if later
   gameplay testing demonstrates a concrete need.
 - Keep vertical mouse-look disabled unless a later camera investigation can

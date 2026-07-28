@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(deathtrap_native50_overlay VERSION 0.0.22 LANGUAGES C CXX)
+project(deathtrap_native50_overlay VERSION 0.0.23 LANGUAGES C CXX)
 
 if(NOT WIN32 OR NOT MSVC)
   message(FATAL_ERROR "Deathtrap Native 50 requires 32-bit Windows and MSVC")
@@ -21,7 +21,6 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(minhook)
 
 add_library(deathtrap_native_dinput SHARED
-  src/deathtrap_modern_mouse.cc
   src/deathtrap_native_render_patch.cc
   src/dinput_native_proxy.cc
   src/dinput_native_proxy.def

@@ -67,23 +67,18 @@ the same seven public functions and forwards them to the Windows x86 system
 library. A smoke test calls the forwarded factory and requires a real
 DirectInput object before a build is packaged.
 
-## Modern mouse action bridge
+## Native mouse bindings
 
 `Dungeon.dll` already polls relative DirectInput mouse deltas and exposes
 native sources named `MOUSE_HORIZ_LEFT`, `MOUSE_HORIZ_RIGHT` and
 `MOUSE_LBUTTON`. The retail binding file uses these sources for menus only.
 
-The optional mouse layer has two modes. `Classic` adds the existing mouse
-sources to the native discrete turn actions. `Modern` accumulates relative
-DirectInput X deltas and applies them to the canonical object heading at
-`Dungeon.dll+0x40420`, immediately after real input collection and before the
-movement dispatcher at `Dungeon.dll+0x810A0`. Collision, attacks, animation
-and the stock follow camera therefore observe one authoritative orientation.
-No input runs during render-only subframes and menu mouse bindings remain
-untouched.
+The installer adds those sources to the retail actions in `ASYLUM/keys.cfg`
+before launch. Normal horizontal motion maps to `ACTION_TURN_LEFT/RIGHT`;
+Shift plus horizontal motion maps to `ACTION_TURN_FAST_LEFT/RIGHT`. Left and
+right buttons map to `ACTION_ATTACK_1` and `ACTION_PARRY`.
 
-The engine may rebuild its action map after control redefinition. The input
-hook therefore verifies the injected bindings once per real input tick. In
-Modern WASD mode it moves the existing single-key A/D sources from turn to the
-native sidestep actions without replacing W/S, Shift+W or compound bindings.
-This work never runs on either of the two synthetic native-render phases.
+The DLL deliberately contains no runtime input hook. Earlier experiments that
+rewrote the live action table were stable during gameplay but could deadlock
+combat or the transition back to menus. Static bindings let the retail parser,
+controller and menu lifecycle own all input state.

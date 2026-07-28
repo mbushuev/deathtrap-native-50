@@ -116,15 +116,6 @@ The normal configuration is:
 Enabled=1
 Subframes=3
 
-[ModernMouse]
-Enabled=1
-ControlMode=Modern
-HorizontalTurn=1
-ModernWASD=1
-LeftClickAttack=0
-RightClickParry=0
-RepairLegacyBindings=1
-
 [Diagnostics]
 DebugLog=1
 ```
@@ -138,10 +129,9 @@ the game normally. The game directory should contain:
 ```text
 deathtrap_native_render.log
 deathtrap_native_present.log
-deathtrap_native_input.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.22`
+The render log must begin with the `Deathtrap native render overlay 0.0.23`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -150,19 +140,14 @@ verification because synchronous logging is not meant for normal play.
 During gameplay, `F11` toggles only the native render-rate modification. This
 provides a direct visual A/B test without restarting the game.
 
-With `ControlMode=Modern`, horizontal relative mouse motion is routed to the
-game's own `ACTION_TURN_FAST_LEFT/RIGHT` actions. The stock controller remains
-the sole owner of character heading, combat pose, animation and camera state;
-the overlay never writes the player transform. A/D become native sidestep
-actions, W/S remain forward/backward and Shift+W remains run. Set
-`ControlMode=Classic` to route mouse motion to the original normal-speed turn
-actions instead. Development build 0.0.22 intentionally removes mouse combat
-bindings: use the original `F+W` primary attack and `F+S` parry chords for the
-diagnostic run. Menu pointer/click handling continues to use the original game
-path. `RepairLegacyBindings=1` removes only the three erroneous pairs written
-by development build 0.0.16.
+The installer updates `ASYLUM/keys.cfg` before launch. Horizontal mouse motion
+uses the game's original normal turn actions. Holding Shift adds the retail
+fast-turn actions, so running with Shift+W no longer leaves mouse turning at
+the slow walking rate. Left click invokes the native primary attack and right
+click invokes parry. The DLL installs no input hook, writes no action-table
+memory and leaves menu pointer/click handling on the original game path.
 
-Mouse-wheel weapon cycling is intentionally not part of 0.0.22. The retail
+Mouse-wheel weapon cycling is intentionally not part of 0.0.23. The retail
 input table has no wheel source, so it requires a separate native inventory
 selection bridge rather than an unsafe fake key press. It will be added after
 the turn response and attack semantics have been verified in gameplay.

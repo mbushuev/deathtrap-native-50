@@ -3546,7 +3546,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.22 integer x3 presentation "
+      "Deathtrap native render overlay 0.0.23 integer x3 presentation "
       "session: "
       "unchanged v31 "
       "stable-cadence "

@@ -10,7 +10,6 @@
 #include <mutex>
 
 #include "deathtrap_native_render_patch.h"
-#include "deathtrap_modern_mouse.h"
 #include "native_d3d11_present_guard.h"
 
 namespace {
@@ -338,10 +337,8 @@ DWORD WINAPI InitializeThread(void*) {
   std::call_once(g_initialize_once, [] {
     LoadSystemDinput();
     InitializeDeathtrapNativeRenderPatch();
-    InitializeDeathtrapModernMouse();
     InstallDxgiHooks();
     InstallDeathtrapNativeRenderHooks();
-    InstallDeathtrapModernMouseHook();
   });
   return 0;
 }

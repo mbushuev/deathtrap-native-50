@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.22`.
+Current development version: `0.0.23`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -86,22 +86,15 @@ D3D11 settings, first-run verification and troubleshooting.
 - `NativeRender/Enabled=0`: disable it before process startup.
 - `NativeRender/Subframes=3`: approximately 50 FPS, the recommended mode.
 - `NativeRender/Subframes=2`: conservative approximately 33 FPS fallback.
-- `ModernMouse/ControlMode=Modern`: route horizontal relative mouse motion to
-  the retail `ACTION_TURN_FAST_LEFT/RIGHT` controller actions. `Classic`
-  restores the original normal-speed turn actions. No player transform is
-  written by the overlay.
-- `ModernMouse/HorizontalTurn=1`: enable horizontal mouse steering.
-- `ModernMouse/ModernWASD=1`: use A/D for native sidestep in Modern mode;
-  W/S and Shift+W keep the game's forward, backward and run actions.
-- `ModernMouse/LeftClickAttack=0` and `RightClickParry=0`: 0.0.22 diagnostic
-  isolation keeps combat on the original keyboard chords while the attack
-  stall is traced. Mouse combat bindings are actively removed at runtime.
-- `ModernMouse/RepairLegacyBindings=1`: remove the three incorrect mouse
-  bindings persisted by development version 0.0.16.
+- The installer adds native mouse bindings to `ASYLUM/keys.cfg` once, before
+  the game starts. The DLL has no runtime input hook and never writes the
+  game's action table.
+- Horizontal mouse movement uses normal turn actions. While Shift is held for
+  running, it activates the retail fast-turn actions automatically.
+- Left click uses the retail primary attack and right click uses parry.
 - `Diagnostics/DebugLog=1`: write `deathtrap_native_render.log` and
-  `deathtrap_native_present.log`, plus `deathtrap_native_input.log` for the
-  mouse test build. Logging is normally off, but enabled in the 0.0.22 test
-  config.
+  `deathtrap_native_present.log`. Logging is normally off, but remains enabled
+  in the 0.0.23 test config.
 
 ## Building
 
