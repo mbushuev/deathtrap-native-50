@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(deathtrap_native50_overlay VERSION 0.0.23 LANGUAGES C CXX)
+project(deathtrap_native50_overlay VERSION 0.0.24 LANGUAGES C CXX)
 
 if(NOT WIN32 OR NOT MSVC)
   message(FATAL_ERROR "Deathtrap Native 50 requires 32-bit Windows and MSVC")
@@ -40,7 +40,7 @@ target_compile_options(deathtrap_native_dinput PRIVATE
 target_link_options(deathtrap_native_dinput PRIVATE
   /IGNORE:4222)
 target_link_libraries(deathtrap_native_dinput PRIVATE
-  d3d11 dxgi minhook)
+  d3d11 dxgi dxguid minhook)
 set_target_properties(deathtrap_native_dinput PROPERTIES
   OUTPUT_NAME "dinput"
   PREFIX ""
@@ -58,3 +58,4 @@ target_compile_definitions(dinput_proxy_smoke_test PRIVATE
 )
 target_compile_options(dinput_proxy_smoke_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(dinput_proxy_smoke_test PRIVATE dxguid)

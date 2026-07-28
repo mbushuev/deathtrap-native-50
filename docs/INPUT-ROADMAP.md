@@ -12,15 +12,24 @@
 Version 0.0.18 proved the native bindings. Direct heading and live action-table
 experiments in 0.0.19 through 0.0.22 were rejected because combat and menu
 transitions could deadlock. Version 0.0.23 installs only static retail-format
-bindings in `ASYLUM/keys.cfg`; the DLL has no input hook. Shift plus horizontal
-mouse motion selects the game's own fast-turn action while running.
+bindings in `ASYLUM/keys.cfg` and had no input hook. Shift plus horizontal
+mouse motion selects the game's own fast-turn action while running. Version
+0.0.24 adds the separate observation-only wheel path described below.
 
-## Phase 2: wheel weapon selection
+## Phase 2: wheel weapon selection (implemented in 0.0.24)
 
 - Capture wheel detents without replacing the game's mouse device.
 - Resolve the original inventory/weapon selection operation.
 - Select the previous or next usable weapon directly through that operation.
 - Avoid simulated F-keys and avoid opening a selector UI for one frame.
+
+The retail action table has no wheel source or next/previous weapon command.
+The proxy therefore observes `DIMOUSESTATE::lZ` without modifying the state
+returned to the game. It queues bounded detents, and the real render scheduler
+consumes them only during active gameplay. Available slots are checked with the
+same inventory lookup used by the retail selector (`Dungeon.dll+0x7BD30`), then
+committed through its native close-combat selection path
+(`Dungeon.dll+0x90610`). Synthetic render phases never consume input.
 
 ## Phase 3: cursor ownership
 

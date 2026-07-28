@@ -40,6 +40,10 @@ constexpr uintptr_t kUiMessageStateRva = 0x001D41C8u;
 constexpr uintptr_t kUiCountdownStateRva = 0x001D89F0u;
 constexpr uintptr_t kUiOwnerPointerRva = 0x0034F9D0u;
 constexpr uintptr_t kEngineFrameCounterRva = 0x001D24DCu;
+constexpr uintptr_t kActiveCloseCombatWeaponRva = 0x001D8A68u;
+constexpr uintptr_t kInventoryLookupRva = 0x0007BD30u;
+constexpr uintptr_t kSelectCloseCombatWeaponRva = 0x00090610u;
+constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
 constexpr size_t kMovementStageProbeCount = 95u;
 constexpr size_t kMovementCallbackProbeCount = 64u;
 constexpr std::array<uintptr_t, 5> kMovementDynamicCallbackRvas = {
@@ -248,6 +252,8 @@ std::atomic<uint64_t> g_interpolated_nodes{0};
 std::atomic<bool> g_render_hook_installed{false};
 std::atomic<bool> g_movement_stage_probes_installed{false};
 std::atomic<bool> g_movement_callback_probe_installed{false};
+std::atomic<int32_t> g_pending_weapon_wheel_detents{0};
+std::atomic<uint64_t> g_last_weapon_wheel_event_ms{0};
 std::mutex g_contact_projection_mutex;
 std::array<int64_t, 3> g_pending_contact_projection{};
 uint64_t g_pending_contact_projection_sequence = 0;
@@ -261,6 +267,10 @@ SceneSnapshot g_previous_snapshot;
 SceneSnapshot g_older_snapshot;
 LARGE_INTEGER g_qpc_frequency{};
 bool g_debug_log = false;
+bool g_weapon_wheel_enabled = false;
+bool g_weapon_wheel_invert = false;
+uint64_t g_weapon_wheel_switches = 0;
+uint64_t g_weapon_wheel_rejections = 0;
 uint64_t g_suppressed_midpoints = 0;
 uint64_t g_last_transition_log_tick = 0;
 uint64_t g_ui_state_restores = 0;
@@ -516,6 +526,18 @@ bool ConfiguredDebugLog() {
                                ini.c_str()) != 0;
 }
 
+bool ConfiguredWeaponWheelEnabled() {
+  const std::wstring ini = ConfigurationPath();
+  return GetPrivateProfileIntW(L"WeaponWheel", L"Enabled", 1,
+                               ini.c_str()) != 0;
+}
+
+bool ConfiguredWeaponWheelInvert() {
+  const std::wstring ini = ConfigurationPath();
+  return GetPrivateProfileIntW(L"WeaponWheel", L"Invert", 0,
+                               ini.c_str()) != 0;
+}
+
 void AppendNativeLog(const char* format, ...) {
   if (!g_debug_log) {
     return;
@@ -564,6 +586,129 @@ void AppendNativeLogBlock(const std::string& block) {
   WriteFile(file, block.data(), static_cast<DWORD>(block.size()), &written,
             nullptr);
   CloseHandle(file);
+}
+
+bool WeaponWheelGameplayReady() {
+  if (!g_weapon_wheel_enabled || !g_dungeon_base) {
+    return false;
+  }
+
+  int32_t selector_mode = 0;
+  uintptr_t player = 0;
+  uintptr_t game_root = 0;
+  uintptr_t gameplay_context = 0;
+  uintptr_t gameplay_object = 0;
+  uintptr_t root_vtable = 0;
+  if (!SafeReadValue(g_dungeon_base + kUiSelectorModeRva, &selector_mode) ||
+      selector_mode != 0 ||
+      !SafeReadValue(g_dungeon_base + kUiOwnerPointerRva, &player) ||
+      !player ||
+      !SafeReadValue(g_dungeon_base + kGameRootPointerRva, &game_root) ||
+      !game_root ||
+      !SafeReadValue(reinterpret_cast<const void*>(game_root), &root_vtable) ||
+      root_vtable == reinterpret_cast<uintptr_t>(g_dungeon_base) +
+                         0x00083F20u ||
+      root_vtable == reinterpret_cast<uintptr_t>(g_dungeon_base) +
+                         0x0004EBF0u ||
+      !SafeReadValue(reinterpret_cast<const void*>(game_root + 0x2Cu),
+                     &gameplay_context) ||
+      !gameplay_context ||
+      !SafeReadValue(
+          reinterpret_cast<const void*>(gameplay_context + 0x1030u),
+          &gameplay_object) ||
+      !gameplay_object) {
+    return false;
+  }
+  return true;
+}
+
+bool NativeWeaponAvailable(int32_t weapon_id) {
+  if (weapon_id == 0 || weapon_id == 7) {
+    return true;
+  }
+  if (weapon_id < 1 || weapon_id > 6) {
+    return false;
+  }
+  using InventoryLookupFn = void*(__cdecl*)(int32_t);
+  void* item = nullptr;
+  __try {
+    item = reinterpret_cast<InventoryLookupFn>(
+        g_dungeon_base + kInventoryLookupRva)(weapon_id);
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    item = nullptr;
+  }
+  return item != nullptr;
+}
+
+bool SelectNativeWeapon(int32_t action_code) {
+  using SelectWeaponFn = void(__cdecl*)(int32_t, int32_t);
+  __try {
+    reinterpret_cast<SelectWeaponFn>(
+        g_dungeon_base + kSelectCloseCombatWeaponRva)(action_code, 1);
+    return true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+}
+
+void ConsumePendingWeaponWheel() {
+  int32_t queued =
+      g_pending_weapon_wheel_detents.load(std::memory_order_acquire);
+  if (queued == 0) {
+    return;
+  }
+
+  // Never carry a wheel action out of a menu or loading screen. DirectInput
+  // observes the wheel independently, so stale menu scrolling must not equip
+  // a weapon after gameplay resumes.
+  const uint64_t age_ms =
+      GetTickCount64() -
+      g_last_weapon_wheel_event_ms.load(std::memory_order_relaxed);
+  if (age_ms > 500u || !WeaponWheelGameplayReady()) {
+    g_pending_weapon_wheel_detents.store(0, std::memory_order_release);
+    ++g_weapon_wheel_rejections;
+    return;
+  }
+
+  queued = g_pending_weapon_wheel_detents.exchange(
+      0, std::memory_order_acq_rel);
+  int32_t current = -1;
+  if (!SafeReadValue(g_dungeon_base + kActiveCloseCombatWeaponRva,
+                     &current) ||
+      current < 0 || current > 7) {
+    ++g_weapon_wheel_rejections;
+    return;
+  }
+
+  // The retail close-combat selector maps internal IDs to non-contiguous
+  // action codes. ID 0 and the special ID 7 are always present; IDs 1..6 use
+  // the same inventory-presence test as the original selector.
+  constexpr std::array<int32_t, 8> kActionCodeByWeaponId = {
+      1, 2, 4, 5, 6, 7, 8, 0};
+  int direction = queued > 0 ? -1 : 1;
+  if (g_weapon_wheel_invert) {
+    direction = -direction;
+  }
+  for (int distance = 1; distance <= 8; ++distance) {
+    const int32_t candidate =
+        (current + direction * distance + 64) % 8;
+    if (!NativeWeaponAvailable(candidate)) {
+      continue;
+    }
+    if (SelectNativeWeapon(kActionCodeByWeaponId[candidate])) {
+      ++g_weapon_wheel_switches;
+      AppendNativeLog(
+          "weapon_wheel current=%d selected=%d action=%d direction=%d "
+          "queued=%d switches=%llu rejections=%llu",
+          current, candidate, kActionCodeByWeaponId[candidate], direction,
+          queued, static_cast<unsigned long long>(g_weapon_wheel_switches),
+          static_cast<unsigned long long>(g_weapon_wheel_rejections));
+    } else {
+      ++g_weapon_wheel_rejections;
+    }
+    return;
+  }
+  ++g_weapon_wheel_rejections;
 }
 
 // The old V26 experiment detoured complete engine functions. Those functions
@@ -3213,6 +3358,10 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
                     toggled ? "ENABLED" : "DISABLED",
                     toggled ? toggled - 1u : 0u);
   }
+  // Consume input only once at the real scheduler boundary. Synthetic render
+  // phases never poll DirectInput and never feed another weapon action back
+  // into the simulation.
+  ConsumePendingWeaponWheel();
   const uint32_t subframes = g_subframes.load(std::memory_order_relaxed);
   if ((subframes != 2u && subframes != 3u) || wait <= 0 || !g_renderer) {
     g_original_render_present_wait(context, wait);
@@ -3518,6 +3667,8 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
 
 void InitializePatchState() {
   g_debug_log = ConfiguredDebugLog();
+  g_weapon_wheel_enabled = ConfiguredWeaponWheelEnabled();
+  g_weapon_wheel_invert = ConfiguredWeaponWheelInvert();
   const uint32_t subframes = ConfiguredSubframes();
   g_subframes.store(subframes, std::memory_order_relaxed);
   if (!subframes) {
@@ -3546,7 +3697,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.23 integer x3 presentation "
+      "Deathtrap native render overlay 0.0.24 integer x3 presentation "
       "session: "
       "unchanged v31 "
       "stable-cadence "
@@ -3573,13 +3724,41 @@ void InitializePatchState() {
       "debug-only broad main-loop probes plus always-on lightweight local "
       "resolver and [edi+0x18] contact capture, transactional synthetic-pass "
       "player-state rollback, "
-      "F11 native A/B and global clock "
-      "untouched");
+      "F11 native A/B and global clock untouched; DirectInput wheel events "
+      "are observation-only and commit through Dungeon.dll+0x90610 once per "
+      "real gameplay tick (enabled=%u invert=%u)",
+      g_weapon_wheel_enabled ? 1u : 0u,
+      g_weapon_wheel_invert ? 1u : 0u);
   g_state.store(DeathtrapNativeRenderPatchState::kActive,
                 std::memory_order_release);
 }
 
 }  // namespace
+
+void QueueDeathtrapWeaponWheelDelta(int32_t delta) {
+  if (!g_weapon_wheel_enabled || delta == 0) {
+    return;
+  }
+  // DirectInput reports relative wheel motion in WHEEL_DELTA units. Preserve
+  // the sign and a small bounded number of detents without ever delaying the
+  // input callback or touching engine state from the input thread.
+  int32_t detents = delta / WHEEL_DELTA;
+  if (detents == 0) {
+    detents = delta > 0 ? 1 : -1;
+  }
+  int32_t observed =
+      g_pending_weapon_wheel_detents.load(std::memory_order_relaxed);
+  for (;;) {
+    const int32_t desired = std::clamp(observed + detents, -8, 8);
+    if (g_pending_weapon_wheel_detents.compare_exchange_weak(
+            observed, desired, std::memory_order_release,
+            std::memory_order_relaxed)) {
+      break;
+    }
+  }
+  g_last_weapon_wheel_event_ms.store(GetTickCount64(),
+                                     std::memory_order_relaxed);
+}
 
 DeathtrapNativePresentationStage GetDeathtrapNativePresentationStage() {
   return g_active_presentation_trace.stage;

@@ -78,7 +78,23 @@ before launch. Normal horizontal motion maps to `ACTION_TURN_LEFT/RIGHT`;
 Shift plus horizontal motion maps to `ACTION_TURN_FAST_LEFT/RIGHT`. Left and
 right buttons map to `ACTION_ATTACK_1` and `ACTION_PARRY`.
 
-The DLL deliberately contains no runtime input hook. Earlier experiments that
-rewrote the live action table were stable during gameplay but could deadlock
-combat or the transition back to menus. Static bindings let the retail parser,
-controller and menu lifecycle own all input state.
+The DLL deliberately contains no runtime action-table hook. Earlier experiments
+that rewrote the live action table were stable during gameplay but could
+deadlock combat or the transition back to menus. Static bindings let the
+retail parser, controller and menu lifecycle own turning, attacks and parry.
+
+## Mouse-wheel inventory bridge
+
+The retail action table has no wheel source and no next/previous weapon action.
+Version 0.0.24 therefore patches only the system DirectInput mouse object's
+`GetDeviceState` vtable slot and observes `DIMOUSESTATE::lZ` after the original
+call succeeds. The returned state is never modified. Detents are bounded and
+queued atomically; no `Dungeon.dll` function is called from the input thread.
+
+At the next real `Dungeon.dll+0x80600` scheduler boundary, the queue is consumed
+only if a live player/gameplay context exists and the selector UI is closed.
+IDs 1 through 6 are filtered by the retail inventory lookup at `+0x7BD30`; the
+always-present IDs 0 and 7 follow the same rules as the retail close-combat
+selector. Selection is committed through the selector's native operation at
+`+0x90610`. Loading/menu wheel input expires and cannot leak into gameplay.
+Synthetic render phases do not poll or consume input.

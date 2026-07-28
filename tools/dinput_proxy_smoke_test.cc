@@ -24,12 +24,24 @@ int wmain(int argc, wchar_t** argv) {
   LPDIRECTINPUTA direct_input = nullptr;
   const HRESULT result = create(GetModuleHandleW(nullptr), 0x0700,
                                 &direct_input, nullptr);
+  HRESULT mouse_result = DIERR_NOTINITIALIZED;
+  HRESULT state_result = DIERR_NOTINITIALIZED;
   if (direct_input) {
+    LPDIRECTINPUTDEVICEA mouse = nullptr;
+    mouse_result = direct_input->CreateDevice(GUID_SysMouse, &mouse, nullptr);
+    if (mouse) {
+      DIMOUSESTATE state{};
+      state_result = mouse->GetDeviceState(sizeof(state), &state);
+      mouse->Release();
+    }
     direct_input->Release();
   }
   FreeLibrary(proxy);
-  std::printf("DirectInputCreateA=0x%08lX object=%s\n",
+  std::printf("DirectInputCreateA=0x%08lX object=%s mouse=0x%08lX "
+              "state_probe=0x%08lX\n",
               static_cast<unsigned long>(result),
-              direct_input ? "created" : "null");
-  return SUCCEEDED(result) ? 0 : 5;
+              direct_input ? "created" : "null",
+              static_cast<unsigned long>(mouse_result),
+              static_cast<unsigned long>(state_result));
+  return SUCCEEDED(result) && SUCCEEDED(mouse_result) ? 0 : 5;
 }

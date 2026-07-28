@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.23`.
+Current development version: `0.0.24`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -19,7 +19,7 @@ This repository contains only our Deathtrap-specific work:
 - the `DINPUT.dll` loader and system-DirectInput forwarder;
 - the minimal D3D11/DXGI presentation bridge;
 - the corrupt/black native-phase guard;
-- an opt-in native mouse-to-character-turn and left-click attack layer;
+- native mouse turning, attacks and safe wheel weapon cycling;
 - configuration, build, verification and installation material.
 
 dgVoodoo and optional presentation launchers remain independent external
@@ -87,14 +87,19 @@ D3D11 settings, first-run verification and troubleshooting.
 - `NativeRender/Subframes=3`: approximately 50 FPS, the recommended mode.
 - `NativeRender/Subframes=2`: conservative approximately 33 FPS fallback.
 - The installer adds native mouse bindings to `ASYLUM/keys.cfg` once, before
-  the game starts. The DLL has no runtime input hook and never writes the
-  game's action table.
+  the game starts. The DLL never writes the game's action table; its only
+  runtime input hook observes wheel deltas after the system DirectInput call.
 - Horizontal mouse movement uses normal turn actions. While Shift is held for
   running, it activates the retail fast-turn actions automatically.
 - Left click uses the retail primary attack and right click uses parry.
+- Mouse wheel selects the previous or next available close-combat weapon. The
+  proxy only observes relative wheel input; `Dungeon.dll` performs the actual
+  inventory check and equipment change on the next real gameplay tick.
+- `WeaponWheel/Enabled=0`: disable wheel weapon selection.
+- `WeaponWheel/Invert=1`: reverse wheel direction.
 - `Diagnostics/DebugLog=1`: write `deathtrap_native_render.log` and
   `deathtrap_native_present.log`. Logging is normally off, but remains enabled
-  in the 0.0.23 test config.
+  in the 0.0.24 test config.
 
 ## Building
 

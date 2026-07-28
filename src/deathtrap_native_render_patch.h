@@ -38,6 +38,12 @@ enum class DeathtrapNativePresentationStage : uint8_t {
 // physics, animation tick or input tick.
 void InitializeDeathtrapNativeRenderPatch();
 
+// DirectInput observation is deliberately separated from game-state mutation.
+// The proxy only queues relative wheel motion; the native scheduler consumes
+// it on the next real gameplay tick through Dungeon.dll's own weapon-selection
+// path.
+void QueueDeathtrapWeaponWheelDelta(int32_t delta);
+
 // Used only while the native midpoint restores the legacy DirectDraw page
 // orientation. The restore Flip must rotate the game's front/back surfaces,
 // but must not become another visible DXGI presentation.

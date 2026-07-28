@@ -131,7 +131,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.23`
+The render log must begin with the `Deathtrap native render overlay 0.0.24`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -144,13 +144,19 @@ The installer updates `ASYLUM/keys.cfg` before launch. Horizontal mouse motion
 uses the game's original normal turn actions. Holding Shift adds the retail
 fast-turn actions, so running with Shift+W no longer leaves mouse turning at
 the slow walking rate. Left click invokes the native primary attack and right
-click invokes parry. The DLL installs no input hook, writes no action-table
-memory and leaves menu pointer/click handling on the original game path.
+click invokes parry. The DLL never writes action-table memory and leaves menu
+pointer/click handling on the original game path.
 
-Mouse-wheel weapon cycling is intentionally not part of 0.0.23. The retail
-input table has no wheel source, so it requires a separate native inventory
-selection bridge rather than an unsafe fake key press. It will be added after
-the turn response and attack semantics have been verified in gameplay.
+Mouse-wheel weapon cycling is implemented in 0.0.24. The retail input table
+has no wheel source, so the proxy observes relative wheel detents without
+altering the state returned to the game. On the next real gameplay tick it
+checks the same inventory entries as the retail weapon selector and commits
+the next available weapon through the selector's native operation. It never
+simulates an F-key and synthetic render phases never consume input.
+
+`WeaponWheel/Enabled=0` disables this feature. `WeaponWheel/Invert=1` reverses
+the default direction (wheel up selects the previous available slot; wheel
+down selects the next one).
 
 ## 7. Common failures
 

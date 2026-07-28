@@ -139,6 +139,6 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
     }
     [System.IO.File]::WriteAllText($keys, $keyText, [System.Text.Encoding]::ASCII)
     Write-Host "Installed overlay into: $game"
-    Write-Host 'Installed native mouse bindings into ASYLUM\keys.cfg (no runtime input hook).'
+    Write-Host 'Installed native mouse bindings and observation-only wheel bridge.'
     Write-Host "Rollback copy: $backup"
 }

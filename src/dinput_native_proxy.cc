@@ -31,6 +31,10 @@ using SwapChainPresentFn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
 using SwapChainPresent1Fn = HRESULT(STDMETHODCALLTYPE*)(
     IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*);
+using DirectInputCreateDeviceAFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDirectInputA*, REFGUID, LPDIRECTINPUTDEVICEA*, LPUNKNOWN);
+using DirectInputDeviceGetStateFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDirectInputDeviceA*, DWORD, LPVOID);
 
 HMODULE g_system_dinput = nullptr;
 HMODULE g_dxgi = nullptr;
@@ -46,6 +50,8 @@ FactoryCreateSwapChainForCompositionFn
     g_factory_create_swap_chain_for_composition = nullptr;
 SwapChainPresentFn g_present = nullptr;
 SwapChainPresent1Fn g_present1 = nullptr;
+DirectInputCreateDeviceAFn g_direct_input_create_device = nullptr;
+DirectInputDeviceGetStateFn g_direct_input_device_get_state = nullptr;
 thread_local bool g_inside_present = false;
 thread_local bool g_suppress_page_restore = false;
 std::atomic<uint64_t> g_suppressed_page_restores{0};
@@ -112,6 +118,55 @@ bool PatchVtableSlot(void** vtable, size_t index, void* replacement,
     *original = reinterpret_cast<T>(previous);
   }
   return true;
+}
+
+HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
+    IDirectInputDeviceA* device, DWORD data_size, LPVOID data) {
+  const HRESULT result =
+      g_direct_input_device_get_state
+          ? g_direct_input_device_get_state(device, data_size, data)
+          : DIERR_GENERIC;
+  // Deathtrap uses the standard relative mouse state. Observe it after the
+  // system DirectInput implementation has filled the buffer, but never edit
+  // the state returned to the game. Exact-size checks also exclude keyboard
+  // and joystick devices if the DirectInput implementation shares vtables.
+  if (SUCCEEDED(result) && data &&
+      (data_size == sizeof(DIMOUSESTATE) ||
+       data_size == sizeof(DIMOUSESTATE2))) {
+    const auto* mouse = static_cast<const DIMOUSESTATE*>(data);
+    if (mouse->lZ != 0) {
+      QueueDeathtrapWeaponWheelDelta(mouse->lZ);
+    }
+  }
+  return result;
+}
+
+HRESULT STDMETHODCALLTYPE HookDirectInputCreateDeviceA(
+    IDirectInputA* direct_input, REFGUID device_guid,
+    LPDIRECTINPUTDEVICEA* device, LPUNKNOWN outer) {
+  const HRESULT result =
+      g_direct_input_create_device
+          ? g_direct_input_create_device(direct_input, device_guid, device,
+                                         outer)
+          : DIERR_GENERIC;
+  if (SUCCEEDED(result) && device && *device &&
+      IsEqualGUID(device_guid, GUID_SysMouse)) {
+    void** vtable = *reinterpret_cast<void***>(*device);
+    PatchVtableSlot(vtable, 9,
+                    reinterpret_cast<void*>(&HookDirectInputDeviceGetState),
+                    &g_direct_input_device_get_state);
+  }
+  return result;
+}
+
+void AttachDirectInput(IDirectInputA* direct_input) {
+  if (!direct_input) {
+    return;
+  }
+  void** vtable = *reinterpret_cast<void***>(direct_input);
+  PatchVtableSlot(vtable, 3,
+                  reinterpret_cast<void*>(&HookDirectInputCreateDeviceA),
+                  &g_direct_input_create_device);
 }
 
 void AttachSwapChain(IDXGISwapChain* swap_chain, IUnknown* creation_device);
@@ -391,6 +446,10 @@ extern "C" HRESULT WINAPI Proxy_DirectInputCreateA(
       HINSTANCE, DWORD, LPDIRECTINPUTA*, LPUNKNOWN);
   const auto target = reinterpret_cast<DirectInputCreateAFn>(
       g_target_DirectInputCreateA);
-  return target ? target(instance, version, direct_input, outer)
-                : DIERR_GENERIC;
+  const HRESULT result =
+      target ? target(instance, version, direct_input, outer) : DIERR_GENERIC;
+  if (SUCCEEDED(result) && direct_input && *direct_input) {
+    AttachDirectInput(*direct_input);
+  }
+  return result;
 }
