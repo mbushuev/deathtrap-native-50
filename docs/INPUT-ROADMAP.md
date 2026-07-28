@@ -9,10 +9,12 @@
 - Map left click to the original primary melee attack.
 - Verify sensitivity, inversion, focus changes and native-50 compatibility.
 
-Version 0.0.18 implements this phase without adding another input clock. It
-also migrates the incorrect action-index bindings left by development build
-0.0.16, maps right click to the native parry action and adds diagnostic input
-telemetry for validation.
+Version 0.0.18 proved the native bindings and added telemetry. Version 0.0.19
+adds the optional `ControlMode=Modern` path: relative DirectInput deltas update
+the character's canonical 10-bit heading once per real simulation tick, after
+input collection and before movement/collision dispatch. It does not turn on
+render-only subframes. A/D are migrated from discrete turning to the game's
+native sidestep actions; W/S and Shift+W retain their original semantics.
 
 ## Phase 2: wheel weapon selection
 
@@ -27,11 +29,12 @@ telemetry for validation.
 - Release it in menus, on focus loss and while task switching.
 - Restore capture without a position jump after focus returns.
 
-## Phase 4: configurable response
+## Phase 4: configurable response (implemented in 0.0.19)
 
-- Add horizontal sensitivity and inversion to `deathtrap_native.ini`.
-- Add a small deadband and optional response curve if raw testing shows they
-  are useful.
+- Horizontal sensitivity, inversion, jitter threshold and focus-spike clamp
+  are exposed in `deathtrap_native.ini`.
+- Keep the default response linear and unsmoothed. Add a curve only if later
+  gameplay testing demonstrates a concrete need.
 - Keep vertical mouse-look disabled unless a later camera investigation can
   preserve framing and collision visibility.
 

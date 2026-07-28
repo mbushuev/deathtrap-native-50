@@ -118,7 +118,13 @@ Subframes=3
 
 [ModernMouse]
 Enabled=1
+ControlMode=Modern
 HorizontalTurn=1
+ModernWASD=1
+Sensitivity=0.08
+InvertX=0
+JitterThreshold=0
+MaxDegreesPerTick=35
 LeftClickAttack=1
 RightClickParry=1
 RepairLegacyBindings=1
@@ -139,7 +145,7 @@ deathtrap_native_present.log
 deathtrap_native_input.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.18`
+The render log must begin with the `Deathtrap native render overlay 0.0.19`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -148,17 +154,19 @@ verification because synchronous logging is not meant for normal play.
 During gameplay, `F11` toggles only the native render-rate modification. This
 provides a direct visual A/B test without restarting the game.
 
-Horizontal mouse motion turns the character through the same native actions
-used by the left and right keys. The stock follow camera is not detached or
-replaced. Left click invokes the native primary melee attack. Menu pointer and
-click handling continue to use the original bindings. Right click invokes the
-native parry action. `RepairLegacyBindings=1` removes only the three erroneous
-mouse/action pairs written by development build 0.0.16; it leaves other user
-bindings intact. The game's existing
-`MOUSE_SENSITIVITY` and `INVERT_MOUSE_HORIZ` values in
-`ASYLUM\config.dat` control the first test implementation.
+With `ControlMode=Modern`, horizontal mouse motion updates the character's
+authoritative heading directly on real simulation ticks. The stock follow
+camera is not detached or replaced. A/D become native sidestep actions, W/S
+remain forward/backward and Shift+W remains run. `Sensitivity` is measured in
+degrees per relative mouse count; `InvertX` flips the sign, `JitterThreshold`
+can reject tiny device noise and `MaxDegreesPerTick` discards focus-change
+spikes instead of creating delayed rotation. Set `ControlMode=Classic` to use
+the original discrete turn bindings instead. Left click invokes the native
+primary melee attack, right click invokes parry, and menu pointer/click handling
+continues to use the original game path. `RepairLegacyBindings=1` removes only
+the three erroneous pairs written by development build 0.0.16.
 
-Mouse-wheel weapon cycling is intentionally not part of 0.0.18. The retail
+Mouse-wheel weapon cycling is intentionally not part of 0.0.19. The retail
 input table has no wheel source, so it requires a separate native inventory
 selection bridge rather than an unsafe fake key press. It will be added after
 the turn response and attack semantics have been verified in gameplay.

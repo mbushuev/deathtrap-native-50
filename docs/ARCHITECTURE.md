@@ -73,15 +73,17 @@ DirectInput object before a build is packaged.
 native sources named `MOUSE_HORIZ_LEFT`, `MOUSE_HORIZ_RIGHT` and
 `MOUSE_LBUTTON`. The retail binding file uses these sources for menus only.
 
-The optional modern-mouse layer adds those existing sources to the native
-`ACTION_TURN_LEFT`, `ACTION_TURN_RIGHT` and `ACTION_ATTACK_1` bindings after
-the engine has evaluated its input table. It does not synthesize keyboard
-events, move the camera directly or run input during render-only subframes.
-The character turns through the original player controller; the original
-follow camera consequently remains behind the character in the normal game
-fashion. Existing menu mouse bindings remain untouched.
+The optional mouse layer has two modes. `Classic` adds the existing mouse
+sources to the native discrete turn actions. `Modern` accumulates relative
+DirectInput X deltas and applies them to the canonical object heading at
+`Dungeon.dll+0x40420`, immediately after real input collection and before the
+movement dispatcher at `Dungeon.dll+0x810A0`. Collision, attacks, animation
+and the stock follow camera therefore observe one authoritative orientation.
+No input runs during render-only subframes and menu mouse bindings remain
+untouched.
 
 The engine may rebuild its action map after control redefinition. The input
-hook therefore verifies the three injected bindings once per real input tick
-and restores only a missing entry. This work never runs on either of the two
-synthetic native-render phases.
+hook therefore verifies the injected bindings once per real input tick. In
+Modern WASD mode it moves the existing single-key A/D sources from turn to the
+native sidestep actions without replacing W/S, Shift+W or compound bindings.
+This work never runs on either of the two synthetic native-render phases.

@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.18`.
+Current development version: `0.0.19`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -86,8 +86,17 @@ D3D11 settings, first-run verification and troubleshooting.
 - `NativeRender/Enabled=0`: disable it before process startup.
 - `NativeRender/Subframes=3`: approximately 50 FPS, the recommended mode.
 - `NativeRender/Subframes=2`: conservative approximately 33 FPS fallback.
-- `ModernMouse/HorizontalTurn=1`: map relative horizontal mouse motion to
-  the game's native left/right turn actions.
+- `ModernMouse/ControlMode=Modern`: apply relative mouse motion directly to
+  the canonical character heading before the real movement stage. `Classic`
+  restores the original discrete turn actions.
+- `ModernMouse/HorizontalTurn=1`: enable horizontal mouse steering.
+- `ModernMouse/ModernWASD=1`: use A/D for native sidestep in Modern mode;
+  W/S and Shift+W keep the game's forward, backward and run actions.
+- `ModernMouse/Sensitivity=0.08`: horizontal degrees per relative mouse count.
+- `ModernMouse/InvertX=1`: invert horizontal steering.
+- `ModernMouse/JitterThreshold=0`: ignore deltas up to this many counts.
+- `ModernMouse/MaxDegreesPerTick=35`: discard focus-change spikes rather than
+  queuing delayed rotation.
 - `ModernMouse/LeftClickAttack=1`: map the left mouse button to the game's
   native primary melee attack action.
 - `ModernMouse/RightClickParry=1`: map the right mouse button to the game's
@@ -96,7 +105,7 @@ D3D11 settings, first-run verification and troubleshooting.
   bindings persisted by development version 0.0.16.
 - `Diagnostics/DebugLog=1`: write `deathtrap_native_render.log` and
   `deathtrap_native_present.log`, plus `deathtrap_native_input.log` for the
-  mouse test build. Logging is normally off, but enabled in 0.0.18 test config.
+  mouse test build. Logging is normally off, but enabled in 0.0.19 test config.
 
 ## Building
 
