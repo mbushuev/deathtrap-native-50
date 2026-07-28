@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include <Xinput.h>
+
 #include <MinHook.h>
 
 #include <algorithm>
@@ -43,6 +45,9 @@ constexpr uintptr_t kEngineFrameCounterRva = 0x001D24DCu;
 constexpr uintptr_t kActiveCloseCombatWeaponRva = 0x001D8A68u;
 constexpr uintptr_t kInventoryLookupRva = 0x0007BD30u;
 constexpr uintptr_t kSelectCloseCombatWeaponRva = 0x00090610u;
+constexpr uintptr_t kSelectRangedWeaponRva = 0x00090740u;
+constexpr uintptr_t kSelectSpellRva = 0x0007BAF0u;
+constexpr uintptr_t kUseConsumableRva = 0x0007B9C0u;
 constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
 constexpr size_t kMovementStageProbeCount = 95u;
 constexpr size_t kMovementCallbackProbeCount = 64u;
@@ -254,6 +259,7 @@ std::atomic<bool> g_movement_stage_probes_installed{false};
 std::atomic<bool> g_movement_callback_probe_installed{false};
 std::atomic<int32_t> g_pending_weapon_wheel_detents{0};
 std::atomic<uint64_t> g_last_weapon_wheel_event_ms{0};
+std::atomic<uint32_t> g_controller_selector_overlay{0};
 std::mutex g_contact_projection_mutex;
 std::array<int64_t, 3> g_pending_contact_projection{};
 uint64_t g_pending_contact_projection_sequence = 0;
@@ -269,6 +275,14 @@ LARGE_INTEGER g_qpc_frequency{};
 bool g_debug_log = false;
 bool g_weapon_wheel_enabled = false;
 bool g_weapon_wheel_invert = false;
+bool g_xinput_enabled = false;
+bool g_xinput_base_bindings = false;
+uint32_t g_xinput_controller_index = 0;
+uint32_t g_xinput_selector_hold_ms = 225;
+int32_t g_xinput_left_deadzone = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
+int32_t g_xinput_right_deadzone = XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
+int32_t g_xinput_trigger_threshold = XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+int32_t g_xinput_mouse_pixels = 18;
 uint64_t g_weapon_wheel_switches = 0;
 uint64_t g_weapon_wheel_rejections = 0;
 uint64_t g_suppressed_midpoints = 0;
@@ -538,6 +552,12 @@ bool ConfiguredWeaponWheelInvert() {
                                ini.c_str()) != 0;
 }
 
+int ConfiguredInteger(const wchar_t* section, const wchar_t* key,
+                      int default_value) {
+  const std::wstring ini = ConfigurationPath();
+  return GetPrivateProfileIntW(section, key, default_value, ini.c_str());
+}
+
 void AppendNativeLog(const char* format, ...) {
   if (!g_debug_log) {
     return;
@@ -588,19 +608,19 @@ void AppendNativeLogBlock(const std::string& block) {
   CloseHandle(file);
 }
 
-bool WeaponWheelGameplayReady() {
-  if (!g_weapon_wheel_enabled || !g_dungeon_base) {
+bool DeathtrapGameplayReady(bool require_selector_closed) {
+  if (!g_dungeon_base) {
     return false;
   }
 
-  int32_t selector_mode = 0;
+  uint8_t selector_mode = 0;
   uintptr_t player = 0;
   uintptr_t game_root = 0;
   uintptr_t gameplay_context = 0;
   uintptr_t gameplay_object = 0;
   uintptr_t root_vtable = 0;
   if (!SafeReadValue(g_dungeon_base + kUiSelectorModeRva, &selector_mode) ||
-      selector_mode != 0 ||
+      (require_selector_closed && selector_mode != 0) ||
       !SafeReadValue(g_dungeon_base + kUiOwnerPointerRva, &player) ||
       !player ||
       !SafeReadValue(g_dungeon_base + kGameRootPointerRva, &game_root) ||
@@ -620,6 +640,10 @@ bool WeaponWheelGameplayReady() {
     return false;
   }
   return true;
+}
+
+bool WeaponWheelGameplayReady() {
+  return g_weapon_wheel_enabled && DeathtrapGameplayReady(true);
 }
 
 bool NativeWeaponAvailable(int32_t weapon_id) {
@@ -709,6 +733,481 @@ void ConsumePendingWeaponWheel() {
     return;
   }
   ++g_weapon_wheel_rejections;
+}
+
+using DynamicXInputGetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
+
+struct ControllerSelectorState {
+  bool direction_down = false;
+  bool row_open = false;
+  bool cancelled = false;
+  bool consumable_used = false;
+  uint32_t category = 0;
+  uint32_t slot = 0;
+  uint64_t pressed_ms = 0;
+  std::array<uint32_t, 4> remembered_slot{};
+};
+
+enum class InjectedKey : size_t {
+  kW,
+  kS,
+  kA,
+  kD,
+  kShift,
+  kSpace,
+  kE,
+  kQ,
+  kTab,
+  kEscape,
+  kUp,
+  kDown,
+  kLeft,
+  kRight,
+  kEnter,
+  kCount,
+};
+
+HMODULE g_xinput_module = nullptr;
+DynamicXInputGetStateFn g_xinput_get_state = nullptr;
+ControllerSelectorState g_controller_selector;
+std::array<bool, static_cast<size_t>(InjectedKey::kCount)>
+    g_injected_keys{};
+bool g_injected_mouse_left = false;
+bool g_xinput_was_connected = false;
+
+constexpr std::array<WORD, static_cast<size_t>(InjectedKey::kCount)>
+    kInjectedVirtualKeys = {L'W', L'S', L'A', L'D', VK_LSHIFT,
+                            VK_SPACE, L'E', L'Q', VK_TAB, VK_ESCAPE,
+                            VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, VK_RETURN};
+
+bool IsGameForeground() {
+  const HWND foreground = GetForegroundWindow();
+  if (!foreground) {
+    return false;
+  }
+  DWORD process_id = 0;
+  GetWindowThreadProcessId(foreground, &process_id);
+  return process_id == GetCurrentProcessId();
+}
+
+void InjectVirtualKey(InjectedKey key, bool down) {
+  const size_t index = static_cast<size_t>(key);
+  if (g_injected_keys[index] == down) {
+    return;
+  }
+  INPUT input = {};
+  input.type = INPUT_KEYBOARD;
+  input.ki.wVk = kInjectedVirtualKeys[index];
+  input.ki.dwFlags = down ? 0u : KEYEVENTF_KEYUP;
+  if (key == InjectedKey::kUp || key == InjectedKey::kDown ||
+      key == InjectedKey::kLeft || key == InjectedKey::kRight) {
+    input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+  }
+  if (SendInput(1, &input, sizeof(input)) == 1) {
+    g_injected_keys[index] = down;
+  }
+}
+
+void InjectMouseLeft(bool down) {
+  if (g_injected_mouse_left == down) {
+    return;
+  }
+  INPUT input = {};
+  input.type = INPUT_MOUSE;
+  input.mi.dwFlags = down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
+  if (SendInput(1, &input, sizeof(input)) == 1) {
+    g_injected_mouse_left = down;
+  }
+}
+
+void ReleaseInjectedControllerInput() {
+  for (size_t i = 0; i < g_injected_keys.size(); ++i) {
+    InjectVirtualKey(static_cast<InjectedKey>(i), false);
+  }
+  InjectMouseLeft(false);
+}
+
+bool LoadXInputRuntime() {
+  if (g_xinput_get_state) {
+    return true;
+  }
+  constexpr std::array<const wchar_t*, 3> kCandidates = {
+      L"xinput1_4.dll", L"xinput1_3.dll", L"xinput9_1_0.dll"};
+  for (const wchar_t* candidate : kCandidates) {
+    HMODULE module = LoadLibraryW(candidate);
+    if (!module) {
+      continue;
+    }
+    auto function = reinterpret_cast<DynamicXInputGetStateFn>(
+        GetProcAddress(module, "XInputGetState"));
+    if (function) {
+      g_xinput_module = module;
+      g_xinput_get_state = function;
+      return true;
+    }
+    FreeLibrary(module);
+  }
+  return false;
+}
+
+void PublishControllerSelector(bool visible, uint32_t category,
+                               uint32_t slot, bool available,
+                               bool confirmation_required) {
+  uint32_t packed = 0;
+  if (visible) {
+    packed |= 1u;
+  }
+  if (available) {
+    packed |= 2u;
+  }
+  if (confirmation_required) {
+    packed |= 4u;
+  }
+  packed |= (category & 0xFu) << 8u;
+  packed |= (slot & 0xFu) << 16u;
+  g_controller_selector_overlay.store(packed, std::memory_order_release);
+}
+
+void SetNativeSelectorMode(uint8_t mode) {
+  if (!g_dungeon_base) {
+    return;
+  }
+  SafeWrite(g_dungeon_base + kUiSelectorModeRva, &mode, sizeof(mode));
+}
+
+bool NativeInventoryItemAvailable(int32_t item_id) {
+  using InventoryLookupFn = void*(__cdecl*)(int32_t);
+  void* item = nullptr;
+  __try {
+    item = reinterpret_cast<InventoryLookupFn>(
+        g_dungeon_base + kInventoryLookupRva)(item_id);
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    item = nullptr;
+  }
+  return item != nullptr;
+}
+
+bool ControllerSlotAvailable(uint32_t category, uint32_t slot) {
+  if (slot >= 8u) {
+    return false;
+  }
+  switch (category) {
+    case 1:
+      return NativeWeaponAvailable(static_cast<int32_t>(slot));
+    case 2:
+      return slot < 6u &&
+             NativeInventoryItemAvailable(8 + static_cast<int32_t>(slot));
+    case 3:
+      return NativeInventoryItemAvailable(0x0E +
+                                          static_cast<int32_t>(slot));
+    case 4:
+      return NativeInventoryItemAvailable(0x16 +
+                                          static_cast<int32_t>(slot));
+    default:
+      return false;
+  }
+}
+
+uint32_t CurrentControllerSlot(uint32_t category) {
+  int32_t active = -1;
+  if (category == 1 || category == 2) {
+    SafeReadValue(g_dungeon_base + kActiveCloseCombatWeaponRva, &active);
+    if (category == 1 && active >= 0 && active <= 7) {
+      return static_cast<uint32_t>(active);
+    }
+    if (category == 2 && active >= 8 && active <= 13) {
+      return static_cast<uint32_t>(active - 8);
+    }
+  } else if (category == 3) {
+    SafeReadValue(g_dungeon_base + 0x001D8A6Cu, &active);
+    if (active >= 0x0E && active <= 0x15) {
+      return static_cast<uint32_t>(active - 0x0E);
+    }
+  }
+  return g_controller_selector.remembered_slot[category - 1u] & 7u;
+}
+
+bool CommitControllerSlot(uint32_t category, uint32_t slot) {
+  if (!ControllerSlotAvailable(category, slot)) {
+    return false;
+  }
+  __try {
+    switch (category) {
+      case 1: {
+        constexpr std::array<int32_t, 8> kActions = {1, 2, 4, 5,
+                                                     6, 7, 8, 0};
+        reinterpret_cast<void(__cdecl*)(int32_t, int32_t)>(
+            g_dungeon_base + kSelectCloseCombatWeaponRva)(kActions[slot], 1);
+        break;
+      }
+      case 2: {
+        constexpr std::array<int32_t, 6> kActions = {
+            0x10, 0x0E, 0x0F, 0x11, 0x0C, 0x0D};
+        if (slot >= kActions.size()) {
+          return false;
+        }
+        reinterpret_cast<void(__cdecl*)(int32_t, int32_t)>(
+            g_dungeon_base + kSelectRangedWeaponRva)(kActions[slot], 1);
+        break;
+      }
+      case 3:
+        reinterpret_cast<void(__cdecl*)(int32_t)>(
+            g_dungeon_base + kSelectSpellRva)(0x0E +
+                                              static_cast<int32_t>(slot));
+        break;
+      case 4:
+        reinterpret_cast<void(__cdecl*)(int32_t)>(
+            g_dungeon_base + kUseConsumableRva)(0x16 +
+                                                static_cast<int32_t>(slot));
+        break;
+      default:
+        return false;
+    }
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+  g_controller_selector.remembered_slot[category - 1u] = slot;
+  AppendNativeLog("xinput selector commit category=%u slot=%u", category,
+                  slot + 1u);
+  return true;
+}
+
+uint32_t NextAvailableControllerSlot(uint32_t category, uint32_t current) {
+  for (uint32_t distance = 1; distance <= 8u; ++distance) {
+    const uint32_t candidate = (current + distance) & 7u;
+    if (ControllerSlotAvailable(category, candidate)) {
+      return candidate;
+    }
+  }
+  return current & 7u;
+}
+
+uint32_t DpadCategory(WORD buttons) {
+  if (buttons & XINPUT_GAMEPAD_DPAD_UP) {
+    return 1;
+  }
+  if (buttons & XINPUT_GAMEPAD_DPAD_RIGHT) {
+    return 2;
+  }
+  if (buttons & XINPUT_GAMEPAD_DPAD_DOWN) {
+    return 3;
+  }
+  if (buttons & XINPUT_GAMEPAD_DPAD_LEFT) {
+    return 4;
+  }
+  return 0;
+}
+
+uint32_t RightStickSlot(const XINPUT_GAMEPAD& pad, uint32_t fallback) {
+  const double x = static_cast<double>(pad.sThumbRX);
+  const double y = static_cast<double>(pad.sThumbRY);
+  if (x * x + y * y <
+      static_cast<double>(g_xinput_right_deadzone) *
+          static_cast<double>(g_xinput_right_deadzone)) {
+    return fallback;
+  }
+  constexpr double kPi = 3.14159265358979323846;
+  double angle = std::atan2(x, y);
+  if (angle < 0.0) {
+    angle += 2.0 * kPi;
+  }
+  return static_cast<uint32_t>(
+             std::floor(angle / (kPi / 4.0) + 0.5)) &
+         7u;
+}
+
+void CloseControllerSelector() {
+  if (g_controller_selector.row_open) {
+    SetNativeSelectorMode(0);
+  }
+  PublishControllerSelector(false, 0, 0, false, false);
+  g_controller_selector = {};
+}
+
+void UpdateControllerSelector(const XINPUT_GAMEPAD& pad, bool gameplay) {
+  const uint32_t category = gameplay ? DpadCategory(pad.wButtons) : 0u;
+  const uint64_t now = GetTickCount64();
+  if (!g_controller_selector.direction_down && category != 0u) {
+    uint8_t native_mode = 0;
+    if (!SafeReadValue(g_dungeon_base + kUiSelectorModeRva, &native_mode) ||
+        native_mode != 0) {
+      return;
+    }
+    g_controller_selector.direction_down = true;
+    g_controller_selector.category = category;
+    g_controller_selector.slot = CurrentControllerSlot(category);
+    g_controller_selector.pressed_ms = now;
+    return;
+  }
+  if (!g_controller_selector.direction_down) {
+    return;
+  }
+  if (category != 0u && category != g_controller_selector.category) {
+    CloseControllerSelector();
+    return;
+  }
+  if (category == 0u) {
+    const uint64_t duration = now - g_controller_selector.pressed_ms;
+    if (!g_controller_selector.row_open &&
+        !g_controller_selector.cancelled && duration < g_xinput_selector_hold_ms &&
+        g_controller_selector.category != 4u) {
+      const uint32_t next = NextAvailableControllerSlot(
+          g_controller_selector.category, g_controller_selector.slot);
+      CommitControllerSlot(g_controller_selector.category, next);
+    } else if (g_controller_selector.row_open &&
+               !g_controller_selector.cancelled &&
+               g_controller_selector.category != 4u) {
+      CommitControllerSlot(g_controller_selector.category,
+                           g_controller_selector.slot);
+    }
+    CloseControllerSelector();
+    return;
+  }
+
+  if (!g_controller_selector.row_open && !g_controller_selector.cancelled &&
+      now - g_controller_selector.pressed_ms >= g_xinput_selector_hold_ms) {
+    g_controller_selector.row_open = true;
+    SetNativeSelectorMode(static_cast<uint8_t>(g_controller_selector.category));
+    AppendNativeLog("xinput selector open category=%u",
+                    g_controller_selector.category);
+  }
+  if (!g_controller_selector.row_open || g_controller_selector.cancelled) {
+    return;
+  }
+  g_controller_selector.slot =
+      RightStickSlot(pad, g_controller_selector.slot);
+  const bool available = ControllerSlotAvailable(
+      g_controller_selector.category, g_controller_selector.slot);
+  PublishControllerSelector(true, g_controller_selector.category,
+                            g_controller_selector.slot, available,
+                            g_controller_selector.category == 4u);
+  if (pad.wButtons & XINPUT_GAMEPAD_B) {
+    g_controller_selector.cancelled = true;
+    SetNativeSelectorMode(0);
+    PublishControllerSelector(false, 0, 0, false, false);
+    AppendNativeLog("xinput selector cancel category=%u",
+                    g_controller_selector.category);
+  } else if (g_controller_selector.category == 4u && available &&
+             !g_controller_selector.consumable_used &&
+             (pad.wButtons & XINPUT_GAMEPAD_A)) {
+    g_controller_selector.consumable_used =
+        CommitControllerSlot(4u, g_controller_selector.slot);
+    g_controller_selector.cancelled = true;
+    SetNativeSelectorMode(0);
+    PublishControllerSelector(false, 0, 0, false, false);
+  }
+}
+
+double NormalizedStick(SHORT value, int32_t deadzone) {
+  const int32_t signed_value = static_cast<int32_t>(value);
+  const int32_t magnitude = std::abs(signed_value);
+  if (magnitude <= deadzone) {
+    return 0.0;
+  }
+  const double normalized = static_cast<double>(magnitude - deadzone) /
+                            static_cast<double>(32767 - deadzone);
+  return signed_value < 0 ? -normalized : normalized;
+}
+
+void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
+                                  bool selector_captures_controls) {
+  if (!g_xinput_base_bindings) {
+    ReleaseInjectedControllerInput();
+    return;
+  }
+  const double left_x = NormalizedStick(pad.sThumbLX, g_xinput_left_deadzone);
+  const double left_y = NormalizedStick(pad.sThumbLY, g_xinput_left_deadzone);
+  const WORD buttons = pad.wButtons;
+  if (gameplay) {
+    InjectVirtualKey(InjectedKey::kW, left_y > 0.15);
+    InjectVirtualKey(InjectedKey::kS, left_y < -0.15);
+    InjectVirtualKey(InjectedKey::kA, left_x < -0.15);
+    InjectVirtualKey(InjectedKey::kD, left_x > 0.15);
+    InjectVirtualKey(InjectedKey::kShift,
+                     std::max(std::abs(left_x), std::abs(left_y)) > 0.72);
+    InjectVirtualKey(InjectedKey::kSpace,
+                     !selector_captures_controls &&
+                         (buttons & XINPUT_GAMEPAD_A));
+    InjectVirtualKey(InjectedKey::kE, buttons & XINPUT_GAMEPAD_X);
+    InjectVirtualKey(InjectedKey::kQ, buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
+    InjectVirtualKey(InjectedKey::kTab,
+                     pad.bLeftTrigger >= g_xinput_trigger_threshold);
+    InjectMouseLeft(!selector_captures_controls &&
+                    pad.bRightTrigger >= g_xinput_trigger_threshold);
+    InjectVirtualKey(InjectedKey::kUp, false);
+    InjectVirtualKey(InjectedKey::kDown, false);
+    InjectVirtualKey(InjectedKey::kLeft, false);
+    InjectVirtualKey(InjectedKey::kRight, false);
+    InjectVirtualKey(InjectedKey::kEnter, false);
+
+    if (!selector_captures_controls) {
+      const double right_x =
+          NormalizedStick(pad.sThumbRX, g_xinput_right_deadzone);
+      const LONG movement = static_cast<LONG>(
+          std::lround(right_x * static_cast<double>(g_xinput_mouse_pixels)));
+      if (movement != 0) {
+        INPUT input = {};
+        input.type = INPUT_MOUSE;
+        input.mi.dx = movement;
+        input.mi.dwFlags = MOUSEEVENTF_MOVE;
+        SendInput(1, &input, sizeof(input));
+      }
+    }
+  } else {
+    InjectVirtualKey(InjectedKey::kW, false);
+    InjectVirtualKey(InjectedKey::kS, false);
+    InjectVirtualKey(InjectedKey::kA, false);
+    InjectVirtualKey(InjectedKey::kD, false);
+    InjectVirtualKey(InjectedKey::kShift, false);
+    InjectVirtualKey(InjectedKey::kSpace, false);
+    InjectVirtualKey(InjectedKey::kE, false);
+    InjectVirtualKey(InjectedKey::kQ, false);
+    InjectVirtualKey(InjectedKey::kTab, false);
+    InjectMouseLeft(false);
+    InjectVirtualKey(InjectedKey::kUp,
+                     left_y > 0.35 || (buttons & XINPUT_GAMEPAD_DPAD_UP));
+    InjectVirtualKey(InjectedKey::kDown,
+                     left_y < -0.35 || (buttons & XINPUT_GAMEPAD_DPAD_DOWN));
+    InjectVirtualKey(InjectedKey::kLeft,
+                     left_x < -0.35 || (buttons & XINPUT_GAMEPAD_DPAD_LEFT));
+    InjectVirtualKey(InjectedKey::kRight,
+                     left_x > 0.35 || (buttons & XINPUT_GAMEPAD_DPAD_RIGHT));
+    InjectVirtualKey(InjectedKey::kEnter,
+                     buttons & XINPUT_GAMEPAD_A);
+  }
+  InjectVirtualKey(InjectedKey::kEscape,
+                   (buttons & XINPUT_GAMEPAD_START) ||
+                       (!gameplay && (buttons & XINPUT_GAMEPAD_B)));
+}
+
+void UpdateDeathtrapXInput() {
+  if (!g_xinput_enabled || !LoadXInputRuntime()) {
+    return;
+  }
+  XINPUT_STATE state = {};
+  const bool connected =
+      g_xinput_get_state(g_xinput_controller_index, &state) == ERROR_SUCCESS;
+  if (!connected || !IsGameForeground()) {
+    if (g_xinput_was_connected) {
+      ReleaseInjectedControllerInput();
+      CloseControllerSelector();
+    }
+    g_xinput_was_connected = connected;
+    return;
+  }
+  if (!g_xinput_was_connected) {
+    AppendNativeLog("xinput controller connected index=%u",
+                    g_xinput_controller_index);
+  }
+  g_xinput_was_connected = true;
+  const bool gameplay = DeathtrapGameplayReady(false);
+  UpdateControllerSelector(state.Gamepad, gameplay);
+  const bool selector_captures_controls =
+      g_controller_selector.direction_down &&
+      (g_controller_selector.row_open ||
+       g_controller_selector.category == 4u);
+  UpdateControllerBaseBindings(state.Gamepad, gameplay,
+                               selector_captures_controls);
 }
 
 // The old V26 experiment detoured complete engine functions. Those functions
@@ -3361,6 +3860,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   // Consume input only once at the real scheduler boundary. Synthetic render
   // phases never poll DirectInput and never feed another weapon action back
   // into the simulation.
+  UpdateDeathtrapXInput();
   ConsumePendingWeaponWheel();
   const uint32_t subframes = g_subframes.load(std::memory_order_relaxed);
   if ((subframes != 2u && subframes != 3u) || wait <= 0 || !g_renderer) {
@@ -3669,6 +4169,28 @@ void InitializePatchState() {
   g_debug_log = ConfiguredDebugLog();
   g_weapon_wheel_enabled = ConfiguredWeaponWheelEnabled();
   g_weapon_wheel_invert = ConfiguredWeaponWheelInvert();
+  g_xinput_enabled =
+      ConfiguredInteger(L"XInput", L"Enabled", 1) != 0;
+  g_xinput_base_bindings =
+      ConfiguredInteger(L"XInput", L"BaseBindings", 1) != 0;
+  g_xinput_controller_index = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"Controller", 0), 0, 3));
+  g_xinput_selector_hold_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"SelectorHoldMs", 225), 150, 600));
+  g_xinput_left_deadzone = std::clamp(
+      ConfiguredInteger(L"XInput", L"LeftStickDeadzone",
+                        XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE),
+      0, 30000);
+  g_xinput_right_deadzone = std::clamp(
+      ConfiguredInteger(L"XInput", L"RightStickDeadzone",
+                        XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE),
+      0, 30000);
+  g_xinput_trigger_threshold = std::clamp(
+      ConfiguredInteger(L"XInput", L"TriggerThreshold",
+                        XINPUT_GAMEPAD_TRIGGER_THRESHOLD),
+      0, 255);
+  g_xinput_mouse_pixels = std::clamp(
+      ConfiguredInteger(L"XInput", L"RightStickPixelsPerTick", 18), 1, 80);
   const uint32_t subframes = ConfiguredSubframes();
   g_subframes.store(subframes, std::memory_order_relaxed);
   if (!subframes) {
@@ -3697,7 +4219,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.24 integer x3 presentation "
+      "Deathtrap native render overlay 0.0.25 XInput selector prototype "
+      "integer x3 presentation "
       "session: "
       "unchanged v31 "
       "stable-cadence "
@@ -3726,9 +4249,15 @@ void InitializePatchState() {
       "player-state rollback, "
       "F11 native A/B and global clock untouched; DirectInput wheel events "
       "are observation-only and commit through Dungeon.dll+0x90610 once per "
-      "real gameplay tick (enabled=%u invert=%u)",
+      "real gameplay tick (enabled=%u invert=%u); XInput controller=%u "
+      "base_bindings=%u hold_ms=%u deadzones=%d/%d",
       g_weapon_wheel_enabled ? 1u : 0u,
-      g_weapon_wheel_invert ? 1u : 0u);
+      g_weapon_wheel_invert ? 1u : 0u,
+      g_xinput_controller_index,
+      g_xinput_base_bindings ? 1u : 0u,
+      g_xinput_selector_hold_ms,
+      g_xinput_left_deadzone,
+      g_xinput_right_deadzone);
   g_state.store(DeathtrapNativeRenderPatchState::kActive,
                 std::memory_order_release);
 }
@@ -3762,6 +4291,18 @@ void QueueDeathtrapWeaponWheelDelta(int32_t delta) {
 
 DeathtrapNativePresentationStage GetDeathtrapNativePresentationStage() {
   return g_active_presentation_trace.stage;
+}
+
+DeathtrapControllerSelectorStatus GetDeathtrapControllerSelectorStatus() {
+  const uint32_t packed =
+      g_controller_selector_overlay.load(std::memory_order_acquire);
+  DeathtrapControllerSelectorStatus status;
+  status.visible = (packed & 1u) != 0;
+  status.slot_available = (packed & 2u) != 0;
+  status.confirmation_required = (packed & 4u) != 0;
+  status.category = (packed >> 8u) & 0xFu;
+  status.slot = (packed >> 16u) & 0xFu;
+  return status;
 }
 
 void InitializeDeathtrapNativeRenderPatch() {

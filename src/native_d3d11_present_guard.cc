@@ -3,12 +3,14 @@
 #include <windows.h>
 
 #include <d3d11.h>
+#include <d3d11_1.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
 #include <algorithm>
 #include <array>
 #include <cstdarg>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <mutex>
@@ -262,6 +264,73 @@ bool IsCorrupt(const VisualSample& exact, const VisualSample& candidate,
   return partial_black;
 }
 
+void DrawControllerSelector(State* state, ID3D11Texture2D* backbuffer) {
+  if (!state || !backbuffer) {
+    return;
+  }
+  const DeathtrapControllerSelectorStatus selector =
+      GetDeathtrapControllerSelectorStatus();
+  if (!selector.visible || selector.category < 1u ||
+      selector.category > 4u || selector.slot >= 8u) {
+    return;
+  }
+  ComPtr<ID3D11DeviceContext1> context1;
+  if (FAILED(state->context.As(&context1))) {
+    return;
+  }
+  ComPtr<ID3D11RenderTargetView> target;
+  if (FAILED(state->device->CreateRenderTargetView(backbuffer, nullptr,
+                                                   &target))) {
+    return;
+  }
+  D3D11_TEXTURE2D_DESC desc = {};
+  backbuffer->GetDesc(&desc);
+  if (desc.Width < 160u || desc.Height < 120u) {
+    return;
+  }
+
+  constexpr double kPi = 3.14159265358979323846;
+  constexpr std::array<std::array<float, 4>, 4> kCategoryColors = {{
+      {{0.95f, 0.45f, 0.08f, 1.0f}},
+      {{0.95f, 0.80f, 0.10f, 1.0f}},
+      {{0.10f, 0.70f, 0.95f, 1.0f}},
+      {{0.80f, 0.25f, 0.90f, 1.0f}},
+  }};
+  const LONG center_x = static_cast<LONG>(desc.Width / 2u);
+  const LONG center_y = static_cast<LONG>((desc.Height * 67u) / 100u);
+  const LONG radius = static_cast<LONG>(
+      std::clamp(std::min(desc.Width, desc.Height) / 15u, 38u, 72u));
+  const LONG normal_half = std::clamp<LONG>(radius / 8, 5, 9);
+  const auto& category_color = kCategoryColors[selector.category - 1u];
+  for (uint32_t slot = 0; slot < 8u; ++slot) {
+    const double angle = (static_cast<double>(slot) * kPi) / 4.0;
+    const LONG x = center_x +
+                   static_cast<LONG>(std::lround(std::sin(angle) * radius));
+    const LONG y = center_y -
+                   static_cast<LONG>(std::lround(std::cos(angle) * radius));
+    const bool selected = slot == selector.slot;
+    const LONG half = selected ? normal_half + 4 : normal_half;
+    const D3D11_RECT rect = {x - half, y - half, x + half + 1,
+                             y + half + 1};
+    std::array<float, 4> color = category_color;
+    if (!selected) {
+      color[0] *= 0.28f;
+      color[1] *= 0.28f;
+      color[2] *= 0.28f;
+    } else if (!selector.slot_available) {
+      color = {0.95f, 0.05f, 0.04f, 1.0f};
+    }
+    context1->ClearView(target.Get(), color.data(), &rect, 1);
+  }
+  if (selector.confirmation_required) {
+    const LONG half = normal_half;
+    const D3D11_RECT center = {center_x - half, center_y - half,
+                               center_x + half + 1, center_y + half + 1};
+    const float confirmation[4] = {0.95f, 0.75f, 0.08f, 1.0f};
+    context1->ClearView(target.Get(), confirmation, &center, 1);
+  }
+}
+
 }  // namespace
 
 void AttachNativeD3D11PresentGuard(IDXGISwapChain* swap_chain,
@@ -343,5 +412,6 @@ bool AllowNativeD3D11Present(IDXGISwapChain* swap_chain) {
     state->last_exact = sample;
     state->last_exact_valid = true;
   }
+  DrawControllerSelector(state.get(), backbuffer.Get());
   return true;
 }

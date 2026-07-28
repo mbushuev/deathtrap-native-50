@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.24`.
+Current development version: `0.0.25`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -19,7 +19,8 @@ This repository contains only our Deathtrap-specific work:
 - the `DINPUT.dll` loader and system-DirectInput forwarder;
 - the minimal D3D11/DXGI presentation bridge;
 - the corrupt/black native-phase guard;
-- native mouse turning, attacks and safe wheel weapon cycling;
+- native mouse turning, attacks, safe wheel weapon cycling and an experimental
+  XInput controller layer;
 - configuration, build, verification and installation material.
 
 dgVoodoo and optional presentation launchers remain independent external
@@ -97,9 +98,21 @@ D3D11 settings, first-run verification and troubleshooting.
   inventory check and equipment change on the next real gameplay tick.
 - `WeaponWheel/Enabled=0`: disable wheel weapon selection.
 - `WeaponWheel/Invert=1`: reverse wheel direction.
+- XInput controller 0 is enabled in the test config. The left stick drives the
+  original walk/run/turn actions, the right stick turns through the native
+  mouse path, A jumps/climbs, X operates, RT attacks, LT holds first-person
+  view, RB casts, and Start opens the menu.
+- D-pad selects the four native inventory categories: up close combat, right
+  ranged, down spells, left potions/charms. A tap cycles the next available
+  item for the first three categories. Holding for 225 ms opens the original
+  eight-slot row; the right stick selects one of eight directions. Potions and
+  charms are used only with A while the D-pad remains held; B or release
+  cancels without consuming anything.
+- `XInput/BaseBindings=0` keeps only the category selector and leaves all base
+  controller buttons untouched.
 - `Diagnostics/DebugLog=1`: write `deathtrap_native_render.log` and
   `deathtrap_native_present.log`. Logging is normally off, but remains enabled
-  in the 0.0.24 test config.
+  in the 0.0.25 test config.
 
 ## Building
 

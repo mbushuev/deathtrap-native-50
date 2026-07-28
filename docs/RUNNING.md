@@ -131,7 +131,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.24`
+The render log must begin with the `Deathtrap native render overlay 0.0.25`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -157,6 +157,29 @@ simulates an F-key and synthetic render phases never consume input.
 `WeaponWheel/Enabled=0` disables this feature. `WeaponWheel/Invert=1` reverses
 the default direction (wheel up selects the previous available slot; wheel
 down selects the next one).
+
+## XInput controller test layer
+
+Version 0.0.25 dynamically loads the first available Microsoft XInput runtime
+(`xinput1_4`, `xinput1_3`, then `xinput9_1_0`) and polls controller 0 only at a
+real game scheduler boundary. Synthetic native-render phases never poll or
+repeat controller input.
+
+The default layout is left stick movement/turning, right stick horizontal
+turning, A jump/climb, X operate, RT primary attack, LT first-person view, RB
+cast spell and Start menu. Vertical free camera movement is intentionally not
+invented because the original game has no safe camera-pitch action.
+
+D-pad maps to the four retail selectors: up close combat, right ranged, down
+spells, and left potions/charms. A short tap cycles the next available item in
+the first three categories. Holding a direction for `SelectorHoldMs` opens the
+game's original row and a small eight-direction marker. Move the right stick
+to choose the slot and release to equip. An unavailable slot is red.
+
+The consumable category never activates on release. Keep D-pad left held,
+choose a slot, and press A to use it; B or release cancels. This guard prevents
+an accidental potion or charm use. Set `XInput/Enabled=0` to disable the whole
+layer, or `XInput/BaseBindings=0` to test only the D-pad selector.
 
 ## 7. Common failures
 

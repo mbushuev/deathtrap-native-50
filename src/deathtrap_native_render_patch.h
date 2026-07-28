@@ -27,6 +27,14 @@ struct DeathtrapNativeRenderPatchStatus {
   uint32_t subframes = 0;
 };
 
+struct DeathtrapControllerSelectorStatus {
+  bool visible = false;
+  bool slot_available = false;
+  bool confirmation_required = false;
+  uint32_t category = 0;
+  uint32_t slot = 0;
+};
+
 enum class DeathtrapNativePresentationStage : uint8_t {
   kNone = 0,
   kMidpoint = 1,
@@ -54,6 +62,11 @@ uint64_t GetDeathtrapNativeSuppressedPresentCount();
 // Present hook. This is thread-local because both the renderer and Present
 // execute synchronously on the game's render thread.
 DeathtrapNativePresentationStage GetDeathtrapNativePresentationStage();
+
+// Read-only presentation state for the controller's four-category selector.
+// The D3D11 layer uses this to draw an eight-direction marker after the game
+// has rendered its original inventory row.
+DeathtrapControllerSelectorStatus GetDeathtrapControllerSelectorStatus();
 
 // Installs the native render detours after MH_Initialize.
 bool InstallDeathtrapNativeRenderHooks();

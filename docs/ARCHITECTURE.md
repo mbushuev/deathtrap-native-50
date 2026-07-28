@@ -98,3 +98,20 @@ always-present IDs 0 and 7 follow the same rules as the retail close-combat
 selector. Selection is committed through the selector's native operation at
 `+0x90610`. Loading/menu wheel input expires and cannot leak into gameplay.
 Synthetic render phases do not poll or consume input.
+
+## XInput category bridge
+
+Version 0.0.25 loads XInput dynamically and polls it once at the same real
+`Dungeon.dll+0x80600` boundary. D-pad holds write only the retail selector mode
+byte at `+0x1086FC`, whose values 1 through 4 already dispatch the original
+close-combat, ranged, spell, and consumable rows. Direct selection uses the
+retail commit paths at `+0x90610`, `+0x90740`, `+0x7BAF0`, and `+0x7B9C0`.
+Availability is always checked through `+0x7BD30` first. The consumable path is
+reachable only after explicit A confirmation while its D-pad direction stays
+held.
+
+The D3D11 layer draws a minimal eight-direction marker after sampling the
+native frame for corruption. It does not feed the marker into interpolation or
+the black-frame detector. Base controller bindings are emitted as ordinary
+foreground keyboard/mouse transitions, so the retail action parser remains
+the sole owner of movement, combat, menus, and collision.

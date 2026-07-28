@@ -31,11 +31,10 @@ same inventory lookup used by the retail selector (`Dungeon.dll+0x7BD30`), then
 committed through its native close-combat selection path
 (`Dungeon.dll+0x90610`). Synthetic render phases never consume input.
 
-## Phase 3: cursor ownership
+## Phase 3: cursor ownership (not required)
 
-- Capture and hide the system cursor only during active gameplay.
-- Release it in menus, on focus loss and while task switching.
-- Restore capture without a position jump after focus returns.
+The retail/dgVoodoo path already hides and restores the cursor correctly, so
+the overlay deliberately does not take cursor ownership.
 
 ## Phase 4: configurable response (research)
 
@@ -46,8 +45,11 @@ committed through its native close-combat selection path
 - Keep vertical mouse-look disabled unless a later camera investigation can
   preserve framing and collision visibility.
 
-## Phase 5: XInput
+## Phase 5: XInput (experimental in 0.0.25)
 
-- Add modern Xbox controller support, deadzones and remapping.
-- Preserve the same original action system used by keyboard and mouse.
-- Add vibration only after stable gameplay events have been identified.
+- Dynamically support modern Xbox controllers without redistributing XInput.
+- Drive the original keyboard/mouse actions with configurable deadzones.
+- Map D-pad to the four native inventory groups and right stick to eight
+  direct slots, with an original-row plus radial-marker presentation.
+- Require explicit A confirmation for consumables and allow B/release cancel.
+- Add remapping and vibration only after the first layout is gameplay-tested.
