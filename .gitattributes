@@ -1,3 +1,5 @@
 *.dll binary
 *.exe binary
 *.png binary
+*.conf text eol=crlf
+*.ini text eol=crlf
