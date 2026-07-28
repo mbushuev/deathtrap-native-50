@@ -101,7 +101,7 @@ Synthetic render phases do not poll or consume input.
 
 ## XInput category bridge
 
-Version 0.0.26 loads XInput dynamically and polls it once at the same real
+Version 0.0.27 loads XInput dynamically and polls it once at the same real
 `Dungeon.dll+0x80600` boundary. D-pad holds write only the retail selector mode
 byte at `+0x1086FC`, whose values 1 through 4 already dispatch the original
 close-combat, ranged, spell, and consumable rows. Direct selection uses the
@@ -110,10 +110,16 @@ Availability is always checked through `+0x7BD30` first. The consumable path is
 reachable only after explicit A confirmation while its D-pad direction stays
 held.
 
-The D3D11 layer draws a numbered eight-direction marker after sampling the
-native frame for corruption. It does not feed the marker into interpolation or
-the black-frame detector. Base controller bindings are emitted as ordinary
-foreground keyboard/mouse transitions. Dedicated J/K bindings call the retail
-side-step actions without the Ctrl+W diagonal collision, and right-stick Y
-stays on the retail relative-mouse path used by first-person view. The retail
-action parser remains the sole owner of movement, combat, menus, and collision.
+The hook at `Dungeon.dll+0x772A0` receives the retail 12-byte inventory-slot
+draw state (coordinates, icon, selected/available flags, slot number and
+quantity). While a controller selector is open, it copies that state, changes
+only the coordinates and selected flag, and calls the original renderer. This
+creates the radial presentation from native game assets without copying icon
+textures or feeding overlay graphics into interpolation. The D3D11 layer no
+longer paints its old debug squares.
+
+Base controller bindings are emitted as ordinary foreground keyboard/mouse
+transitions. Dedicated J/K bindings call the retail side-step actions without
+the Ctrl+W diagonal collision. The right stick reaches the relative-mouse path
+only in menus or while the retail first-person mode is toggled. The retail
+action parser remains the sole owner of movement, combat, menus and collision.

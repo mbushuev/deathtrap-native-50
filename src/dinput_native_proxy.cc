@@ -55,6 +55,9 @@ DirectInputDeviceGetStateFn g_direct_input_device_get_state = nullptr;
 thread_local bool g_inside_present = false;
 thread_local bool g_suppress_page_restore = false;
 std::atomic<uint64_t> g_suppressed_page_restores{0};
+std::atomic<int32_t> g_xinput_mouse_delta_x{0};
+std::atomic<int32_t> g_xinput_mouse_delta_y{0};
+std::atomic<uint8_t> g_xinput_mouse_buttons{0};
 
 extern "C" {
 FARPROC g_target_DirectInputCreateA = nullptr;
@@ -126,19 +129,45 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
       g_direct_input_device_get_state
           ? g_direct_input_device_get_state(device, data_size, data)
           : DIERR_GENERIC;
-  // Deathtrap uses the standard relative mouse state. Observe it after the
-  // system DirectInput implementation has filled the buffer, but never edit
-  // the state returned to the game. Exact-size checks also exclude keyboard
-  // and joystick devices if the DirectInput implementation shares vtables.
+  // Deathtrap uses the standard relative mouse state. Preserve the physical
+  // mouse, then merge the bounded controller pointer state used by menus.
+  // Exact-size checks also exclude keyboard and joystick devices if the
+  // DirectInput implementation shares vtables.
   if (SUCCEEDED(result) && data &&
       (data_size == sizeof(DIMOUSESTATE) ||
        data_size == sizeof(DIMOUSESTATE2))) {
-    const auto* mouse = static_cast<const DIMOUSESTATE*>(data);
+    auto* mouse = static_cast<DIMOUSESTATE*>(data);
+    mouse->lX += g_xinput_mouse_delta_x.exchange(0,
+                                                 std::memory_order_acq_rel);
+    mouse->lY += g_xinput_mouse_delta_y.exchange(0,
+                                                 std::memory_order_acq_rel);
+    const uint8_t injected_buttons =
+        g_xinput_mouse_buttons.load(std::memory_order_acquire);
+    if (injected_buttons & 1u) {
+      mouse->rgbButtons[0] |= 0x80u;
+    }
+    if (injected_buttons & 2u) {
+      mouse->rgbButtons[1] |= 0x80u;
+    }
     if (mouse->lZ != 0) {
       QueueDeathtrapWeaponWheelDelta(mouse->lZ);
     }
   }
   return result;
+}
+
+void SubmitDeathtrapXInputMouseStateInternal(int32_t delta_x, int32_t delta_y,
+                                             bool left_button,
+                                             bool right_button) {
+  // This is a relative state for one sample, not a FIFO. Replacing the pending
+  // value avoids a huge cursor jump if a loading screen temporarily stops
+  // polling the DirectInput mouse.
+  g_xinput_mouse_delta_x.store(delta_x, std::memory_order_release);
+  g_xinput_mouse_delta_y.store(delta_y, std::memory_order_release);
+  g_xinput_mouse_buttons.store(
+      static_cast<uint8_t>((left_button ? 1u : 0u) |
+                           (right_button ? 2u : 0u)),
+      std::memory_order_release);
 }
 
 HRESULT STDMETHODCALLTYPE HookDirectInputCreateDeviceA(
@@ -399,6 +428,12 @@ DWORD WINAPI InitializeThread(void*) {
 }
 
 }  // namespace
+
+void SubmitDeathtrapXInputMouseState(int32_t delta_x, int32_t delta_y,
+                                     bool left_button, bool right_button) {
+  SubmitDeathtrapXInputMouseStateInternal(delta_x, delta_y, left_button,
+                                          right_button);
+}
 
 void SetDeathtrapNativePageRestorePresentSuppressed(bool suppressed) {
   g_suppress_page_restore = suppressed;

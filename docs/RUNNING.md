@@ -131,7 +131,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.25`
+The render log must begin with the `Deathtrap native render overlay 0.0.27`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -158,29 +158,44 @@ simulates an F-key and synthetic render phases never consume input.
 the default direction (wheel up selects the previous available slot; wheel
 down selects the next one).
 
-## XInput controller test layer
+## XInput controller layer
 
-Version 0.0.26 dynamically loads the first available Microsoft XInput runtime
+Version 0.0.27 dynamically loads the first available Microsoft XInput runtime
 (`xinput1_4`, `xinput1_3`, then `xinput9_1_0`) and polls controller 0 only at a
 real game scheduler boundary. Synthetic native-render phases never poll or
 repeat controller input.
 
-The default layout is left stick forward/backward/side-step, both right-stick
-axes through the game's native relative-mouse actions, A jump/climb, X operate,
-RT primary attack, LT parry/block, right-stick click first-person view, RB cast
-spell and Start menu. Right-stick Y therefore works in the retail first-person
-view without writing camera transforms. Set `InvertRightY=1` to invert it.
+The default gameplay layout is left-stick forward/backward and tank turning,
+A jump/climb, X operate, RT primary attack, LT parry/block, RB cast spell and
+Start menu. Hold LB to change only the left-stick horizontal axis to the
+retail side-step actions. R3 toggles the retail first-person view; while it is
+active, both right-stick axes use the game's native relative-mouse path. This
+keeps the normal follow camera predictable and provides two-axis aiming without
+writing camera transforms. Set `InvertRightY=1` to invert vertical look.
+
+In loading screens and menus, right stick moves the existing game pointer, A
+clicks, left stick or D-pad provides arrow-key fallback navigation, B or Start
+goes back, and X sends Space. The layer never draws or captures a second cursor.
 
 D-pad maps to the four retail selectors: up close combat, right ranged, down
 spells, and left potions/charms. A short tap cycles the next available item in
 the first three categories. Holding a direction for `SelectorHoldMs` opens the
-game's original icon row and a numbered eight-direction marker. Move the right
-stick to choose slot 1–8 and release to equip. An unavailable slot is red.
+game's inventory selector. Its native slot renderer is repositioned into a
+large eight-direction ring, so the real icon, number, stack quantity and active
+highlight are preserved. Move the right stick to choose slot 1–8 and release
+to equip. `SelectorRadius` and `SelectorCenterY` adjust the ring in the game's
+logical coordinate space.
 
 The consumable category never activates on release. Keep D-pad left held,
 choose a slot, and press A to use it; B or release cancels. This guard prevents
 an accidental potion or charm use. Set `XInput/Enabled=0` to disable the whole
 layer, or `XInput/BaseBindings=0` to test only the D-pad selector.
+
+The layout follows two established conventions: a community controller setup
+uses the right stick as a mouse for menus and first-person view, while hold,
+select and release matches the standard radial-menu interaction. It deliberately
+does not force right-stick turning into normal third-person play because the
+retail game has a follow camera rather than a modern free camera.
 
 ## 7. Common failures
 

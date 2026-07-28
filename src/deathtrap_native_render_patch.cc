@@ -48,6 +48,7 @@ constexpr uintptr_t kSelectCloseCombatWeaponRva = 0x00090610u;
 constexpr uintptr_t kSelectRangedWeaponRva = 0x00090740u;
 constexpr uintptr_t kSelectSpellRva = 0x0007BAF0u;
 constexpr uintptr_t kUseConsumableRva = 0x0007B9C0u;
+constexpr uintptr_t kInventorySlotDrawRva = 0x000772A0u;
 constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
 constexpr size_t kMovementStageProbeCount = 95u;
 constexpr size_t kMovementCallbackProbeCount = 64u;
@@ -284,6 +285,8 @@ int32_t g_xinput_right_deadzone = XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
 int32_t g_xinput_trigger_threshold = XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
 int32_t g_xinput_mouse_pixels = 18;
 bool g_xinput_invert_right_y = false;
+int32_t g_xinput_selector_radius = 104;
+int32_t g_xinput_selector_center_y = 120;
 uint64_t g_weapon_wheel_switches = 0;
 uint64_t g_weapon_wheel_rejections = 0;
 uint64_t g_suppressed_midpoints = 0;
@@ -334,12 +337,14 @@ int64_t g_last_ui_frame_delta = 0;
 
 using RenderPresentWaitFn = void(__cdecl*)(void* context, int wait);
 using RendererFn = void(__cdecl*)(void* context);
+using InventorySlotDrawFn = void(__cdecl*)(void* slot);
 using RenderCacheUpdateFn = void(__cdecl*)(void* owner);
 using BackendFlipFn = void(__cdecl*)();
 
 RenderPresentWaitFn g_original_render_present_wait = nullptr;
 RendererFn g_renderer = nullptr;
 RendererFn g_original_renderer = nullptr;
+InventorySlotDrawFn g_original_inventory_slot_draw = nullptr;
 RenderCacheUpdateFn g_scene_cache_update = nullptr;
 RenderCacheUpdateFn g_camera_cache_update = nullptr;
 thread_local ActivePresentationTrace g_active_presentation_trace;
@@ -778,6 +783,8 @@ std::array<bool, static_cast<size_t>(InjectedKey::kCount)>
 bool g_injected_mouse_left = false;
 bool g_injected_mouse_right = false;
 bool g_xinput_was_connected = false;
+WORD g_previous_xinput_buttons = 0;
+bool g_xinput_first_person_toggled = false;
 
 constexpr std::array<WORD, static_cast<size_t>(InjectedKey::kCount)>
     kInjectedVirtualKeys = {L'W', L'S', L'A', L'D', L'J', L'K', VK_LSHIFT,
@@ -836,12 +843,32 @@ void InjectMouseRight(bool down) {
   }
 }
 
+void InjectRelativeMouseMove(double normalized_x, double normalized_y) {
+  const LONG movement_x = static_cast<LONG>(std::lround(
+      normalized_x * static_cast<double>(g_xinput_mouse_pixels)));
+  const double y_sign = g_xinput_invert_right_y ? 1.0 : -1.0;
+  const LONG movement_y = static_cast<LONG>(std::lround(
+      normalized_y * y_sign * static_cast<double>(g_xinput_mouse_pixels)));
+  if (movement_x == 0 && movement_y == 0) {
+    return;
+  }
+  INPUT input = {};
+  input.type = INPUT_MOUSE;
+  input.mi.dx = movement_x;
+  input.mi.dy = movement_y;
+  input.mi.dwFlags = MOUSEEVENTF_MOVE;
+  SendInput(1, &input, sizeof(input));
+}
+
 void ReleaseInjectedControllerInput() {
   for (size_t i = 0; i < g_injected_keys.size(); ++i) {
     InjectVirtualKey(static_cast<InjectedKey>(i), false);
   }
   InjectMouseLeft(false);
   InjectMouseRight(false);
+  SubmitDeathtrapXInputMouseState(0, 0, false, false);
+  g_xinput_first_person_toggled = false;
+  g_previous_xinput_buttons = 0;
 }
 
 bool LoadXInputRuntime() {
@@ -890,6 +917,55 @@ void SetNativeSelectorMode(uint8_t mode) {
     return;
   }
   SafeWrite(g_dungeon_base + kUiSelectorModeRva, &mode, sizeof(mode));
+}
+
+#pragma pack(push, 1)
+struct NativeInventorySlotDrawState {
+  int16_t x = 0;
+  int16_t y = 0;
+  uint8_t icon = 0xFFu;
+  uint8_t selected = 0;
+  uint8_t available = 0;
+  uint8_t slot = 0;
+  uint8_t blank = 0;
+  uint8_t reserved = 0;
+  uint16_t quantity = 0;
+};
+#pragma pack(pop)
+static_assert(sizeof(NativeInventorySlotDrawState) == 12u);
+
+void __cdecl HookInventorySlotDraw(void* raw_slot) {
+  if (!g_original_inventory_slot_draw || !raw_slot) {
+    return;
+  }
+  if (!g_controller_selector.row_open ||
+      g_controller_selector.cancelled) {
+    g_original_inventory_slot_draw(raw_slot);
+    return;
+  }
+
+  NativeInventorySlotDrawState slot = {};
+  std::memcpy(&slot, raw_slot, sizeof(slot));
+  if (slot.slot >= 8u) {
+    g_original_inventory_slot_draw(raw_slot);
+    return;
+  }
+
+  // The retail selector renderer uses a centered 640x480-style coordinate
+  // space and 32-pixel cells. Reposition its own complete slot draw (frame,
+  // icon, highlight, slot number and quantity) into a radial layout. No game
+  // textures are copied, replaced or reimplemented here.
+  constexpr double kPi = 3.14159265358979323846;
+  const double angle = static_cast<double>(slot.slot) * kPi / 4.0;
+  slot.x = static_cast<int16_t>(std::lround(
+      std::sin(angle) * static_cast<double>(g_xinput_selector_radius) - 16.0));
+  // Native selector Y grows upward from the bottom edge (unlike screen/D3D
+  // coordinates), so positive cosine places stick-up at the top of the ring.
+  slot.y = static_cast<int16_t>(std::lround(
+      static_cast<double>(g_xinput_selector_center_y) +
+      std::cos(angle) * static_cast<double>(g_xinput_selector_radius) - 16.0));
+  slot.selected = slot.slot == g_controller_selector.slot ? 1u : 0u;
+  g_original_inventory_slot_draw(&slot);
 }
 
 bool NativeInventoryItemAvailable(int32_t item_id) {
@@ -1134,56 +1210,57 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
   }
   const double left_x = NormalizedStick(pad.sThumbLX, g_xinput_left_deadzone);
   const double left_y = NormalizedStick(pad.sThumbLY, g_xinput_left_deadzone);
+  const double right_x =
+      NormalizedStick(pad.sThumbRX, g_xinput_right_deadzone);
+  const double right_y =
+      NormalizedStick(pad.sThumbRY, g_xinput_right_deadzone);
   const WORD buttons = pad.wButtons;
+  const WORD pressed = buttons & ~g_previous_xinput_buttons;
   if (gameplay) {
+    const bool strafe_modifier =
+        (buttons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
     InjectVirtualKey(InjectedKey::kW, left_y > 0.15);
     InjectVirtualKey(InjectedKey::kS, left_y < -0.15);
-    // Dedicated retail-format bindings avoid Ctrl+A/D. The latter collides
-    // with the game's Ctrl+W step action whenever a diagonal is requested.
-    InjectVirtualKey(InjectedKey::kA, false);
-    InjectVirtualKey(InjectedKey::kD, false);
-    InjectVirtualKey(InjectedKey::kJ, left_x < -0.15);
-    InjectVirtualKey(InjectedKey::kK, left_x > 0.15);
-    InjectVirtualKey(InjectedKey::kShift,
-                     std::abs(left_y) > 0.72);
+    // Default to the original predictable tank turn on the movement stick.
+    // Holding LB changes only the horizontal axis to the retail side-step
+    // actions, preserving forward/diagonal movement without Ctrl+W clashes.
+    InjectVirtualKey(InjectedKey::kA,
+                     !strafe_modifier && left_x < -0.15);
+    InjectVirtualKey(InjectedKey::kD,
+                     !strafe_modifier && left_x > 0.15);
+    InjectVirtualKey(InjectedKey::kJ,
+                     strafe_modifier && left_x < -0.15);
+    InjectVirtualKey(InjectedKey::kK,
+                     strafe_modifier && left_x > 0.15);
+    InjectVirtualKey(InjectedKey::kShift, std::abs(left_y) > 0.72);
     InjectVirtualKey(InjectedKey::kSpace,
                      !selector_captures_controls &&
                          (buttons & XINPUT_GAMEPAD_A));
     InjectVirtualKey(InjectedKey::kE, buttons & XINPUT_GAMEPAD_X);
     InjectVirtualKey(InjectedKey::kQ, buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
+    if (!selector_captures_controls &&
+        (pressed & XINPUT_GAMEPAD_RIGHT_THUMB)) {
+      g_xinput_first_person_toggled = !g_xinput_first_person_toggled;
+    }
     InjectVirtualKey(InjectedKey::kTab,
                      !selector_captures_controls &&
-                         (buttons & XINPUT_GAMEPAD_RIGHT_THUMB));
+                         g_xinput_first_person_toggled);
     InjectMouseLeft(!selector_captures_controls &&
                     pad.bRightTrigger >= g_xinput_trigger_threshold);
     InjectMouseRight(!selector_captures_controls &&
                      pad.bLeftTrigger >= g_xinput_trigger_threshold);
+    SubmitDeathtrapXInputMouseState(0, 0, false, false);
     InjectVirtualKey(InjectedKey::kUp, false);
     InjectVirtualKey(InjectedKey::kDown, false);
     InjectVirtualKey(InjectedKey::kLeft, false);
     InjectVirtualKey(InjectedKey::kRight, false);
     InjectVirtualKey(InjectedKey::kEnter, false);
 
-    if (!selector_captures_controls) {
-      const double right_x =
-          NormalizedStick(pad.sThumbRX, g_xinput_right_deadzone);
-      const double right_y =
-          NormalizedStick(pad.sThumbRY, g_xinput_right_deadzone);
-      const LONG movement_x = static_cast<LONG>(
-          std::lround(right_x * static_cast<double>(g_xinput_mouse_pixels)));
-      const double y_sign = g_xinput_invert_right_y ? 1.0 : -1.0;
-      const LONG movement_y = static_cast<LONG>(std::lround(
-          right_y * y_sign * static_cast<double>(g_xinput_mouse_pixels)));
-      if (movement_x != 0 || movement_y != 0) {
-        INPUT input = {};
-        input.type = INPUT_MOUSE;
-        input.mi.dx = movement_x;
-        input.mi.dy = movement_y;
-        input.mi.dwFlags = MOUSEEVENTF_MOVE;
-        SendInput(1, &input, sizeof(input));
-      }
+    if (!selector_captures_controls && g_xinput_first_person_toggled) {
+      InjectRelativeMouseMove(right_x, right_y);
     }
   } else {
+    g_xinput_first_person_toggled = false;
     InjectVirtualKey(InjectedKey::kW, false);
     InjectVirtualKey(InjectedKey::kS, false);
     InjectVirtualKey(InjectedKey::kA, false);
@@ -1191,7 +1268,8 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     InjectVirtualKey(InjectedKey::kJ, false);
     InjectVirtualKey(InjectedKey::kK, false);
     InjectVirtualKey(InjectedKey::kShift, false);
-    InjectVirtualKey(InjectedKey::kSpace, false);
+    InjectVirtualKey(InjectedKey::kSpace,
+                     (buttons & XINPUT_GAMEPAD_X) != 0);
     InjectVirtualKey(InjectedKey::kE, false);
     InjectVirtualKey(InjectedKey::kQ, false);
     InjectVirtualKey(InjectedKey::kTab, false);
@@ -1205,12 +1283,20 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
                      left_x < -0.35 || (buttons & XINPUT_GAMEPAD_DPAD_LEFT));
     InjectVirtualKey(InjectedKey::kRight,
                      left_x > 0.35 || (buttons & XINPUT_GAMEPAD_DPAD_RIGHT));
-    InjectVirtualKey(InjectedKey::kEnter,
-                     buttons & XINPUT_GAMEPAD_A);
+    InjectVirtualKey(InjectedKey::kEnter, false);
+    const int32_t menu_mouse_x = static_cast<int32_t>(std::lround(
+        right_x * static_cast<double>(g_xinput_mouse_pixels)));
+    const double menu_y_sign = g_xinput_invert_right_y ? 1.0 : -1.0;
+    const int32_t menu_mouse_y = static_cast<int32_t>(std::lround(
+        right_y * menu_y_sign * static_cast<double>(g_xinput_mouse_pixels)));
+    SubmitDeathtrapXInputMouseState(
+        menu_mouse_x, menu_mouse_y,
+        (buttons & XINPUT_GAMEPAD_A) != 0, false);
   }
   InjectVirtualKey(InjectedKey::kEscape,
                    (buttons & XINPUT_GAMEPAD_START) ||
                        (!gameplay && (buttons & XINPUT_GAMEPAD_B)));
+  g_previous_xinput_buttons = buttons;
 }
 
 void UpdateDeathtrapXInput() {
@@ -4226,6 +4312,10 @@ void InitializePatchState() {
       ConfiguredInteger(L"XInput", L"RightStickPixelsPerTick", 18), 1, 80);
   g_xinput_invert_right_y =
       ConfiguredInteger(L"XInput", L"InvertRightY", 0) != 0;
+  g_xinput_selector_radius = std::clamp(
+      ConfiguredInteger(L"XInput", L"SelectorRadius", 104), 64, 160);
+  g_xinput_selector_center_y = std::clamp(
+      ConfiguredInteger(L"XInput", L"SelectorCenterY", 120), 64, 176);
   const uint32_t subframes = ConfiguredSubframes();
   g_subframes.store(subframes, std::memory_order_relaxed);
   if (!subframes) {
@@ -4254,7 +4344,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.26 XInput selector prototype "
+      "Deathtrap native render overlay 0.0.27 native radial inventory "
       "integer x3 presentation "
       "session: "
       "unchanged v31 "
@@ -4285,14 +4375,16 @@ void InitializePatchState() {
       "F11 native A/B and global clock untouched; DirectInput wheel events "
       "are observation-only and commit through Dungeon.dll+0x90610 once per "
       "real gameplay tick (enabled=%u invert=%u); XInput controller=%u "
-      "base_bindings=%u hold_ms=%u deadzones=%d/%d",
+      "base_bindings=%u hold_ms=%u deadzones=%d/%d radial=%d center_y=%d",
       g_weapon_wheel_enabled ? 1u : 0u,
       g_weapon_wheel_invert ? 1u : 0u,
       g_xinput_controller_index,
       g_xinput_base_bindings ? 1u : 0u,
       g_xinput_selector_hold_ms,
       g_xinput_left_deadzone,
-      g_xinput_right_deadzone);
+      g_xinput_right_deadzone,
+      g_xinput_selector_radius,
+      g_xinput_selector_center_y);
   g_state.store(DeathtrapNativeRenderPatchState::kActive,
                 std::memory_order_release);
 }
@@ -4353,16 +4445,33 @@ bool InstallDeathtrapNativeRenderHooks() {
       !g_dungeon_base || !IsExpectedDungeonImage(g_dungeon_base)) {
     return false;
   }
+  void* const inventory_slot_target =
+      g_dungeon_base + kInventorySlotDrawRva;
+  const MH_STATUS create_inventory_slot = MH_CreateHook(
+      inventory_slot_target, reinterpret_cast<void*>(&HookInventorySlotDraw),
+      reinterpret_cast<void**>(&g_original_inventory_slot_draw));
+  if (create_inventory_slot != MH_OK &&
+      create_inventory_slot != MH_ERROR_ALREADY_CREATED) {
+    return false;
+  }
+  const MH_STATUS enable_inventory_slot = MH_EnableHook(inventory_slot_target);
+  if (enable_inventory_slot != MH_OK &&
+      enable_inventory_slot != MH_ERROR_ENABLED) {
+    return false;
+  }
+
   void* const renderer_target = g_dungeon_base + kRendererRva;
   const MH_STATUS create_renderer = MH_CreateHook(
       renderer_target, reinterpret_cast<void*>(&HookRenderer),
       reinterpret_cast<void**>(&g_original_renderer));
   if (create_renderer != MH_OK &&
       create_renderer != MH_ERROR_ALREADY_CREATED) {
+    MH_DisableHook(inventory_slot_target);
     return false;
   }
   const MH_STATUS enable_renderer = MH_EnableHook(renderer_target);
   if (enable_renderer != MH_OK && enable_renderer != MH_ERROR_ENABLED) {
+    MH_DisableHook(inventory_slot_target);
     return false;
   }
 
@@ -4372,11 +4481,13 @@ bool InstallDeathtrapNativeRenderHooks() {
       reinterpret_cast<void**>(&g_original_render_present_wait));
   if (create != MH_OK && create != MH_ERROR_ALREADY_CREATED) {
     MH_DisableHook(renderer_target);
+    MH_DisableHook(inventory_slot_target);
     return false;
   }
   const MH_STATUS enable = MH_EnableHook(scheduler_target);
   if (enable != MH_OK && enable != MH_ERROR_ENABLED) {
     MH_DisableHook(renderer_target);
+    MH_DisableHook(inventory_slot_target);
     return false;
   }
   // Diagnostic-only and non-fatal. Unlike the reverted V26 experiment, this

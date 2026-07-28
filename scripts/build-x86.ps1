@@ -37,6 +37,9 @@ if (-not (Test-Path -LiteralPath $smoke)) { throw "Missing smoke test: $smoke" }
 & $smoke $dll
 if ($LASTEXITCODE -ne 0) { throw 'DirectInput forwarding smoke test failed.' }
 
+& (Join-Path $PSScriptRoot 'test-install-crlf.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Installer CRLF binding test failed.' }
+
 $dist = Join-Path $repoRoot 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 Copy-Item -LiteralPath $dll -Destination (Join-Path $dist 'DINPUT.dll') -Force

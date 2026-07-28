@@ -107,9 +107,13 @@ function Add-NativeBinding {
         throw "Could not locate $Action in $keys"
     }
     $anchor = $matches[$matches.Count - 1]
+    $insertAt = $anchor.Index + $anchor.Length
+    if ($insertAt -gt 0 -and $Text[$insertAt - 1] -eq "`r") {
+        --$insertAt
+    }
     $newline = if ($Text.Contains("`r`n")) { "`r`n" } else { "`n" }
     $line = "define    $Action    DOWN      $Expression"
-    return $Text.Insert($anchor.Index + $anchor.Length, $newline + $line)
+    return $Text.Insert($insertAt, $newline + $line)
 }
 
 if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
@@ -138,6 +142,9 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
         @('ACTION_RIGHT_SIDESTEP', 'KEY_K')
     )) {
         $keyText = Add-NativeBinding -Text $keyText -Action $binding[0] -Expression $binding[1]
+    }
+    if ($keyText.Contains("`r`r`n")) {
+        throw 'Refusing to write ASYLUM/keys.cfg with invalid CR-CR-LF line endings.'
     }
     [System.IO.File]::WriteAllText($keys, $keyText, [System.Text.Encoding]::ASCII)
     Write-Host "Installed overlay into: $game"

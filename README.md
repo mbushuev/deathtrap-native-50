@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.26`.
+Current development version: `0.0.27`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -99,22 +99,26 @@ D3D11 settings, first-run verification and troubleshooting.
 - `WeaponWheel/Enabled=0`: disable wheel weapon selection.
 - `WeaponWheel/Invert=1`: reverse wheel direction.
 - XInput controller 0 is enabled in the test config. The left stick drives the
-  original walk/run/side-step actions, while both axes of the right stick use
-  the native mouse path. A jumps/climbs, X operates, RT attacks, LT blocks,
-  right-stick click holds first-person view, RB casts, and Start opens the
-  menu. `XInput/InvertRightY=1` reverses the vertical look axis.
+  original forward/backward and tank-turn actions; hold LB to change its
+  horizontal axis to the game's native side-step actions. A jumps/climbs, X
+  operates, RT attacks, LT blocks, RB casts, and Start opens the menu. R3
+  toggles first-person view, where the right stick controls both look axes.
+  `XInput/InvertRightY=1` reverses its vertical axis.
+- Outside gameplay, the right stick moves the native menu pointer, A clicks,
+  the left stick or D-pad emits arrow navigation, B/Start goes back, and X
+  sends Space for loading/continue screens.
 - D-pad selects the four native inventory categories: up close combat, right
   ranged, down spells, left potions/charms. A tap cycles the next available
-  item for the first three categories. Holding for 225 ms opens the original
-  eight-slot row; the numbered radial marker and right stick select slots 1–8.
-  Potions and
-  charms are used only with A while the D-pad remains held; B or release
-  cancels without consuming anything.
+  item for the first three categories. Holding for 225 ms opens a large radial
+  selector; the right stick selects slots 1–8. The game's own renderer supplies
+  each real icon, number, quantity and selection highlight. Potions and charms
+  are used only with A while D-pad left remains held; B or release cancels
+  without consuming one.
 - `XInput/BaseBindings=0` keeps only the category selector and leaves all base
   controller buttons untouched.
 - `Diagnostics/DebugLog=1`: write `deathtrap_native_render.log` and
   `deathtrap_native_present.log`. Logging is normally off, but remains enabled
-  in the 0.0.26 test config.
+  in the 0.0.27 test config.
 
 ## Building
 

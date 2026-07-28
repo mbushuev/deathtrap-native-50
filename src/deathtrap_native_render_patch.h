@@ -52,6 +52,13 @@ void InitializeDeathtrapNativeRenderPatch();
 // path.
 void QueueDeathtrapWeaponWheelDelta(int32_t delta);
 
+// Adds controller-originated relative mouse motion to the next DirectInput
+// mouse sample. Buttons are level states and are merged with the real mouse.
+// This is used for the retail menu pointer because legacy DirectInput does not
+// reliably receive SendInput mouse events on current Windows versions.
+void SubmitDeathtrapXInputMouseState(int32_t delta_x, int32_t delta_y,
+                                     bool left_button, bool right_button);
+
 // Used only while the native midpoint restores the legacy DirectDraw page
 // orientation. The restore Flip must rotate the game's front/back surfaces,
 // but must not become another visible DXGI presentation.

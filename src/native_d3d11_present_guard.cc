@@ -471,6 +471,8 @@ bool AllowNativeD3D11Present(IDXGISwapChain* swap_chain) {
     state->last_exact = sample;
     state->last_exact_valid = true;
   }
-  DrawControllerSelector(state.get(), backbuffer.Get());
+  // The controller selector is rendered by Dungeon.dll's native inventory
+  // slot renderer. It supplies the real icon, number, quantity and highlight;
+  // this presentation guard must not cover it with the old debug squares.
   return true;
 }

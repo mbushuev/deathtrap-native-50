@@ -45,12 +45,36 @@ the overlay deliberately does not take cursor ownership.
 - Keep vertical mouse-look disabled unless a later camera investigation can
   preserve framing and collision visibility.
 
-## Phase 5: XInput (experimental in 0.0.26)
+## Phase 5: XInput (implemented in 0.0.27)
 
 - Dynamically support modern Xbox controllers without redistributing XInput.
 - Drive the original keyboard/mouse actions with configurable deadzones,
-  dedicated side-step keys, two-axis first-person look and optional Y invert.
-- Map D-pad to the four native inventory groups and right stick to eight
-  direct slots, with an original-row plus radial-marker presentation.
+  LB-modified native side-step keys, toggled two-axis first-person look and
+  optional Y invert.
+- Provide right-stick pointer control, A click and keyboard fallbacks in menus.
+- Map D-pad to the four native inventory groups and right stick to eight direct
+  slots, rendered radially with the retail icons, numbers and quantities.
 - Require explicit A confirmation for consumables and allow B/release cancel.
-- Add remapping and vibration only after the first layout is gameplay-tested.
+- Add remapping and vibration only after this layout is gameplay-tested.
+
+### Selected layout rationale
+
+The game does not expose a normal third-person free-camera action, so permanent
+right-stick turning would fight the follow camera and remove an important menu
+mouse. The default left-stick tank movement is therefore retained, with LB as
+an explicit side-step modifier. Right stick is context-sensitive: menu pointer,
+first-person look, or radial selection. This matches existing community layouts
+while keeping every game-state mutation on a retail input/selector path.
+
+Research references:
+
+- [Pimp Your Dungeon! Edition Guide](https://steamcommunity.com/sharedfiles/filedetails/?id=2662812352)
+  demonstrates right-stick mouse control for this game's menus and
+  first-person view, but its two keyboard-action layers for slots 1-8 are too
+  complex for the default layout here.
+- [Decent control set up](https://steamcommunity.com/sharedfiles/filedetails/?id=3503124705)
+  confirms that the game's freelook/aim mode is useful while ordinary movement
+  remains action-based.
+- [Steam Input radial menus](https://partner.steamgames.com/doc/features/steam_controller/radial_menus?l=english)
+  documents the hold, select and release interaction used by the native radial
+  inventory bridge.
