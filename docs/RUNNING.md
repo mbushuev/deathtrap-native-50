@@ -136,7 +136,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.16`
+The render log must begin with the `Deathtrap native render overlay 0.0.17`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -152,7 +152,7 @@ click handling continue to use the original bindings. The game's existing
 `MOUSE_SENSITIVITY` and `INVERT_MOUSE_HORIZ` values in
 `ASYLUM\config.dat` control the first test implementation.
 
-Mouse-wheel weapon cycling is intentionally not part of 0.0.16. The retail
+Mouse-wheel weapon cycling is intentionally not part of 0.0.17. The retail
 input table has no wheel source, so it requires a separate native inventory
 selection bridge rather than an unsafe fake key press. It will be added after
 the turn response and attack semantics have been verified in gameplay.

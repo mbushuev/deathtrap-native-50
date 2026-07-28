@@ -9,7 +9,7 @@
 - Map left click to the original primary melee attack.
 - Verify sensitivity, inversion, focus changes and native-50 compatibility.
 
-Version 0.0.16 implements this phase without adding another input clock.
+Version 0.0.17 implements this phase without adding another input clock.
 
 ## Phase 2: wheel weapon selection
 

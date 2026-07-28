@@ -20,9 +20,12 @@ constexpr uintptr_t kInputUpdateRva = 0x0005DC40u;
 constexpr uintptr_t kActionBindingsRva = 0x001F4B30u;
 constexpr uintptr_t kMouseSourcesRva = 0x000DF9D8u;
 
-constexpr uint32_t kActionTurnLeft = 8u;
-constexpr uint32_t kActionTurnRight = 9u;
-constexpr uint32_t kActionAttack1 = 13u;
+// The definition table stores zero-based public action IDs, but the runtime
+// binding map reserves slot zero and returns public ID + 1 from its name
+// lookup. These are therefore the runtime indices, not the printed IDs.
+constexpr uint32_t kActionTurnLeft = 9u;
+constexpr uint32_t kActionTurnRight = 10u;
+constexpr uint32_t kActionAttack1 = 14u;
 
 constexpr uint32_t kMouseLeftButton = 0u;
 constexpr uint32_t kMouseHorizontalLeft = 2u;
@@ -222,4 +225,3 @@ bool InstallDeathtrapModernMouseHook() {
   g_hook_installed.store(true, std::memory_order_release);
   return true;
 }
-
