@@ -339,12 +339,12 @@ void EnsureModernMouseBindings() {
       }
     }
   }
-  if (g_attack_enabled.load(std::memory_order_relaxed)) {
-    EnsureBinding(kActionAttack1, MouseSource(kMouseLeftButton));
-  }
-  if (g_parry_enabled.load(std::memory_order_relaxed)) {
-    EnsureBinding(kActionParry, MouseSource(kMouseRightButton));
-  }
+  // Combat mouse bindings are deliberately removed in 0.0.22. A click reaches
+  // ACTION_ATTACK_1 correctly, but the retail game loop then stalls during the
+  // attack. Keeping combat on its original keyboard chords provides a clean
+  // diagnostic boundary between the input bridge and render-only animation.
+  RemoveBinding(kActionAttack1, MouseSource(kMouseLeftButton));
+  RemoveBinding(kActionParry, MouseSource(kMouseRightButton));
 }
 
 void LogInputState() {
@@ -438,8 +438,9 @@ void InitializeState() {
   if (IsExpectedDungeonImage(base)) {
     g_dungeon_base = base;
     AppendInputLog(
-        "Deathtrap modern mouse 0.0.21 session enabled=%u mode=%s turn=%u "
-        "native-fast-turn=%u wasd=%u attack=%u parry=%u repair=%u\r\n",
+        "Deathtrap modern mouse 0.0.22 session enabled=%u mode=%s turn=%u "
+        "native-fast-turn=%u wasd=%u attack=%u parry=%u repair=%u "
+        "combat-mouse=isolated\r\n",
         enabled ? 1u : 0u,
         g_control_mode.load(std::memory_order_relaxed) == ControlMode::kModern
             ? "modern"
