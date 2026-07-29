@@ -51,6 +51,8 @@ constexpr uintptr_t kUseConsumableRva = 0x0007B9C0u;
 constexpr uintptr_t kInventorySlotDrawRva = 0x000772A0u;
 constexpr uintptr_t kInputActionPressedRva = 0x0007B740u;
 constexpr uintptr_t kChalkActionStateRva = 0x001D89F8u;
+constexpr uintptr_t kChalkActionUpdateRva = 0x00085C60u;
+constexpr uintptr_t kChalkActionLatchRva = 0x000FC2ECu;
 constexpr int32_t kChalkActionId = 0x1A;
 constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
 constexpr size_t kMovementStageProbeCount = 95u;
@@ -351,11 +353,13 @@ using RendererFn = void(__cdecl*)(void* context);
 using InventorySlotDrawFn = void(__cdecl*)(void* slot);
 using RenderCacheUpdateFn = void(__cdecl*)(void* owner);
 using BackendFlipFn = void(__cdecl*)();
+using ChalkActionUpdateFn = void(__cdecl*)();
 
 RenderPresentWaitFn g_original_render_present_wait = nullptr;
 RendererFn g_renderer = nullptr;
 RendererFn g_original_renderer = nullptr;
 InventorySlotDrawFn g_original_inventory_slot_draw = nullptr;
+ChalkActionUpdateFn g_original_chalk_action_update = nullptr;
 RenderCacheUpdateFn g_scene_cache_update = nullptr;
 RenderCacheUpdateFn g_camera_cache_update = nullptr;
 thread_local ActivePresentationTrace g_active_presentation_trace;
@@ -4114,43 +4118,51 @@ InterpolatedPassResult RenderInterpolatedPass(
 }
 
 void CallOriginalRenderPresentWait(void* context, int wait) {
-  int32_t saved_chalk_state = 0;
-  bool chalk_asserted = false;
-  if (g_xinput_chalk_action_pending && g_dungeon_base) {
-    void* const chalk_state = g_dungeon_base + kChalkActionStateRva;
-    constexpr int32_t kPressed = 1;
-    if (SafeReadValue(chalk_state, &saved_chalk_state) &&
-        SafeWrite(chalk_state, &kPressed, sizeof(kPressed))) {
-      g_xinput_chalk_action_pending = false;
-      chalk_asserted = true;
-      ++g_xinput_chalk_actions_asserted;
-      int32_t native_query = -1;
-      __try {
-        native_query =
-            reinterpret_cast<int32_t(__cdecl*)(int32_t)>(
-                g_dungeon_base + kInputActionPressedRva)(kChalkActionId);
-      } __except (EXCEPTION_EXECUTE_HANDLER) {
-        native_query = -2;
-      }
-      AppendNativeLog(
-          "xinput chalk native action asserted id=%02X state=%d "
-          "query=%d total=%llu",
-          kChalkActionId, kPressed, native_query,
-          static_cast<unsigned long long>(g_xinput_chalk_actions_asserted));
-    } else {
-      g_xinput_chalk_action_pending = false;
-      AppendNativeLog("xinput chalk native action assertion failed");
-    }
-  }
-
   g_original_render_present_wait(context, wait);
+}
 
-  if (chalk_asserted) {
-    SafeWrite(g_dungeon_base + kChalkActionStateRva, &saved_chalk_state,
-              sizeof(saved_chalk_state));
-    AppendNativeLog("xinput chalk native action released restored_state=%d",
-                    saved_chalk_state);
+void __cdecl HookChalkActionUpdate() {
+  if (!g_xinput_chalk_action_pending || !g_dungeon_base) {
+    g_original_chalk_action_update();
+    return;
   }
+
+  g_xinput_chalk_action_pending = false;
+  int32_t saved_chalk_state = 0;
+  int32_t latch_before = -1;
+  constexpr int32_t kPressed = 1;
+  void* const chalk_state = g_dungeon_base + kChalkActionStateRva;
+  if (!SafeReadValue(chalk_state, &saved_chalk_state) ||
+      !SafeWrite(chalk_state, &kPressed, sizeof(kPressed))) {
+    AppendNativeLog("xinput chalk gameplay assertion failed");
+    g_original_chalk_action_update();
+    return;
+  }
+
+  SafeReadValue(g_dungeon_base + kChalkActionLatchRva, &latch_before);
+  int32_t native_query = -1;
+  __try {
+    native_query = reinterpret_cast<int32_t(__cdecl*)(int32_t)>(
+        g_dungeon_base + kInputActionPressedRva)(kChalkActionId);
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    native_query = -2;
+  }
+  ++g_xinput_chalk_actions_asserted;
+  AppendNativeLog(
+      "xinput chalk gameplay handler asserted id=%02X query=%d "
+      "latch_before=%d total=%llu",
+      kChalkActionId, native_query, latch_before,
+      static_cast<unsigned long long>(g_xinput_chalk_actions_asserted));
+
+  g_original_chalk_action_update();
+
+  int32_t latch_after = -1;
+  SafeReadValue(g_dungeon_base + kChalkActionLatchRva, &latch_after);
+  SafeWrite(chalk_state, &saved_chalk_state, sizeof(saved_chalk_state));
+  AppendNativeLog(
+      "xinput chalk gameplay handler consumed latch_after=%d "
+      "restored_state=%d",
+      latch_after, saved_chalk_state);
 }
 
 void __cdecl HookRenderPresentWait(void* context, int wait) {
@@ -4550,7 +4562,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.32 native chalk action "
+      "Deathtrap native render overlay 0.0.33 gameplay-stage chalk action "
       "and tuned controller response "
       "integer x3 presentation "
       "session: "
@@ -4671,17 +4683,36 @@ bool InstallDeathtrapNativeRenderHooks() {
     return false;
   }
 
+  void* const chalk_action_target =
+      g_dungeon_base + kChalkActionUpdateRva;
+  const MH_STATUS create_chalk_action = MH_CreateHook(
+      chalk_action_target, reinterpret_cast<void*>(&HookChalkActionUpdate),
+      reinterpret_cast<void**>(&g_original_chalk_action_update));
+  if (create_chalk_action != MH_OK &&
+      create_chalk_action != MH_ERROR_ALREADY_CREATED) {
+    MH_DisableHook(inventory_slot_target);
+    return false;
+  }
+  const MH_STATUS enable_chalk_action = MH_EnableHook(chalk_action_target);
+  if (enable_chalk_action != MH_OK &&
+      enable_chalk_action != MH_ERROR_ENABLED) {
+    MH_DisableHook(inventory_slot_target);
+    return false;
+  }
+
   void* const renderer_target = g_dungeon_base + kRendererRva;
   const MH_STATUS create_renderer = MH_CreateHook(
       renderer_target, reinterpret_cast<void*>(&HookRenderer),
       reinterpret_cast<void**>(&g_original_renderer));
   if (create_renderer != MH_OK &&
       create_renderer != MH_ERROR_ALREADY_CREATED) {
+    MH_DisableHook(chalk_action_target);
     MH_DisableHook(inventory_slot_target);
     return false;
   }
   const MH_STATUS enable_renderer = MH_EnableHook(renderer_target);
   if (enable_renderer != MH_OK && enable_renderer != MH_ERROR_ENABLED) {
+    MH_DisableHook(chalk_action_target);
     MH_DisableHook(inventory_slot_target);
     return false;
   }
@@ -4692,12 +4723,14 @@ bool InstallDeathtrapNativeRenderHooks() {
       reinterpret_cast<void**>(&g_original_render_present_wait));
   if (create != MH_OK && create != MH_ERROR_ALREADY_CREATED) {
     MH_DisableHook(renderer_target);
+    MH_DisableHook(chalk_action_target);
     MH_DisableHook(inventory_slot_target);
     return false;
   }
   const MH_STATUS enable = MH_EnableHook(scheduler_target);
   if (enable != MH_OK && enable != MH_ERROR_ENABLED) {
     MH_DisableHook(renderer_target);
+    MH_DisableHook(chalk_action_target);
     MH_DisableHook(inventory_slot_target);
     return false;
   }
