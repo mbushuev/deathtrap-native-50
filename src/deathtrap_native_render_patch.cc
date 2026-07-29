@@ -64,6 +64,11 @@ constexpr uintptr_t kCameraControllerModeRva = 0x00104679u;
 // retail collision, room clipping and smoothing pipeline remains downstream.
 constexpr uintptr_t kMode3CameraRva = 0x0002F310u;
 constexpr uintptr_t kConfigureCameraRva = 0x0002F380u;
+// Camera pose builder used by the retail mode-4 dispatcher. Calling the pose
+// builder directly while the controller remains in mode 3 gives the overlay
+// an eye-level free-look camera without entering the retail first-person mode
+// (and therefore without asking the game to hide the player model).
+constexpr uintptr_t kFirstPersonCameraRva = 0x00031190u;
 constexpr size_t kCameraControllerPlayerXPointerOffset = 0xFCu;
 constexpr size_t kCameraControllerPlayerYPointerOffset = 0x100u;
 constexpr size_t kCameraControllerPlayerZPointerOffset = 0x104u;
@@ -409,6 +414,18 @@ struct ThirdPersonOrbitState {
 };
 
 ThirdPersonOrbitState g_third_person_orbit_state;
+std::atomic<bool> g_custom_head_view_toggled{false};
+
+struct CustomCameraTransitionState {
+  bool initialized = false;
+  bool previous_head_view = false;
+  bool transitioning = false;
+  uint64_t started_ms = 0;
+  uint32_t duration_ms = 320;
+  NodeTransform from{};
+};
+
+CustomCameraTransitionState g_custom_camera_transition;
 bool g_weapon_wheel_enabled = false;
 bool g_weapon_wheel_invert = false;
 bool g_xinput_enabled = false;
@@ -519,6 +536,7 @@ OffensiveSpellLaunchFn g_original_offensive_spell_launch = nullptr;
 RangedWeaponLaunchFn g_original_ranged_weapon_launch = nullptr;
 UseConsumableFn g_original_use_consumable = nullptr;
 Mode3CameraFn g_original_mode3_camera = nullptr;
+Mode3CameraFn g_first_person_camera = nullptr;
 ConfigureCameraFn g_configure_camera = nullptr;
 thread_local ActivePresentationTrace g_active_presentation_trace;
 std::vector<PresentationTraceSample> g_presentation_trace_buffer;
@@ -1359,8 +1377,11 @@ bool BuildThirdPersonOrbitPosition(void* controller,
         (input_x - g_third_person_orbit_state.filtered_input_x) * response;
     g_third_person_orbit_state.filtered_input_y +=
         (input_y - g_third_person_orbit_state.filtered_input_y) * response;
-    const double horizontal_sign = g_third_person_orbit_invert_x ? 1.0 : -1.0;
-    const double vertical_sign = g_third_person_orbit_invert_y ? 1.0 : -1.0;
+    // XInput reports right/up as positive. Keep the default preset aligned
+    // with modern third-person controls; the INI flags reverse each axis only
+    // when explicitly requested.
+    const double horizontal_sign = g_third_person_orbit_invert_x ? -1.0 : 1.0;
+    const double vertical_sign = g_third_person_orbit_invert_y ? -1.0 : 1.0;
     g_third_person_orbit_state.yaw +=
         g_third_person_orbit_state.filtered_input_x * horizontal_sign *
         g_third_person_orbit_horizontal_radians *
@@ -1413,10 +1434,27 @@ bool BuildThirdPersonOrbitPosition(void* controller,
 }
 
 void __cdecl HookMode3Camera(void* controller) {
-  if (!g_original_mode3_camera || !g_configure_camera || !controller) {
+  if (!g_original_mode3_camera || !g_configure_camera ||
+      !g_first_person_camera || !controller) {
     if (g_original_mode3_camera) {
       g_original_mode3_camera(controller);
     }
+    return;
+  }
+
+  if (g_custom_head_view_toggled.load(std::memory_order_acquire)) {
+    if (g_third_person_orbit_state.engaged &&
+        !g_third_person_orbit_state.suspended) {
+      g_third_person_orbit_state.suspended = true;
+      g_third_person_orbit_state.filtered_input_x = 0.0;
+      g_third_person_orbit_state.filtered_input_y = 0.0;
+      AppendNativeLog("camera_orbit suspend reason=custom_head_view");
+    }
+    // Deliberately do not change controller+0x27C. The game still believes it
+    // is rendering mode 3, so gameplay, body rendering and the R3/Tab retail
+    // first-person toggle remain independent. Only the native eye-pose solver
+    // is borrowed here.
+    g_first_person_camera(controller);
     return;
   }
 
@@ -2080,6 +2118,7 @@ void ReleaseInjectedControllerInput() {
   InjectMouseRight(false);
   SubmitDeathtrapXInputMouseState(0, 0, false, false);
   g_xinput_first_person_toggled = false;
+  g_custom_head_view_toggled.store(false, std::memory_order_release);
   g_xinput_run_active = false;
   g_xinput_menu_mode.store(true, std::memory_order_release);
   g_xinput_previous_native_gameplay = false;
@@ -2532,9 +2571,26 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     // Chalk is dispatched only by the radial selector through the exact
     // retail F2+8 routine. Never synthesize the unrelated C binding here.
     InjectVirtualKey(InjectedKey::kC, false);
+    // R3 stays exactly on the retail Tab-driven first-person toggle. SELECT
+    // owns a separate eye-level overlay camera that never changes the game's
+    // active camera mode.
     if (!selector_captures_controls &&
         (pressed & XINPUT_GAMEPAD_RIGHT_THUMB)) {
       g_xinput_first_person_toggled = !g_xinput_first_person_toggled;
+      if (g_xinput_first_person_toggled) {
+        g_custom_head_view_toggled.store(false, std::memory_order_release);
+      }
+    }
+    if (!selector_captures_controls &&
+        (pressed & XINPUT_GAMEPAD_BACK)) {
+      const bool enabled = !g_custom_head_view_toggled.load(
+          std::memory_order_acquire);
+      g_custom_head_view_toggled.store(enabled, std::memory_order_release);
+      if (enabled) {
+        g_xinput_first_person_toggled = false;
+      }
+      AppendNativeLog("custom_head_view toggle=%s",
+                      enabled ? "ON" : "OFF");
     }
     InjectVirtualKey(InjectedKey::kTab,
                      !selector_captures_controls &&
@@ -2550,7 +2606,10 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     InjectVirtualKey(InjectedKey::kRight, false);
     InjectVirtualKey(InjectedKey::kEnter, false);
 
-    if (!selector_captures_controls && g_xinput_first_person_toggled) {
+    const bool custom_head_view = g_custom_head_view_toggled.load(
+        std::memory_order_acquire);
+    if (!selector_captures_controls &&
+        (g_xinput_first_person_toggled || custom_head_view)) {
       InjectRelativeMouseMove(
           CurvedStick(right_x, g_xinput_right_stick_curve),
           CurvedStick(right_y, g_xinput_right_stick_curve),
@@ -2558,10 +2617,12 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     }
     PublishThirdPersonOrbitInput(
         right_x, right_y,
-        !selector_captures_controls && !g_xinput_first_person_toggled);
+        !selector_captures_controls && !g_xinput_first_person_toggled &&
+            !custom_head_view);
   } else {
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
     g_xinput_first_person_toggled = false;
+    g_custom_head_view_toggled.store(false, std::memory_order_release);
     g_xinput_run_active = false;
     InjectVirtualKey(InjectedKey::kW, false);
     InjectVirtualKey(InjectedKey::kS, false);
@@ -4066,6 +4127,42 @@ bool InterpolateRigid(const Matrix3x4& previous, const Matrix3x4& current,
   return true;
 }
 
+// Camera mode transitions intentionally cover a much larger translation and
+// rotation than an ordinary animation frame, so they must not use the scene
+// interpolation rejection thresholds above. The same rigid decomposition is
+// retained, but the blend is explicitly bounded by the transition timer.
+bool BlendCameraRigid(const Matrix3x4& from_matrix,
+                      const Matrix3x4& to_matrix, double phase,
+                      Matrix3x4* blended) {
+  if (!blended) {
+    return false;
+  }
+  RigidTransform from;
+  RigidTransform to;
+  if (!DecodeRigid(from_matrix, &from) || !DecodeRigid(to_matrix, &to)) {
+    return false;
+  }
+  phase = std::clamp(phase, 0.0, 1.0);
+  const Quaternion rotation = Slerp(from.rotation, to.rotation, phase, nullptr);
+  const auto rows = RowsFromQuaternion(rotation);
+  const Vec3 scale{from.scale.x + (to.scale.x - from.scale.x) * phase,
+                   from.scale.y + (to.scale.y - from.scale.y) * phase,
+                   from.scale.z + (to.scale.z - from.scale.z) * phase};
+  for (size_t row = 0; row < 3; ++row) {
+    const double row_scale = row == 0 ? scale.x : (row == 1 ? scale.y : scale.z);
+    blended->values[row * 3 + 0] = ToFixed(rows[row].x * row_scale);
+    blended->values[row * 3 + 1] = ToFixed(rows[row].y * row_scale);
+    blended->values[row * 3 + 2] = ToFixed(rows[row].z * row_scale);
+  }
+  blended->values[9] = ToFixed(
+      from.translation.x + (to.translation.x - from.translation.x) * phase);
+  blended->values[10] = ToFixed(
+      from.translation.y + (to.translation.y - from.translation.y) * phase);
+  blended->values[11] = ToFixed(
+      from.translation.z + (to.translation.z - from.translation.z) * phase);
+  return true;
+}
+
 Matrix3x4 MultiplyAffine(const Matrix3x4& local,
                          const Matrix3x4& parent) {
   Matrix3x4 world{};
@@ -4206,6 +4303,97 @@ SceneSnapshot CaptureScene(void* context) {
         &snapshot.player_contact_count, sizeof(snapshot.player_contact_count));
   }
   return snapshot;
+}
+
+bool ApplyCustomCameraTransition(SceneSnapshot* current) {
+  if (!current || !current->camera) {
+    g_custom_camera_transition.initialized = false;
+    g_custom_camera_transition.transitioning = false;
+    return false;
+  }
+  auto camera = current->nodes.find(current->camera);
+  if (camera == current->nodes.end()) {
+    g_custom_camera_transition.initialized = false;
+    g_custom_camera_transition.transitioning = false;
+    return false;
+  }
+
+  const bool head_view = g_custom_head_view_toggled.load(
+      std::memory_order_acquire);
+  if (!g_custom_camera_transition.initialized) {
+    g_custom_camera_transition.initialized = true;
+    g_custom_camera_transition.previous_head_view = head_view;
+    return false;
+  }
+  if (head_view != g_custom_camera_transition.previous_head_view) {
+    g_custom_camera_transition.previous_head_view = head_view;
+    g_custom_camera_transition.transitioning = true;
+    g_custom_camera_transition.started_ms = GetTickCount64();
+    const auto previous_camera =
+        g_previous_snapshot.camera == current->camera
+            ? g_previous_snapshot.nodes.find(current->camera)
+            : g_previous_snapshot.nodes.end();
+    g_custom_camera_transition.from =
+        previous_camera != g_previous_snapshot.nodes.end()
+            ? previous_camera->second
+            : camera->second;
+    AppendNativeLog("custom_head_view transition=%s duration_ms=%u",
+                    head_view ? "TO_HEAD" : "TO_ORBIT",
+                    g_custom_camera_transition.duration_ms);
+  }
+  if (!g_custom_camera_transition.transitioning) {
+    return false;
+  }
+
+  const uint64_t elapsed =
+      GetTickCount64() - g_custom_camera_transition.started_ms;
+  const double linear = std::clamp(
+      static_cast<double>(elapsed) /
+          static_cast<double>(g_custom_camera_transition.duration_ms),
+      0.0, 1.0);
+  // Smoothstep has zero velocity at both ends, avoiding a visible kick when
+  // the native mode-3 and eye-level targets exchange ownership.
+  const double phase = linear * linear * (3.0 - 2.0 * linear);
+  NodeTransform blended = camera->second;
+  const bool world_ok = BlendCameraRigid(
+      g_custom_camera_transition.from.world, camera->second.world,
+      phase, &blended.world);
+  const bool local_ok = BlendCameraRigid(
+      g_custom_camera_transition.from.local, camera->second.local,
+      phase, &blended.local);
+  if (!world_ok || !local_ok) {
+    g_custom_camera_transition.transitioning = false;
+    AppendNativeLog("custom_head_view transition=ABORT invalid_matrix");
+    return false;
+  }
+  camera->second = blended;
+  if (linear >= 1.0) {
+    g_custom_camera_transition.transitioning = false;
+    AppendNativeLog("custom_head_view transition=COMPLETE mode=%s",
+                    head_view ? "HEAD" : "ORBIT");
+  }
+  return true;
+}
+
+bool PublishLiveCameraMatrix(uintptr_t camera_node) {
+  if (!g_dungeon_base || !camera_node) {
+    return false;
+  }
+  Matrix3x4 camera{};
+  return SafeRead(reinterpret_cast<const void*>(camera_node + kMatrixOffset),
+                  &camera, sizeof(camera)) &&
+         SafeWrite(g_dungeon_base + kPublishedCameraMatrixRva,
+                   &camera, sizeof(camera));
+}
+
+bool PublishSnapshotCameraMatrix(const SceneSnapshot& scene) {
+  if (!g_dungeon_base || !scene.camera) {
+    return false;
+  }
+  const auto camera = scene.nodes.find(scene.camera);
+  return camera != scene.nodes.end() &&
+         SafeWrite(g_dungeon_base + kPublishedCameraMatrixRva,
+                   &camera->second.world, sizeof(camera->second.world));
 }
 
 bool MeasureRigidDelta(const Matrix3x4& previous, const Matrix3x4& current,
@@ -5589,6 +5777,11 @@ InterpolatedPassResult RenderInterpolatedPass(
   const UiRenderStateSnapshot ui_before = CaptureUiRenderState();
   result.interpolation = ApplyInterpolatedScene(
       older, previous, current, phase, update_temporal_state);
+  // The renderer also consumes Dungeon.dll's separately published camera
+  // transform. Keeping only the scene node at the synthetic phase left the
+  // view itself at the preceding 16.7 Hz endpoint and made orbit movement
+  // visibly step even while actors were interpolated at 50 Hz.
+  PublishLiveCameraMatrix(current.camera);
 
   g_active_presentation_trace.stage =
       DeathtrapNativePresentationStage::kMidpoint;
@@ -5638,6 +5831,7 @@ InterpolatedPassResult RenderInterpolatedPass(
   // Every synthetic pass is a transaction. The next phase starts from the
   // same exact-current matrices and mutable state as the first one.
   RestoreScene(current);
+  PublishSnapshotCameraMatrix(current);
   if (result.rendered) {
     g_interpolated_frames.fetch_add(1, std::memory_order_relaxed);
     g_interpolated_nodes.fetch_add(result.interpolation.applied,
@@ -5682,6 +5876,12 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   }
 
   SceneSnapshot current = CaptureScene(context);
+  if (ApplyCustomCameraTransition(&current)) {
+    // The transition is render-only. Native controller state remains mode 3;
+    // only the captured camera transform and its published mirror are moved.
+    RestoreScene(current);
+    PublishSnapshotCameraMatrix(current);
+  }
   ConsumePendingContactProjection(&current);
   ObservePlayerLanding(current);
   const uint64_t source_tick =
@@ -5954,6 +6154,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   // the engine frame counter once, runs its normal housekeeping, and waits
   // the remaining final fraction of the native six-count scheduler period.
   RestoreScene(current);
+  PublishSnapshotCameraMatrix(current);
   g_active_presentation_trace.stage = DeathtrapNativePresentationStage::kExact;
   g_active_presentation_trace.exact_scene = &current;
   if (current.player_contact_manifold_projection_valid) {
@@ -6014,16 +6215,18 @@ void InitializePatchState() {
       ConfiguredInteger(L"Camera", L"InvertY", 0) != 0;
   g_third_person_orbit_horizontal_radians =
       static_cast<double>(std::clamp(
-          ConfiguredInteger(L"Camera", L"HorizontalDegreesPerTick", 8),
+          ConfiguredInteger(L"Camera", L"HorizontalDegreesPerTick", 5),
           1, 30)) * kOrbitPi / 180.0;
   g_third_person_orbit_vertical_radians =
       static_cast<double>(std::clamp(
-          ConfiguredInteger(L"Camera", L"VerticalDegreesPerTick", 5),
+          ConfiguredInteger(L"Camera", L"VerticalDegreesPerTick", 3),
           1, 20)) * kOrbitPi / 180.0;
   g_third_person_orbit_response_seconds =
       static_cast<double>(std::clamp(
           ConfiguredInteger(L"Camera", L"ResponseTimeMs", 90), 20, 300)) /
       1000.0;
+  g_custom_camera_transition.duration_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"Camera", L"HeadTransitionMs", 320), 120, 1200));
   int32_t minimum_pitch_degrees = std::clamp(
       ConfiguredInteger(L"Camera", L"MinimumPitchDegrees", -35), -50, 70);
   int32_t maximum_pitch_degrees = std::clamp(
@@ -6146,7 +6349,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.54 persistent smoothed third-person orbit: "
+      "Deathtrap native render overlay 0.0.55 phase-synced orbit and custom head view: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
@@ -6299,6 +6502,8 @@ bool InstallDeathtrapNativeRenderHooks() {
   if (g_third_person_orbit_enabled) {
     g_configure_camera = reinterpret_cast<ConfigureCameraFn>(
         g_dungeon_base + kConfigureCameraRva);
+    g_first_person_camera = reinterpret_cast<Mode3CameraFn>(
+        g_dungeon_base + kFirstPersonCameraRva);
     void* const mode3_camera_target = g_dungeon_base + kMode3CameraRva;
     const MH_STATUS create_camera = MH_CreateHook(
         mode3_camera_target,
@@ -6312,9 +6517,12 @@ bool InstallDeathtrapNativeRenderHooks() {
                                              std::memory_order_release);
         AppendNativeLog(
             "camera_orbit hook=active rva=%08llX configure=%08llX "
-            "mode3_precheck_bypass=1 native_pipeline=1",
+            "mode3_precheck_bypass=1 native_pipeline=1 "
+            "head_pose=%08llX head_transition_ms=%u",
             static_cast<unsigned long long>(kMode3CameraRva),
-            static_cast<unsigned long long>(kConfigureCameraRva));
+            static_cast<unsigned long long>(kConfigureCameraRva),
+            static_cast<unsigned long long>(kFirstPersonCameraRva),
+            g_custom_camera_transition.duration_ms);
       } else {
         AppendNativeLog("camera_orbit hook=enable_failed status=%d",
                         static_cast<int>(enable_camera));

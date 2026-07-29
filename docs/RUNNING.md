@@ -233,10 +233,12 @@ until the game later creates an actual projectile.
 The default gameplay layout is left-stick forward/backward and tank turning,
 A jump/climb, X operate, RT primary attack, LT parry/block, RB cast spell and
 Start menu. Hold LB to change only the left-stick horizontal axis to the
-retail side-step actions. R3 toggles the retail first-person view; while it is
-active, both right-stick axes use the game's native relative-mouse path. This
-keeps the normal follow camera predictable and provides two-axis aiming without
-writing camera transforms. Set `InvertRightY=1` to invert vertical look.
+retail side-step actions. R3 retains the game's original first-person action.
+SELECT toggles the overlay's separate head view: the camera eases to eye level
+without changing the native mode-3 state, so the body and ordinary movement
+remain available. SELECT again eases back to the persistent orbit. Both axes
+use the native relative-look path in head view. Set `InvertRightY=1` to invert
+vertical look; `Camera/HeadTransitionMs` controls the transition duration.
 `RightStickPixelsPerTick=12` and `RightStickResponseCurvePercent=135` provide a
 slower precision response near stick center without adding temporal latency.
 

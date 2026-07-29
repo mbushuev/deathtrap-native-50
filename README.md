@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.54`.
+Current development version: `0.0.55`.
 
 The `modern-third-person-camera` branch contains the first opt-in native orbit
 prototype. It takes ownership at the mode-3 dispatcher before the retail
@@ -112,8 +112,12 @@ D3D11 settings, first-run verification and troubleshooting.
 - XInput controller 0 is enabled in the test config. The left stick drives the
   original forward/backward and tank-turn actions; hold LB to change its
   horizontal axis to the game's native side-step actions. A jumps/climbs, X
-  operates, RT attacks, LT blocks, RB casts, and Start opens the menu. R3
-  toggles first-person view, where the right stick controls both look axes.
+  operates, RT attacks, LT blocks, RB casts, and Start opens the menu. R3 keeps
+  the game's original first-person action. SELECT independently moves the
+  overlay camera smoothly to an eye-level head view while the game remains in
+  third-person mode, so Lara's body and normal movement remain rendered;
+  SELECT again returns smoothly to the preserved orbit. The right stick looks
+  on both axes in either overlay camera.
   `XInput/InvertRightY=1` reverses its vertical axis. First-person look uses a
   precision curve (`RightStickResponseCurvePercent=135`) and a reduced
   `RightStickPixelsPerTick=12`, giving finer movement near stick center.

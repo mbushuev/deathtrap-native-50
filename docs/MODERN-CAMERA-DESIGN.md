@@ -102,9 +102,9 @@ where the player placed it.
 
 Recenter is suspended while stationary, blocked against geometry, selecting an
 item, attacking with a committed animation, or transitioning camera state. A
-short R3 press performs an explicit smooth recenter. The existing first-person
-toggle can move to a long R3 press so both actions remain available without an
-extra button.
+R3 remains assigned to the retail first-person action. SELECT owns the
+overlay's independent eye-level camera and therefore does not overload the
+game's existing binding.
 
 ## Camera-relative movement
 
@@ -194,6 +194,14 @@ below the initial retail elevation, and temporary ownership by the selector,
 menus or first-person view suspends rather than destroys the orbit state.
 Returning from first person therefore resumes the same yaw, pitch and radius
 instead of snapping back to the room camera.
+
+Version `0.0.55` corrects the default XInput axis directions, reduces the
+per-source-tick angular step and synchronizes the separately published camera
+matrix with every synthetic 50 Hz phase. SELECT now toggles an overlay-owned
+head view. It borrows the engine's low-level eye-pose solver while deliberately
+leaving the controller in mode 3, preserving the body, movement and the retail
+R3 first-person action. A timed rigid-transform blend moves between head view
+and the persistent orbit without a one-tick snap.
 
 ### Phase C: spring-arm collision
 
