@@ -921,7 +921,7 @@ bool g_xinput_previous_native_gameplay = false;
 bool g_xinput_vibration_enabled = true;
 uint32_t g_xinput_vibration_strength_percent = 100u;
 uint32_t g_xinput_melee_swing_vibration_ms = 170u;
-uint32_t g_xinput_block_vibration_ms = 45u;
+uint32_t g_xinput_block_vibration_ms = 60u;
 uint32_t g_xinput_successful_block_vibration_ms = 210u;
 uint32_t g_xinput_spell_cast_vibration_ms = 260u;
 uint32_t g_xinput_hit_vibration_ms = 150u;
@@ -1147,10 +1147,10 @@ void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
     // enemy impact that the engine has accepted as a successful block.
     left_motor = std::max(
         left_motor,
-        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.20));
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.38));
     right_motor = std::max(
         right_motor,
-        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.08));
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.14));
   }
   const uint64_t melee_swing_until =
       g_melee_swing_vibration_until_ms.load(std::memory_order_acquire);
@@ -5077,7 +5077,7 @@ void InitializePatchState() {
   g_xinput_melee_swing_vibration_ms = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"XInput", L"MeleeSwingVibrationMs", 170), 40, 400));
   g_xinput_block_vibration_ms = static_cast<uint32_t>(std::clamp(
-      ConfiguredInteger(L"XInput", L"BlockVibrationMs", 45), 20, 250));
+      ConfiguredInteger(L"XInput", L"BlockVibrationMs", 60), 20, 250));
   g_xinput_successful_block_vibration_ms = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"XInput", L"SuccessfulBlockVibrationMs", 210),
       60, 500));
@@ -5153,7 +5153,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.46 engine-confirmed block impact "
+      "Deathtrap native render overlay 0.0.47 tuned block action feedback "
       "and offensive projectile XInput vibration, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "

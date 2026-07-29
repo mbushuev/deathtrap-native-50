@@ -78,7 +78,7 @@ the overlay deliberately does not take cursor ownership.
 
 Version 0.0.40 originally raised the tested action profile to 100% master
 strength with 120/90 ms attack/block envelopes. Version 0.0.46 supersedes the
-raw block acknowledgement with a subtle 45 ms pulse; the heavier response is
+raw block acknowledgement with a lightweight 60 ms pulse; the heavier response is
 reserved for the engine-confirmed successful-block event.
 
 Version 0.0.41 completes the first engine-event feedback stage:

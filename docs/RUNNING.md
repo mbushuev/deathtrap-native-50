@@ -137,7 +137,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.46`
+The render log must begin with the `Deathtrap native render overlay 0.0.47`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -175,8 +175,9 @@ Synthetic native-render phases never poll or repeat controller input.
 Version 0.0.39 also loads `XInputSetState` from that runtime. Version 0.0.40
 tuned the first action profile for the game's low input-poll frequency.
 Version 0.0.46 retains the removal of the raw RT pulse: attack rumble begins
-only on the engine-confirmed melee downstroke. LT retains only a subtle 45 ms
-block-action acknowledgement at 100% master strength. Version 0.0.41 adds
+only on the engine-confirmed melee downstroke. Version 0.0.47 gives LT a clear
+but still lightweight 60 ms block-action acknowledgement at 100% master
+strength. Version 0.0.41 adds
 engine-confirmed hit, player-damage and
 death envelopes. Version 0.0.42 adds a stronger engine-timed melee downstroke
 envelope that also occurs on a miss. Version 0.0.46 queues successful-block
@@ -189,7 +190,7 @@ them with:
 VibrationEnabled=1
 VibrationStrengthPercent=100
 MeleeSwingVibrationMs=170
-BlockVibrationMs=45
+BlockVibrationMs=60
 SuccessfulBlockVibrationMs=210
 SpellCastVibrationMs=260
 HitVibrationMs=150
