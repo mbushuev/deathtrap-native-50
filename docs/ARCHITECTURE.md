@@ -166,3 +166,11 @@ transient message is created. `Text/MessageLifetimePercent=300` changes the
 retail 50-tick value to 150 ticks. The patch validates the original immediate
 before writing it, and it does not scale selector, combat, input, animation or
 other UI countdowns. Values from 100 through 1000 percent are accepted.
+
+Level-script notifications are a second, independent system. The PST path at
+`Dungeon.dll+0x78150` stores six `0x104`-byte entries beginning at
+`0x101F0A90`; the lifetime is the dword at entry offset `+0x100`, initialized
+to 27 ticks. Version 0.0.38 adds this entire ring, including its read/write
+indices, to the synthetic-render transaction. It also applies the same
+configured percentage to the validated 27-tick creation immediate (81 ticks
+at 300%). This is the path used by prompts such as `You need the silver key`.

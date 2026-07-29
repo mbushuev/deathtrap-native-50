@@ -87,8 +87,9 @@ D3D11 settings, first-run verification and troubleshooting.
 - `NativeRender/Enabled=0`: disable it before process startup.
 - `NativeRender/Subframes=3`: approximately 50 FPS, the recommended mode.
 - `NativeRender/Subframes=2`: conservative approximately 33 FPS fallback.
-- `Text/MessageLifetimePercent=300`: keep transient gameplay messages visible
-  for three times the retail duration. Use `100` for the original duration.
+- `Text/MessageLifetimePercent=300`: keep both ordinary transient messages and
+  level-script notifications (for example, missing-key prompts) visible for
+  three times the retail duration. Use `100` for the original duration.
 - The installer adds native mouse bindings to `ASYLUM/keys.cfg` once, before
   the game starts. The DLL never writes the game's action table; its only
   runtime input hook observes wheel deltas after the system DirectInput call.
