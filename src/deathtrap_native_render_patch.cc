@@ -41,6 +41,8 @@ constexpr uintptr_t kUiSelectorModeRva = 0x001086FCu;
 constexpr uintptr_t kUiMessageStateRva = 0x001D41C8u;
 constexpr uintptr_t kUiMessageEntriesRva = 0x001D4360u;
 constexpr uintptr_t kUiMessageLifetimeImmediateRva = 0x0008F6AFu;
+constexpr uintptr_t kUiMessageEnqueueRva = 0x0008F620u;
+constexpr uintptr_t kUiMessageRenderRva = 0x0008F4C0u;
 constexpr uintptr_t kUiCountdownStateRva = 0x001D89F0u;
 constexpr uintptr_t kUiOwnerPointerRva = 0x0034F9D0u;
 constexpr uintptr_t kEngineFrameCounterRva = 0x001D24DCu;
@@ -362,6 +364,8 @@ int64_t g_last_ui_frame_delta = 0;
 using RenderPresentWaitFn = void(__cdecl*)(void* context, int wait);
 using RendererFn = void(__cdecl*)(void* context);
 using InventorySlotDrawFn = void(__cdecl*)(void* slot);
+using UiMessageEnqueueFn = void(__cdecl*)(const char* text);
+using UiMessageRenderFn = void(__cdecl*)();
 using RenderCacheUpdateFn = void(__cdecl*)(void* owner);
 using BackendFlipFn = void(__cdecl*)();
 
@@ -369,6 +373,8 @@ RenderPresentWaitFn g_original_render_present_wait = nullptr;
 RendererFn g_renderer = nullptr;
 RendererFn g_original_renderer = nullptr;
 InventorySlotDrawFn g_original_inventory_slot_draw = nullptr;
+UiMessageEnqueueFn g_original_ui_message_enqueue = nullptr;
+UiMessageRenderFn g_original_ui_message_render = nullptr;
 RenderCacheUpdateFn g_scene_cache_update = nullptr;
 RenderCacheUpdateFn g_camera_cache_update = nullptr;
 thread_local ActivePresentationTrace g_active_presentation_trace;
@@ -672,6 +678,98 @@ void AppendNativeLogBlock(const std::string& block) {
   WriteFile(file, block.data(), static_cast<DWORD>(block.size()), &written,
             nullptr);
   CloseHandle(file);
+}
+
+struct UiMessageQueueDebugState {
+  int32_t count = 0;
+  std::array<int32_t, kUiMessageEntryCount> timers{};
+  std::array<std::array<char, kUiMessageEntrySize - sizeof(int32_t)>,
+             kUiMessageEntryCount>
+      texts{};
+  bool valid = false;
+};
+
+std::string SafeDebugText(const char* source, size_t maximum_length) {
+  std::string result;
+  if (!source) {
+    return result;
+  }
+  result.reserve(maximum_length);
+  for (size_t index = 0; index < maximum_length; ++index) {
+    char value = 0;
+    if (!SafeRead(source + index, &value, sizeof(value)) || value == '\0') {
+      break;
+    }
+    const unsigned char byte = static_cast<unsigned char>(value);
+    result.push_back(byte >= 0x20u && byte < 0x7Fu ? value : '?');
+  }
+  return result;
+}
+
+UiMessageQueueDebugState CaptureUiMessageQueueDebugState() {
+  UiMessageQueueDebugState state;
+  if (!g_dungeon_base ||
+      !SafeReadValue(g_dungeon_base + kUiMessageStateRva + 8u,
+                     &state.count)) {
+    return state;
+  }
+  state.count = std::clamp<int32_t>(state.count, 0,
+                                    kUiMessageEntryCount);
+  for (int32_t index = 0; index < state.count; ++index) {
+    const uint8_t* entry =
+        g_dungeon_base + kUiMessageEntriesRva +
+        static_cast<uintptr_t>(index) * kUiMessageEntrySize;
+    if (!SafeRead(entry, state.texts[index].data(),
+                  state.texts[index].size()) ||
+        !SafeReadValue(entry + kUiMessageEntrySize - sizeof(int32_t),
+                       &state.timers[index])) {
+      return {};
+    }
+    state.texts[index].back() = '\0';
+  }
+  state.valid = true;
+  return state;
+}
+
+void LogUiMessageQueue(const char* event, const char* input,
+                       const UiMessageQueueDebugState& state) {
+  if (!g_debug_log || !state.valid) {
+    return;
+  }
+  const std::string safe_input = SafeDebugText(input, 160u);
+  AppendNativeLog(
+      "ui_message %s stage=%u input=\"%s\" count=%d "
+      "entry0=%d:\"%s\" entry1=%d:\"%s\" entry2=%d:\"%s\"",
+      event,
+      static_cast<unsigned>(g_active_presentation_trace.stage),
+      safe_input.c_str(), state.count,
+      state.timers[0], state.texts[0].data(),
+      state.timers[1], state.texts[1].data(),
+      state.timers[2], state.texts[2].data());
+}
+
+void __cdecl HookUiMessageEnqueue(const char* text) {
+  if (!g_original_ui_message_enqueue) {
+    return;
+  }
+  g_original_ui_message_enqueue(text);
+  LogUiMessageQueue("enqueue", text, CaptureUiMessageQueueDebugState());
+}
+
+void __cdecl HookUiMessageRender() {
+  if (!g_original_ui_message_render) {
+    return;
+  }
+  const UiMessageQueueDebugState before =
+      CaptureUiMessageQueueDebugState();
+  g_original_ui_message_render();
+  const UiMessageQueueDebugState after =
+      CaptureUiMessageQueueDebugState();
+  if (g_debug_log && before.valid && after.valid &&
+      before.count != after.count) {
+    LogUiMessageQueue("expire_before", nullptr, before);
+    LogUiMessageQueue("expire_after", nullptr, after);
+  }
 }
 
 bool DeathtrapGameplayReady(bool require_selector_closed) {
@@ -4604,8 +4702,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.36 configurable text lifetime "
-      "and tuned controller response "
+      "Deathtrap native render overlay 0.0.37 PST text-path diagnostics, "
+      "configurable text lifetime and tuned controller response "
       "integer x3 presentation "
       "session: "
       "unchanged v31 "
@@ -4759,6 +4857,41 @@ bool InstallDeathtrapNativeRenderHooks() {
     MH_DisableHook(inventory_slot_target);
     return false;
   }
+
+  // Event-driven diagnostics for the retail text path. These hooks do not
+  // alter message contents or timing; they identify which PST message reaches
+  // the three-entry queue and whether it expires there or is removed earlier.
+  void* const ui_message_enqueue_target =
+      g_dungeon_base + kUiMessageEnqueueRva;
+  const MH_STATUS create_ui_message_enqueue = MH_CreateHook(
+      ui_message_enqueue_target,
+      reinterpret_cast<void*>(&HookUiMessageEnqueue),
+      reinterpret_cast<void**>(&g_original_ui_message_enqueue));
+  const MH_STATUS enable_ui_message_enqueue =
+      (create_ui_message_enqueue == MH_OK ||
+       create_ui_message_enqueue == MH_ERROR_ALREADY_CREATED)
+          ? MH_EnableHook(ui_message_enqueue_target)
+          : create_ui_message_enqueue;
+
+  void* const ui_message_render_target =
+      g_dungeon_base + kUiMessageRenderRva;
+  const MH_STATUS create_ui_message_render = MH_CreateHook(
+      ui_message_render_target,
+      reinterpret_cast<void*>(&HookUiMessageRender),
+      reinterpret_cast<void**>(&g_original_ui_message_render));
+  const MH_STATUS enable_ui_message_render =
+      (create_ui_message_render == MH_OK ||
+       create_ui_message_render == MH_ERROR_ALREADY_CREATED)
+          ? MH_EnableHook(ui_message_render_target)
+          : create_ui_message_render;
+  AppendNativeLog(
+      "ui_message_hooks enqueue_create=%d enqueue_enable=%d "
+      "render_create=%d render_enable=%d",
+      static_cast<int>(create_ui_message_enqueue),
+      static_cast<int>(enable_ui_message_enqueue),
+      static_cast<int>(create_ui_message_render),
+      static_cast<int>(enable_ui_message_render));
+
   // Diagnostic-only and non-fatal. Unlike the reverted V26 experiment, this
   // patches only the direct calls made by the one gameplay main loop and does
   // not detour any shared engine function globally.
