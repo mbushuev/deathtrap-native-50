@@ -45,7 +45,7 @@ the overlay deliberately does not take cursor ownership.
 - Keep vertical mouse-look disabled unless a later camera investigation can
   preserve framing and collision visibility.
 
-## Phase 5: XInput (implemented through 0.0.30)
+## Phase 5: XInput (implemented through 0.0.31)
 
 - Dynamically support modern Xbox controllers without redistributing XInput.
 - Drive the original keyboard/mouse actions with configurable deadzones,
@@ -54,7 +54,8 @@ the overlay deliberately does not take cursor ownership.
 - Provide right-stick pointer control, A click and keyboard fallbacks in menus.
 - Map D-pad to the four native inventory groups and right stick to eight direct
   slots, rendered radially with the retail icons, numbers and quantities.
-- Map a short D-pad-right tap to the PC build's standalone chalk-cross action.
+- Reserve ranged radial slot 8 for the PC build's standalone chalk-cross
+  action; the six native ranged weapons remain slots 1–6.
 - Require explicit A confirmation for ranged items and consumables, and allow
   B/release cancel.
 - Add remapping and vibration only after this layout is gameplay-tested.

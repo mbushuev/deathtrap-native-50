@@ -1028,8 +1028,12 @@ bool ControllerSlotAvailable(uint32_t category, uint32_t slot) {
     case 1:
       return NativeWeaponAvailable(static_cast<int32_t>(slot));
     case 2:
-      return slot < 6u &&
-             NativeInventoryItemAvailable(8 + static_cast<int32_t>(slot));
+      // The PC build exposes six ranged inventory objects, then keeps chalk
+      // as a standalone ACTION_CHALK_CROSS action rather than an inventory
+      // object. Reserve radial slot 8 for that action; slot 7 stays empty.
+      return (slot < 6u &&
+              NativeInventoryItemAvailable(8 + static_cast<int32_t>(slot))) ||
+             slot == 7u;
     case 3:
       return NativeInventoryItemAvailable(0x0E +
                                           static_cast<int32_t>(slot));
@@ -1074,6 +1078,13 @@ bool CommitControllerSlot(uint32_t category, uint32_t slot) {
         break;
       }
       case 2: {
+        if (slot == 7u) {
+          // Assert the retail C binding across one real scheduler interval so
+          // the legacy DirectInput PRESS source observes a proper edge.
+          g_xinput_chalk_pulse_ticks = 1;
+          AppendNativeLog("xinput chalk action source=radial slot=8");
+          break;
+        }
         constexpr std::array<int32_t, 6> kActions = {
             0x10, 0x0E, 0x0F, 0x11, 0x0C, 0x0D};
         if (slot >= kActions.size()) {
@@ -1184,19 +1195,9 @@ void UpdateControllerSelector(const XINPUT_GAMEPAD& pad, bool gameplay) {
     if (!g_controller_selector.row_open &&
         !g_controller_selector.cancelled && duration < g_xinput_selector_hold_ms &&
         g_controller_selector.category != 4u) {
-      if (g_controller_selector.category == 2u) {
-        // Chalk is a distinct PC action (ACTION_CHALK_CROSS), not one of the
-        // six ranged-weapon inventory entries. A quick D-pad-right tap uses
-        // that retail action; holding right still opens the ranged selector.
-        // Keep C asserted until the next real scheduler poll. Sending down and
-        // up back-to-back can be lost by the game's legacy DirectInput path.
-        g_xinput_chalk_pulse_ticks = 1;
-        AppendNativeLog("xinput chalk action");
-      } else {
-        const uint32_t next = NextAvailableControllerSlot(
-            g_controller_selector.category, g_controller_selector.slot);
-        CommitControllerSlot(g_controller_selector.category, next);
-      }
+      const uint32_t next = NextAvailableControllerSlot(
+          g_controller_selector.category, g_controller_selector.slot);
+      CommitControllerSlot(g_controller_selector.category, next);
     } else if (g_controller_selector.row_open &&
                !g_controller_selector.cancelled &&
                g_controller_selector.category != 2u &&
@@ -4503,7 +4504,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.30 contextual ranged confirmation "
+      "Deathtrap native render overlay 0.0.31 radial chalk action "
       "and tuned controller response "
       "integer x3 presentation "
       "session: "

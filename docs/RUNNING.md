@@ -131,7 +131,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.30`
+The render log must begin with the `Deathtrap native render overlay 0.0.31`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -160,7 +160,7 @@ down selects the next one).
 
 ## XInput controller layer
 
-Version 0.0.30 dynamically loads the first available Microsoft XInput runtime
+Version 0.0.31 dynamically loads the first available Microsoft XInput runtime
 (`xinput1_4`, `xinput1_3`, then `xinput9_1_0`). Gameplay is polled only at a
 real game scheduler boundary, while a separate lightweight frontend poll is
 available immediately at process startup for movies, loading and menus.
@@ -188,14 +188,14 @@ captures a second cursor.
 first-person look sensitivity.
 
 D-pad maps to the four retail selectors: up close combat, right ranged, down
-spells, and left potions/charms. A short up/down tap cycles the next available
-close-combat weapon or spell. A short right tap generates the PC build's
-standalone `ACTION_CHALK_CROSS` action (`C` in the retail `keys.cfg`), which is
-separate from the six ranged-weapon inventory entries. Holding a direction for
-`SelectorHoldMs` opens the game's inventory selector. Its native slot renderer
-is repositioned into a large eight-direction ring, so the real icon, number,
-stack quantity and active highlight are preserved. Move the right stick to
-choose slot 1–8. Up/down equip on release; ranged and consumable selections
+spells, and left potions/charms. A short tap cycles the next available entry.
+Holding a direction for `SelectorHoldMs` opens the game's inventory selector.
+Its native slot renderer is repositioned into a large eight-direction ring, so
+real inventory icons, numbers, stack quantities and active highlights are
+preserved. Move the right stick to choose slot 1–8. The PC ranged row contains
+only six inventory weapons; slot 7 remains unused and slot 8 is reserved by the
+bridge for the standalone `ACTION_CHALK_CROSS` action (`C` in retail
+`keys.cfg`). Up/down equip on release; ranged, chalk and consumable selections
 require A. `SelectorRadius` and `SelectorCenterY` adjust the ring in the game's
 logical coordinate space.
 
@@ -208,10 +208,9 @@ full-stick samples from interrupting a run with a one-tick walk transition.
 
 The ranged and consumable categories never activate on release. Keep their
 D-pad direction held, choose a slot, and press A to equip or use it; B or
-release cancels. This prevents accidental ranged changes or consumption and
-leaves a short D-pad-right tap available for chalk. Set `XInput/Enabled=0` to
-disable the whole layer, or `XInput/BaseBindings=0` to test only the D-pad
-selector.
+release cancels. This prevents accidental ranged changes, chalk marks or
+consumption. Set `XInput/Enabled=0` to disable the whole layer, or
+`XInput/BaseBindings=0` to test only the D-pad selector.
 
 The layout follows two established conventions: a community controller setup
 uses the right stick as a mouse for menus and first-person view, while hold,
