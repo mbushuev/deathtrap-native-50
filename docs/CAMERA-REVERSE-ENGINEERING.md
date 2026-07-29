@@ -13,6 +13,7 @@ by SHA-256 before disassembling it. It requires Python, `pefile` and Capstone.
 python -m pip install pefile capstone
 python tools/analyze_dungeon_camera.py "<game>\Dungeon.dll" --rva 0x3860 --size 0x80
 python tools/analyze_dungeon_camera.py "<game>\Dungeon.dll" --xrefs 0x1F11C0
+python tools/analyze_dungeon_camera.py "<game>\Dungeon.dll" --disp 0x27C
 ```
 
 The helper is read-only. Runtime field discovery is performed by the optional
@@ -63,6 +64,32 @@ camera endpoints at `controller+0x258..+0x26C` and their deltas at
 `controller+0x270..+0x278`. The orbit implementation must use these retail
 controller values and collision path rather than patching only the final
 published matrix.
+
+## Verified mode-3 desired-position path
+
+The `0.0.50` trace confirmed that `controller+0x27C` is byte `3` in ordinary
+third person and byte `4` in first person. The older global byte at
+`Dungeon.dll+0x104679` is not the authoritative camera mode.
+
+The mode dispatcher calls `Dungeon.dll+0x2F310` for mode 3. Its normal branch
+computes a desired camera point from the live player-coordinate pointers at
+`controller+0xFC/+0x100/+0x104`, then calls:
+
+```text
+Dungeon.dll+0x2F380(controller, x, y, z, room_or_sector, update_flags)
+```
+
+`0x2F380` forwards the desired point through `0x2F340` and exactly one call to
+`0x2DEF0`. That downstream chain owns the camera target, endpoint history,
+collision query (`0x2E3A0` / `0x30910`) and smoothing. Consequently version
+`0.0.51` detours `0x2F380`, changes only `x/y/z` after right-stick engagement,
+and invokes the original once. It does not run a second update and does not
+patch the node or published matrix.
+
+Right-stick input is sequenced on real source ticks. Multiple synthetic 50 Hz
+render phases can reuse the resulting orbit endpoint but cannot integrate the
+stick twice. Leaving mode 3, opening a menu or selector, entering first person,
+losing focus or disconnecting the controller immediately releases orbit state.
 
 ## Diagnostic run protocol
 

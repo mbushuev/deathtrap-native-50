@@ -57,6 +57,16 @@ constexpr uintptr_t kCameraControllerFlagsRva = 0x00104620u;
 constexpr uintptr_t kCameraControllerCallback0Rva = 0x00104640u;
 constexpr uintptr_t kCameraControllerCallback1Rva = 0x00104644u;
 constexpr uintptr_t kCameraControllerModeRva = 0x00104679u;
+// The mode-3 path calls this native entry with its desired camera position.
+// The function then performs the retail collision and smoothing work.  The
+// orbit prototype changes only these inputs and deliberately leaves the
+// final matrix, scene graph and visibility pipeline untouched.
+constexpr uintptr_t kConfigureCameraRva = 0x0002F380u;
+constexpr size_t kCameraControllerPlayerXPointerOffset = 0xFCu;
+constexpr size_t kCameraControllerPlayerYPointerOffset = 0x100u;
+constexpr size_t kCameraControllerPlayerZPointerOffset = 0x104u;
+constexpr size_t kCameraControllerActiveModeOffset = 0x27Cu;
+constexpr uint8_t kCameraModeThirdPerson = 3u;
 constexpr uintptr_t kActiveCloseCombatWeaponRva = 0x001D8A68u;
 constexpr uintptr_t kActiveSpellRva = 0x001D8A6Cu;
 constexpr uintptr_t kInventoryLookupRva = 0x0007BD30u;
@@ -103,6 +113,7 @@ constexpr uint32_t kOriginalPstMessageLifetimeTicks = 27u;
 constexpr uint32_t kOriginalGameplayRate = 16u;
 constexpr uint32_t kOriginalPeriodMilliseconds = 60u;
 constexpr double kMatrixFixedScale = 16384.0;
+constexpr double kOrbitPi = 3.14159265358979323846;
 constexpr size_t kMatrixOffset = 0x9Cu;
 constexpr size_t kParentOffset = 0x2Cu;
 constexpr size_t kChildOffset = 0x30u;
@@ -341,6 +352,7 @@ std::atomic<bool> g_combat_impact_hook_installed{false};
 std::atomic<bool> g_spell_cast_hook_installed{false};
 std::atomic<bool> g_ranged_weapon_hook_installed{false};
 std::atomic<bool> g_consumable_hook_installed{false};
+std::atomic<bool> g_camera_orbit_hook_installed{false};
 std::atomic<bool> g_movement_stage_probes_installed{false};
 std::atomic<bool> g_movement_callback_probe_installed{false};
 std::atomic<int32_t> g_pending_weapon_wheel_detents{0};
@@ -362,6 +374,32 @@ bool g_debug_log = false;
 bool g_camera_probe_enabled = false;
 CameraProbeSnapshot g_camera_probe_previous;
 std::string g_camera_probe_log_buffer;
+bool g_third_person_orbit_enabled = false;
+bool g_third_person_orbit_invert_x = false;
+bool g_third_person_orbit_invert_y = false;
+double g_third_person_orbit_horizontal_radians = 0.0;
+double g_third_person_orbit_vertical_radians = 0.0;
+double g_third_person_orbit_min_pitch_radians = 0.0;
+double g_third_person_orbit_max_pitch_radians = 0.0;
+double g_third_person_orbit_min_radius = 650.0;
+double g_third_person_orbit_max_radius = 1800.0;
+std::atomic<int32_t> g_third_person_orbit_input_x{0};
+std::atomic<int32_t> g_third_person_orbit_input_y{0};
+std::atomic<bool> g_third_person_orbit_input_active{false};
+std::atomic<uint64_t> g_third_person_orbit_input_sequence{0};
+
+struct ThirdPersonOrbitState {
+  void* controller = nullptr;
+  bool engaged = false;
+  double yaw = 0.0;
+  double pitch = 0.0;
+  double radius = 0.0;
+  std::array<int32_t, 3> previous_player{};
+  uint64_t last_input_sequence = 0;
+  uint64_t applications = 0;
+};
+
+ThirdPersonOrbitState g_third_person_orbit_state;
 bool g_weapon_wheel_enabled = false;
 bool g_weapon_wheel_invert = false;
 bool g_xinput_enabled = false;
@@ -453,6 +491,10 @@ using RangedWeaponLaunchFn = void*(__cdecl*)(void* actor,
                                              void* launch_context,
                                              void* launch_output);
 using UseConsumableFn = void(__cdecl*)(int32_t item_id);
+using ConfigureCameraFn = void(__cdecl*)(void* controller, int32_t x,
+                                         int32_t y, int32_t z,
+                                         int32_t room_or_sector,
+                                         int32_t update_flags);
 
 RenderPresentWaitFn g_original_render_present_wait = nullptr;
 RendererFn g_renderer = nullptr;
@@ -466,6 +508,7 @@ SuccessfulBlockImpactFn g_original_successful_block_impact = nullptr;
 OffensiveSpellLaunchFn g_original_offensive_spell_launch = nullptr;
 RangedWeaponLaunchFn g_original_ranged_weapon_launch = nullptr;
 UseConsumableFn g_original_use_consumable = nullptr;
+ConfigureCameraFn g_original_configure_camera = nullptr;
 thread_local ActivePresentationTrace g_active_presentation_trace;
 std::vector<PresentationTraceSample> g_presentation_trace_buffer;
 
@@ -1114,6 +1157,213 @@ double CurvedStick(double value, double exponent) {
     return 0.0;
   }
   return std::copysign(std::pow(std::abs(value), exponent), value);
+}
+
+void PublishThirdPersonOrbitInput(double right_x, double right_y,
+                                  bool active) {
+  constexpr double kInputScale = 1000000.0;
+  const double curved_x = CurvedStick(right_x, g_xinput_right_stick_curve);
+  const double curved_y = CurvedStick(right_y, g_xinput_right_stick_curve);
+  g_third_person_orbit_input_x.store(
+      static_cast<int32_t>(std::lround(curved_x * kInputScale)),
+      std::memory_order_relaxed);
+  g_third_person_orbit_input_y.store(
+      static_cast<int32_t>(std::lround(curved_y * kInputScale)),
+      std::memory_order_relaxed);
+  g_third_person_orbit_input_active.store(active,
+                                           std::memory_order_release);
+  g_third_person_orbit_input_sequence.fetch_add(1,
+                                                 std::memory_order_release);
+}
+
+bool ReadCameraPlayerPosition(void* controller,
+                              std::array<int32_t, 3>* position) {
+  if (!controller || !position) {
+    return false;
+  }
+  const uintptr_t base = reinterpret_cast<uintptr_t>(controller);
+  const std::array<size_t, 3> offsets = {
+      kCameraControllerPlayerXPointerOffset,
+      kCameraControllerPlayerYPointerOffset,
+      kCameraControllerPlayerZPointerOffset};
+  for (size_t axis = 0; axis < offsets.size(); ++axis) {
+    uintptr_t coordinate = 0;
+    if (!SafeReadValue(reinterpret_cast<const void*>(base + offsets[axis]),
+                       &coordinate) ||
+        !coordinate ||
+        !SafeReadValue(reinterpret_cast<const void*>(coordinate),
+                       &(*position)[axis])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool InitializeThirdPersonOrbit(void* controller, int32_t native_x,
+                                int32_t native_y, int32_t native_z,
+                                const std::array<int32_t, 3>& player,
+                                uint64_t input_sequence) {
+  const double dx = static_cast<double>(native_x - player[0]);
+  const double dy = static_cast<double>(native_y - player[1]);
+  const double dz = static_cast<double>(native_z - player[2]);
+  const double horizontal = std::hypot(dx, dz);
+  const double radius = std::hypot(horizontal, dy);
+  if (!std::isfinite(radius) || radius < 250.0 || radius > 5000.0) {
+    return false;
+  }
+  g_third_person_orbit_state.controller = controller;
+  g_third_person_orbit_state.engaged = true;
+  g_third_person_orbit_state.yaw = std::atan2(dx, dz);
+  g_third_person_orbit_state.pitch = std::clamp(
+      std::atan2(dy, std::max(horizontal, 1.0)),
+      g_third_person_orbit_min_pitch_radians,
+      g_third_person_orbit_max_pitch_radians);
+  g_third_person_orbit_state.radius = std::clamp(
+      radius, g_third_person_orbit_min_radius,
+      g_third_person_orbit_max_radius);
+  g_third_person_orbit_state.previous_player = player;
+  // Consume the current sample below so the first stick movement takes
+  // effect immediately instead of waiting for another native source tick.
+  g_third_person_orbit_state.last_input_sequence =
+      input_sequence ? input_sequence - 1u : 0u;
+  AppendNativeLog(
+      "camera_orbit engage native=%d/%d/%d player=%d/%d/%d "
+      "yaw=%.2f pitch=%.2f radius=%.1f",
+      native_x, native_y, native_z, player[0], player[1], player[2],
+      g_third_person_orbit_state.yaw * 180.0 / kOrbitPi,
+      g_third_person_orbit_state.pitch * 180.0 / kOrbitPi,
+      g_third_person_orbit_state.radius);
+  return true;
+}
+
+void ResetThirdPersonOrbit(const char* reason) {
+  if (g_third_person_orbit_state.engaged) {
+    AppendNativeLog("camera_orbit disengage reason=%s applications=%llu",
+                    reason,
+                    static_cast<unsigned long long>(
+                        g_third_person_orbit_state.applications));
+  }
+  g_third_person_orbit_state = {};
+}
+
+void __cdecl HookConfigureCamera(void* controller, int32_t native_x,
+                                 int32_t native_y, int32_t native_z,
+                                 int32_t room_or_sector,
+                                 int32_t update_flags) {
+  if (!g_original_configure_camera) {
+    return;
+  }
+
+  uint8_t mode = 0;
+  const bool mode_valid = controller && SafeReadValue(
+      reinterpret_cast<const uint8_t*>(controller) +
+          kCameraControllerActiveModeOffset,
+      &mode);
+  const bool input_active =
+      g_third_person_orbit_input_active.load(std::memory_order_acquire);
+  if (!g_third_person_orbit_enabled || !mode_valid ||
+      mode != kCameraModeThirdPerson || !input_active) {
+    ResetThirdPersonOrbit(!mode_valid ? "invalid_controller" :
+                          mode != kCameraModeThirdPerson ? "native_mode" :
+                          !input_active ? "input_context" : "disabled");
+    g_original_configure_camera(controller, native_x, native_y, native_z,
+                                room_or_sector, update_flags);
+    return;
+  }
+
+  std::array<int32_t, 3> player{};
+  if (!ReadCameraPlayerPosition(controller, &player)) {
+    ResetThirdPersonOrbit("player_position");
+    g_original_configure_camera(controller, native_x, native_y, native_z,
+                                room_or_sector, update_flags);
+    return;
+  }
+
+  constexpr double kInputScale = 1000000.0;
+  const double input_x = static_cast<double>(
+      g_third_person_orbit_input_x.load(std::memory_order_relaxed)) /
+      kInputScale;
+  const double input_y = static_cast<double>(
+      g_third_person_orbit_input_y.load(std::memory_order_relaxed)) /
+      kInputScale;
+  const uint64_t input_sequence =
+      g_third_person_orbit_input_sequence.load(std::memory_order_acquire);
+  const bool stick_moved = std::abs(input_x) > 0.0001 ||
+                           std::abs(input_y) > 0.0001;
+
+  if (!g_third_person_orbit_state.engaged ||
+      g_third_person_orbit_state.controller != controller) {
+    if (!stick_moved ||
+        !InitializeThirdPersonOrbit(controller, native_x, native_y, native_z,
+                                    player, input_sequence)) {
+      g_original_configure_camera(controller, native_x, native_y, native_z,
+                                  room_or_sector, update_flags);
+      return;
+    }
+  } else {
+    const double player_jump = std::hypot(
+        std::hypot(static_cast<double>(
+                       player[0] -
+                       g_third_person_orbit_state.previous_player[0]),
+                   static_cast<double>(
+                       player[2] -
+                       g_third_person_orbit_state.previous_player[2])),
+        static_cast<double>(
+            player[1] - g_third_person_orbit_state.previous_player[1]));
+    if (player_jump > 2500.0 &&
+        !InitializeThirdPersonOrbit(controller, native_x, native_y, native_z,
+                                    player, input_sequence)) {
+      ResetThirdPersonOrbit("player_teleport");
+      g_original_configure_camera(controller, native_x, native_y, native_z,
+                                  room_or_sector, update_flags);
+      return;
+    }
+  }
+
+  if (input_sequence != g_third_person_orbit_state.last_input_sequence) {
+    const double horizontal_sign = g_third_person_orbit_invert_x ? 1.0 : -1.0;
+    const double vertical_sign = g_third_person_orbit_invert_y ? 1.0 : -1.0;
+    g_third_person_orbit_state.yaw +=
+        input_x * horizontal_sign *
+        g_third_person_orbit_horizontal_radians;
+    g_third_person_orbit_state.pitch = std::clamp(
+        g_third_person_orbit_state.pitch +
+            input_y * vertical_sign *
+                g_third_person_orbit_vertical_radians,
+        g_third_person_orbit_min_pitch_radians,
+        g_third_person_orbit_max_pitch_radians);
+    if (g_third_person_orbit_state.yaw > kOrbitPi ||
+        g_third_person_orbit_state.yaw < -kOrbitPi) {
+      g_third_person_orbit_state.yaw = std::remainder(
+          g_third_person_orbit_state.yaw, 2.0 * kOrbitPi);
+    }
+    g_third_person_orbit_state.last_input_sequence = input_sequence;
+  }
+
+  const double horizontal = g_third_person_orbit_state.radius *
+                            std::cos(g_third_person_orbit_state.pitch);
+  const int32_t orbit_x = player[0] + static_cast<int32_t>(std::lround(
+      std::sin(g_third_person_orbit_state.yaw) * horizontal));
+  const int32_t orbit_y = player[1] + static_cast<int32_t>(std::lround(
+      std::sin(g_third_person_orbit_state.pitch) *
+      g_third_person_orbit_state.radius));
+  const int32_t orbit_z = player[2] + static_cast<int32_t>(std::lround(
+      std::cos(g_third_person_orbit_state.yaw) * horizontal));
+  g_third_person_orbit_state.previous_player = player;
+  ++g_third_person_orbit_state.applications;
+  if (g_debug_log &&
+      (g_third_person_orbit_state.applications % 60u) == 1u) {
+    AppendNativeLog(
+        "camera_orbit apply input=%.3f/%.3f desired=%d/%d/%d "
+        "player=%d/%d/%d yaw=%.2f pitch=%.2f radius=%.1f seq=%llu",
+        input_x, input_y, orbit_x, orbit_y, orbit_z, player[0], player[1],
+        player[2], g_third_person_orbit_state.yaw * 180.0 / kOrbitPi,
+        g_third_person_orbit_state.pitch * 180.0 / kOrbitPi,
+        g_third_person_orbit_state.radius,
+        static_cast<unsigned long long>(input_sequence));
+  }
+  g_original_configure_camera(controller, orbit_x, orbit_y, orbit_z,
+                              room_or_sector, update_flags);
 }
 
 WORD VibrationMotorValue(uint32_t percent, double channel_scale) {
@@ -2145,6 +2395,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
                                   bool selector_captures_controls) {
   UpdateControllerVibration(pad, gameplay, selector_captures_controls);
   if (!g_xinput_base_bindings) {
+    PublishThirdPersonOrbitInput(0.0, 0.0, false);
     ReleaseInjectedControllerInput();
     return;
   }
@@ -2215,7 +2466,11 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
           CurvedStick(right_y, g_xinput_right_stick_curve),
           g_xinput_first_person_pixels);
     }
+    PublishThirdPersonOrbitInput(
+        right_x, right_y,
+        !selector_captures_controls && !g_xinput_first_person_toggled);
   } else {
+    PublishThirdPersonOrbitInput(0.0, 0.0, false);
     g_xinput_first_person_toggled = false;
     g_xinput_run_active = false;
     InjectVirtualKey(InjectedKey::kW, false);
@@ -2274,6 +2529,7 @@ void UpdateDeathtrapXInput() {
   const bool connected =
       g_xinput_get_state(g_xinput_controller_index, &state) == ERROR_SUCCESS;
   if (!connected || !IsGameForeground()) {
+    PublishThirdPersonOrbitInput(0.0, 0.0, false);
     if (g_xinput_was_connected) {
       ReleaseInjectedControllerInput();
       CloseControllerSelector();
@@ -2311,6 +2567,7 @@ void UpdateDeathtrapXInput() {
   // only gameplay so engine actions and the native selector never run from a
   // foreign input thread.
   if (!gameplay) {
+    PublishThirdPersonOrbitInput(0.0, 0.0, false);
     return;
   }
   UpdateControllerSelector(state.Gamepad, gameplay);
@@ -5659,6 +5916,40 @@ void InitializePatchState() {
       100, 250)) / 100.0;
   g_xinput_invert_right_y =
       ConfiguredInteger(L"XInput", L"InvertRightY", 0) != 0;
+  g_third_person_orbit_enabled =
+      ConfiguredInteger(L"Camera", L"ThirdPersonOrbit", 1) != 0;
+  g_third_person_orbit_invert_x =
+      ConfiguredInteger(L"Camera", L"InvertX", 0) != 0;
+  g_third_person_orbit_invert_y =
+      ConfiguredInteger(L"Camera", L"InvertY", 0) != 0;
+  g_third_person_orbit_horizontal_radians =
+      static_cast<double>(std::clamp(
+          ConfiguredInteger(L"Camera", L"HorizontalDegreesPerTick", 8),
+          1, 30)) * kOrbitPi / 180.0;
+  g_third_person_orbit_vertical_radians =
+      static_cast<double>(std::clamp(
+          ConfiguredInteger(L"Camera", L"VerticalDegreesPerTick", 5),
+          1, 20)) * kOrbitPi / 180.0;
+  int32_t minimum_pitch_degrees = std::clamp(
+      ConfiguredInteger(L"Camera", L"MinimumPitchDegrees", 10), -30, 70);
+  int32_t maximum_pitch_degrees = std::clamp(
+      ConfiguredInteger(L"Camera", L"MaximumPitchDegrees", 55), -20, 80);
+  if (maximum_pitch_degrees <= minimum_pitch_degrees) {
+    maximum_pitch_degrees = std::min(80, minimum_pitch_degrees + 20);
+  }
+  g_third_person_orbit_min_pitch_radians =
+      static_cast<double>(minimum_pitch_degrees) * kOrbitPi / 180.0;
+  g_third_person_orbit_max_pitch_radians =
+      static_cast<double>(maximum_pitch_degrees) * kOrbitPi / 180.0;
+  g_third_person_orbit_min_radius = static_cast<double>(std::clamp(
+      ConfiguredInteger(L"Camera", L"MinimumRadius", 650), 200, 3000));
+  g_third_person_orbit_max_radius = static_cast<double>(std::clamp(
+      ConfiguredInteger(L"Camera", L"MaximumRadius", 1800), 400, 5000));
+  if (g_third_person_orbit_max_radius <=
+      g_third_person_orbit_min_radius) {
+    g_third_person_orbit_max_radius =
+        g_third_person_orbit_min_radius + 500.0;
+  }
   g_xinput_vibration_enabled =
       ConfiguredInteger(L"XInput", L"VibrationEnabled", 1) != 0;
   g_xinput_vibration_strength_percent = static_cast<uint32_t>(std::clamp(
@@ -5761,7 +6052,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.50 camera-controller diagnostics: "
+      "Deathtrap native render overlay 0.0.51 native third-person orbit: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
@@ -5797,7 +6088,8 @@ void InitializePatchState() {
       "base_bindings=%u hold_ms=%u deadzones=%d/%d radial=%d center_y=%d "
       "vibration=%u/%u%% action=%u/%u/%u/%ums event=%u/%u/%u/%u/%u/"
       "%u/%ums heavy=%uhp/%ums "
-      "available=%u camera_probe=%u "
+      "available=%u camera_probe=%u orbit=%u sensitivity=%d/%ddeg "
+      "pitch=%d..%d radius=%d..%d invert=%u/%u "
       "message_lifetime=%u%% ui=%u_ticks/%u pst=%u_ticks/%u",
       g_weapon_wheel_enabled ? 1u : 0u,
       g_weapon_wheel_invert ? 1u : 0u,
@@ -5825,6 +6117,17 @@ void InitializePatchState() {
       g_xinput_heavy_damage_vibration_ms,
       g_xinput_set_state ? 1u : 0u,
       g_camera_probe_enabled ? 1u : 0u,
+      g_third_person_orbit_enabled ? 1u : 0u,
+      static_cast<int>(std::lround(
+          g_third_person_orbit_horizontal_radians * 180.0 / kOrbitPi)),
+      static_cast<int>(std::lround(
+          g_third_person_orbit_vertical_radians * 180.0 / kOrbitPi)),
+      minimum_pitch_degrees,
+      maximum_pitch_degrees,
+      static_cast<int>(std::lround(g_third_person_orbit_min_radius)),
+      static_cast<int>(std::lround(g_third_person_orbit_max_radius)),
+      g_third_person_orbit_invert_x ? 1u : 0u,
+      g_third_person_orbit_invert_y ? 1u : 0u,
       g_ui_message_lifetime_percent,
       g_ui_message_lifetime_ticks,
       g_ui_message_lifetime_patched ? 1u : 0u,
@@ -5894,6 +6197,37 @@ bool InstallDeathtrapNativeRenderHooks() {
       !g_dungeon_base || !IsExpectedDungeonImage(g_dungeon_base)) {
     return false;
   }
+
+  // Optional modern-camera layer. It hooks the native desired-position
+  // entry, not the published view matrix, so all retail collision, room
+  // clipping, visibility and camera smoothing remain downstream. Failure is
+  // isolated from native-50 rendering and every other controller feature.
+  if (g_third_person_orbit_enabled) {
+    void* const configure_camera_target =
+        g_dungeon_base + kConfigureCameraRva;
+    const MH_STATUS create_camera = MH_CreateHook(
+        configure_camera_target,
+        reinterpret_cast<void*>(&HookConfigureCamera),
+        reinterpret_cast<void**>(&g_original_configure_camera));
+    if (create_camera == MH_OK ||
+        create_camera == MH_ERROR_ALREADY_CREATED) {
+      const MH_STATUS enable_camera = MH_EnableHook(configure_camera_target);
+      if (enable_camera == MH_OK || enable_camera == MH_ERROR_ENABLED) {
+        g_camera_orbit_hook_installed.store(true,
+                                             std::memory_order_release);
+        AppendNativeLog(
+            "camera_orbit hook=active rva=%08llX mode=3 native_pipeline=1",
+            static_cast<unsigned long long>(kConfigureCameraRva));
+      } else {
+        AppendNativeLog("camera_orbit hook=enable_failed status=%d",
+                        static_cast<int>(enable_camera));
+      }
+    } else {
+      AppendNativeLog("camera_orbit hook=create_failed status=%d",
+                      static_cast<int>(create_camera));
+    }
+  }
+
   void* const inventory_slot_target =
       g_dungeon_base + kInventorySlotDrawRva;
   const MH_STATUS create_inventory_slot = MH_CreateHook(

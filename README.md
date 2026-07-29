@@ -1,11 +1,13 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.50`.
+Current development version: `0.0.51`.
 
-The `modern-third-person-camera` branch currently contains a read-only camera
-owner and controller probe. See [Camera reverse-engineering notes](docs/CAMERA-REVERSE-ENGINEERING.md)
-for the verified cache path, static analysis helper and controlled capture
-procedure. The probe does not change retail camera behavior.
+The `modern-third-person-camera` branch contains the first opt-in native orbit
+prototype. It changes the desired mode-3 camera position before the retail
+collision/smoothing pipeline; it never overwrites the final view matrix. See
+[Camera reverse-engineering notes](docs/CAMERA-REVERSE-ENGINEERING.md) for the
+verified call path and [modern camera design](docs/MODERN-CAMERA-DESIGN.md) for
+the safety boundary.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -114,6 +116,10 @@ D3D11 settings, first-run verification and troubleshooting.
   `XInput/InvertRightY=1` reverses its vertical axis. First-person look uses a
   precision curve (`RightStickResponseCurvePercent=135`) and a reduced
   `RightStickPixelsPerTick=12`, giving finer movement near stick center.
+- In ordinary third-person gameplay, moving the right stick engages the
+  experimental native orbit camera. Inventory selection, menus and
+  first-person view retain priority and suspend orbit input. Configure it in
+  `[Camera]`; set `ThirdPersonOrbit=0` for exact retail camera behavior.
 - XInput vibration is enabled by default. LT produces a light low-frequency
   block-action pulse. RT itself never vibrates: attack feedback begins only
   when the engine accepts the melee downstroke, so pressing attack while the

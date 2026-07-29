@@ -99,6 +99,24 @@ def find_references(image, target_rva: int) -> None:
             print_instruction(instruction, base)
 
 
+def references_displacement(instruction, displacement: int) -> bool:
+    return any(
+        operand.type == X86_OP_MEM and operand.mem.disp == displacement
+        for operand in instruction.operands
+    )
+
+
+def find_displacements(image, displacement: int) -> None:
+    """Find structure-field accesses such as ``[esi + 0x1ac]``."""
+    section = text_section(image)
+    base = image.OPTIONAL_HEADER.ImageBase
+    start = section.VirtualAddress
+    code = image.get_data(start, section.Misc_VirtualSize)
+    for instruction in disassembler().disasm(code, base + start):
+        if references_displacement(instruction, displacement):
+            print_instruction(instruction, base)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("dll", type=Path, help="path to the supported Dungeon.dll")
@@ -109,10 +127,17 @@ def main() -> int:
         type=integer,
         help="find .text references to this RVA instead of disassembling",
     )
+    parser.add_argument(
+        "--disp",
+        type=integer,
+        help="find .text memory operands using this structure displacement",
+    )
     arguments = parser.parse_args()
     image = load_image(arguments.dll)
     if arguments.xrefs is not None:
         find_references(image, arguments.xrefs)
+    elif arguments.disp is not None:
+        find_displacements(image, arguments.disp)
     else:
         disassemble_range(image, arguments.rva, arguments.size)
     return 0
