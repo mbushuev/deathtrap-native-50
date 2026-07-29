@@ -137,7 +137,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.47`
+The render log must begin with the `Deathtrap native render overlay 0.0.48`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -193,6 +193,12 @@ MeleeSwingVibrationMs=170
 BlockVibrationMs=60
 SuccessfulBlockVibrationMs=210
 SpellCastVibrationMs=260
+RangedShotVibrationMs=115
+HealingVibrationMs=320
+SelectorTickVibrationMs=38
+LandingVibrationMs=145
+HeavyDamageVibrationMs=380
+HeavyDamageThresholdHp=12
 HitVibrationMs=150
 DamageVibrationMs=240
 DeathVibrationMs=700
@@ -214,6 +220,15 @@ and selects block-impact animation `0x61`; simply pressing LT is insufficient.
 An accepted attack spell appears as `game_event offensive_spell_launch`,
 including its selected spell ID and non-null projectile. Healing and utility
 actions do not use this event.
+
+Version 0.0.48 adds `game_event ranged_projectile` only after a real player
+projectile is created, `game_event healing_consumable` only after player
+health rises, `game_event selector_tick` on a changed radial sector,
+`game_event landing` after a qualified airborne/contact transition, and
+`game_event heavy_player_impact` when confirmed player damage reaches
+`HeavyDamageThresholdHp`. The ranged hook can be installed and verified in
+the startup log before a ranged weapon has been acquired; no pulse is emitted
+until the game later creates an actual projectile.
 
 The default gameplay layout is left-stick forward/backward and tank turning,
 A jump/climb, X operate, RT primary attack, LT parry/block, RB cast spell and

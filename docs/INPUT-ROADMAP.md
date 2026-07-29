@@ -116,6 +116,15 @@ events:
   them, so their full independently configurable envelopes remain composable
   with melee, hit, damage and death feedback even after a slow frame.
 
+Version 0.0.48 completes the general gameplay-event set:
+
+- qualify ranged fire through the player-owned non-null projectile returned
+  by `Dungeon.dll+0x1CEC0`;
+- qualify healing through a real Q14 health increase across `+0x7B9C0`;
+- add a small radial-selector detent only on a changed eight-way slot;
+- detect landings from real airborne/contact endpoints plus vertical motion;
+- extend confirmed large player damage with a distinct heavy-impact envelope.
+
 ### Selected layout rationale
 
 The game does not expose a normal third-person free-camera action, so permanent

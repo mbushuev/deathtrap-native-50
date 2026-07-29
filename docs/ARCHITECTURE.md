@@ -213,6 +213,23 @@ moment, submits the motor command, and only then writes diagnostic telemetry.
 This prevents a low-FPS frame or synchronous debug log from expiring a short
 pulse before the next XInput poll.
 
+Version 0.0.48 extends the same event-qualified design. The ranged feedback
+hook is the retail projectile factory at `Dungeon.dll+0x1CEC0`; a request is
+accepted only for the live player and a non-null returned projectile, so an
+empty weapon or rejected fire action is silent. The common consumable
+dispatcher at `+0x7B9C0` is wrapped with Q14 player-health snapshots and emits
+healing feedback only when the original call actually raises health. Radial
+selection publishes a short high-frequency detent only when its resolved
+eight-way slot changes.
+
+Landing feedback is observed exclusively at real scheduler endpoints. It
+requires an engine contact-count transition from airborne to contact plus a
+minimum measured vertical displacement, excluding ordinary wall and pipe
+contacts. Large player-damage events reuse the already validated `+0x1C130`
+health delta and add a longer two-motor impact envelope above the configured
+HP threshold. None of these paths run in a synthetic render pass, and only the
+single XInput owner submits motor commands.
+
 ## Original text lifetime at the higher render rate
 
 `Dungeon.dll+0x8F4C0` draws the transient on-screen messages and decrements the

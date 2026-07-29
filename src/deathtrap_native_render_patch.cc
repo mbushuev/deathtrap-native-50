@@ -65,6 +65,7 @@ constexpr uintptr_t kMeleeAttackWindowRva = 0x0001D620u;
 // returns null when launch preconditions are not satisfied.
 constexpr uintptr_t kSuccessfulBlockImpactRva = 0x000834F0u;
 constexpr uintptr_t kOffensiveSpellLaunchRva = 0x0001D210u;
+constexpr uintptr_t kRangedWeaponLaunchRva = 0x0001CEC0u;
 constexpr int32_t kFirstOffensiveSpellId = 15;
 constexpr int32_t kLastOffensiveSpellId = 21;
 constexpr uintptr_t kEntityDataOffset = 0x2Cu;
@@ -299,6 +300,8 @@ std::atomic<bool> g_damage_hook_installed{false};
 std::atomic<bool> g_melee_attack_window_hook_installed{false};
 std::atomic<bool> g_combat_impact_hook_installed{false};
 std::atomic<bool> g_spell_cast_hook_installed{false};
+std::atomic<bool> g_ranged_weapon_hook_installed{false};
+std::atomic<bool> g_consumable_hook_installed{false};
 std::atomic<bool> g_movement_stage_probes_installed{false};
 std::atomic<bool> g_movement_callback_probe_installed{false};
 std::atomic<int32_t> g_pending_weapon_wheel_detents{0};
@@ -404,6 +407,10 @@ using SuccessfulBlockImpactFn = void(__cdecl*)(void* actor);
 using OffensiveSpellLaunchFn = void*(__cdecl*)(void* actor,
                                                 void* launch_context,
                                                 void* launch_output);
+using RangedWeaponLaunchFn = void*(__cdecl*)(void* actor,
+                                             void* launch_context,
+                                             void* launch_output);
+using UseConsumableFn = void(__cdecl*)(int32_t item_id);
 
 RenderPresentWaitFn g_original_render_present_wait = nullptr;
 RendererFn g_renderer = nullptr;
@@ -415,6 +422,8 @@ DamageHandlerFn g_original_damage_handler = nullptr;
 MeleeAttackWindowFn g_original_melee_attack_window = nullptr;
 SuccessfulBlockImpactFn g_original_successful_block_impact = nullptr;
 OffensiveSpellLaunchFn g_original_offensive_spell_launch = nullptr;
+RangedWeaponLaunchFn g_original_ranged_weapon_launch = nullptr;
+UseConsumableFn g_original_use_consumable = nullptr;
 thread_local ActivePresentationTrace g_active_presentation_trace;
 std::vector<PresentationTraceSample> g_presentation_trace_buffer;
 
@@ -924,6 +933,12 @@ uint32_t g_xinput_melee_swing_vibration_ms = 170u;
 uint32_t g_xinput_block_vibration_ms = 60u;
 uint32_t g_xinput_successful_block_vibration_ms = 210u;
 uint32_t g_xinput_spell_cast_vibration_ms = 260u;
+uint32_t g_xinput_ranged_shot_vibration_ms = 115u;
+uint32_t g_xinput_healing_vibration_ms = 320u;
+uint32_t g_xinput_selector_tick_vibration_ms = 38u;
+uint32_t g_xinput_landing_vibration_ms = 145u;
+uint32_t g_xinput_heavy_damage_vibration_ms = 380u;
+uint32_t g_xinput_heavy_damage_threshold_hp = 12u;
 uint32_t g_xinput_hit_vibration_ms = 150u;
 uint32_t g_xinput_damage_vibration_ms = 240u;
 uint32_t g_xinput_death_vibration_ms = 700u;
@@ -936,13 +951,28 @@ std::atomic<uint64_t> g_successful_block_vibration_until_ms{0};
 std::atomic<uint64_t> g_spell_cast_vibration_until_ms{0};
 std::atomic<bool> g_successful_block_vibration_pending{false};
 std::atomic<bool> g_spell_cast_vibration_pending{false};
+std::atomic<bool> g_ranged_shot_vibration_pending{false};
+std::atomic<bool> g_healing_vibration_pending{false};
+std::atomic<bool> g_selector_tick_vibration_pending{false};
+std::atomic<bool> g_landing_vibration_pending{false};
 std::atomic<bool> g_player_melee_attack_window_active{false};
 std::atomic<uint64_t> g_last_controller_attack_ms{0};
 std::atomic<uint64_t> g_hit_vibration_until_ms{0};
 std::atomic<uint64_t> g_damage_vibration_until_ms{0};
 std::atomic<uint64_t> g_death_vibration_until_ms{0};
+std::atomic<uint64_t> g_ranged_shot_vibration_until_ms{0};
+std::atomic<uint64_t> g_healing_vibration_until_ms{0};
+std::atomic<uint64_t> g_selector_tick_vibration_until_ms{0};
+std::atomic<uint64_t> g_landing_vibration_until_ms{0};
+std::atomic<uint64_t> g_heavy_damage_vibration_until_ms{0};
 std::atomic<uint32_t> g_hit_vibration_percent{0};
 std::atomic<uint32_t> g_damage_vibration_percent{0};
+std::atomic<uint32_t> g_landing_vibration_percent{0};
+bool g_landing_observer_valid = false;
+bool g_landing_observer_airborne = false;
+uint32_t g_landing_observer_airborne_ticks = 0;
+int32_t g_landing_observer_previous_y = 0;
+int32_t g_landing_observer_peak_vertical_delta = 0;
 std::atomic_flag g_xinput_poll_guard = ATOMIC_FLAG_INIT;
 
 class ScopedXInputPoll {
@@ -1081,6 +1111,11 @@ void StopControllerVibration() {
   g_successful_block_vibration_until_ms.store(0,
                                                std::memory_order_relaxed);
   g_spell_cast_vibration_until_ms.store(0, std::memory_order_relaxed);
+  g_ranged_shot_vibration_until_ms.store(0, std::memory_order_relaxed);
+  g_healing_vibration_until_ms.store(0, std::memory_order_relaxed);
+  g_selector_tick_vibration_until_ms.store(0, std::memory_order_relaxed);
+  g_landing_vibration_until_ms.store(0, std::memory_order_relaxed);
+  g_heavy_damage_vibration_until_ms.store(0, std::memory_order_relaxed);
   g_player_melee_attack_window_active.store(false,
                                              std::memory_order_relaxed);
   g_last_controller_attack_ms.store(0, std::memory_order_relaxed);
@@ -1089,6 +1124,7 @@ void StopControllerVibration() {
   g_death_vibration_until_ms.store(0, std::memory_order_relaxed);
   g_hit_vibration_percent.store(0, std::memory_order_relaxed);
   g_damage_vibration_percent.store(0, std::memory_order_relaxed);
+  g_landing_vibration_percent.store(0, std::memory_order_relaxed);
   g_previous_xinput_left_trigger = 0;
   ApplyControllerVibration(0, 0);
 }
@@ -1097,17 +1133,42 @@ void ClearPendingControllerVibrationEvents() {
   g_successful_block_vibration_pending.store(false,
                                                std::memory_order_release);
   g_spell_cast_vibration_pending.store(false, std::memory_order_release);
+  g_ranged_shot_vibration_pending.store(false, std::memory_order_release);
+  g_healing_vibration_pending.store(false, std::memory_order_release);
+  g_selector_tick_vibration_pending.store(false, std::memory_order_release);
+  g_landing_vibration_pending.store(false, std::memory_order_release);
 }
 
 void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
                                bool selector_captures_controls) {
-  if (!g_xinput_vibration_enabled || !gameplay ||
-      selector_captures_controls || !g_xinput_set_state) {
+  if (!g_xinput_vibration_enabled || !gameplay || !g_xinput_set_state) {
     StopControllerVibration();
     return;
   }
 
   const uint64_t now = GetTickCount64();
+  const bool selector_tick_started =
+      g_selector_tick_vibration_pending.exchange(false,
+                                                   std::memory_order_acq_rel);
+  if (selector_tick_started) {
+    StartEventVibration(&g_selector_tick_vibration_until_ms, nullptr, now,
+                        g_xinput_selector_tick_vibration_ms,
+                        g_xinput_vibration_strength_percent);
+  }
+  if (selector_captures_controls) {
+    WORD left_motor = 0;
+    WORD right_motor = 0;
+    if (now < g_selector_tick_vibration_until_ms.load(
+                  std::memory_order_acquire)) {
+      left_motor = VibrationMotorValue(
+          g_xinput_vibration_strength_percent, 0.10);
+      right_motor = VibrationMotorValue(
+          g_xinput_vibration_strength_percent, 0.24);
+    }
+    ApplyControllerVibration(left_motor, right_motor);
+    g_previous_xinput_left_trigger = pad.bLeftTrigger;
+    return;
+  }
   const bool successful_block_started =
       g_successful_block_vibration_pending.exchange(
           false, std::memory_order_acq_rel);
@@ -1127,6 +1188,32 @@ void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
     StartEventVibration(&g_spell_cast_vibration_until_ms, nullptr, now,
                         g_xinput_spell_cast_vibration_ms,
                         g_xinput_vibration_strength_percent);
+  }
+  const bool ranged_shot_started =
+      g_ranged_shot_vibration_pending.exchange(false,
+                                                 std::memory_order_acq_rel);
+  if (ranged_shot_started) {
+    StartEventVibration(&g_ranged_shot_vibration_until_ms, nullptr, now,
+                        g_xinput_ranged_shot_vibration_ms,
+                        g_xinput_vibration_strength_percent);
+  }
+  const bool healing_started =
+      g_healing_vibration_pending.exchange(false,
+                                             std::memory_order_acq_rel);
+  if (healing_started) {
+    StartEventVibration(&g_healing_vibration_until_ms, nullptr, now,
+                        g_xinput_healing_vibration_ms,
+                        g_xinput_vibration_strength_percent);
+  }
+  const bool landing_started =
+      g_landing_vibration_pending.exchange(false,
+                                             std::memory_order_acq_rel);
+  if (landing_started) {
+    StartEventVibration(&g_landing_vibration_until_ms,
+                        &g_landing_vibration_percent, now,
+                        g_xinput_landing_vibration_ms,
+                        g_landing_vibration_percent.load(
+                            std::memory_order_relaxed));
   }
   const bool block_pressed =
       pad.bLeftTrigger >= g_xinput_trigger_threshold &&
@@ -1198,6 +1285,54 @@ void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
     left_motor = std::max(left_motor, VibrationMotorValue(percent, 0.60));
     right_motor = std::max(right_motor, VibrationMotorValue(percent, 1.00));
   }
+  const uint64_t ranged_shot_until =
+      g_ranged_shot_vibration_until_ms.load(std::memory_order_acquire);
+  if (now < ranged_shot_until) {
+    left_motor = std::max(
+        left_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.42));
+    right_motor = std::max(
+        right_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.86));
+  }
+  const uint64_t healing_until =
+      g_healing_vibration_until_ms.load(std::memory_order_acquire);
+  if (now < healing_until) {
+    left_motor = std::max(
+        left_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.36));
+    right_motor = std::max(
+        right_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.52));
+  }
+  const uint64_t selector_tick_until =
+      g_selector_tick_vibration_until_ms.load(std::memory_order_acquire);
+  if (now < selector_tick_until) {
+    left_motor = std::max(
+        left_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.10));
+    right_motor = std::max(
+        right_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.24));
+  }
+  const uint64_t landing_until =
+      g_landing_vibration_until_ms.load(std::memory_order_acquire);
+  if (now < landing_until) {
+    const uint32_t percent =
+        g_landing_vibration_percent.load(std::memory_order_relaxed);
+    left_motor = std::max(left_motor, VibrationMotorValue(percent, 1.00));
+    right_motor = std::max(right_motor, VibrationMotorValue(percent, 0.28));
+  }
+  const uint64_t heavy_damage_until =
+      g_heavy_damage_vibration_until_ms.load(std::memory_order_acquire);
+  if (now < heavy_damage_until) {
+    left_motor = std::max(
+        left_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 1.00));
+    right_motor = std::max(
+        right_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.92));
+  }
   const uint64_t damage_until =
       g_damage_vibration_until_ms.load(std::memory_order_acquire);
   if (now < damage_until) {
@@ -1227,6 +1362,21 @@ void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
   if (spell_cast_started) {
     AppendNativeLog("xinput vibration spell_cast consumed duration_ms=%u",
                     g_xinput_spell_cast_vibration_ms);
+  }
+  if (ranged_shot_started) {
+    AppendNativeLog("xinput vibration ranged_shot consumed duration_ms=%u",
+                    g_xinput_ranged_shot_vibration_ms);
+  }
+  if (healing_started) {
+    AppendNativeLog("xinput vibration healing consumed duration_ms=%u",
+                    g_xinput_healing_vibration_ms);
+  }
+  if (landing_started) {
+    AppendNativeLog("xinput vibration landing consumed duration_ms=%u "
+                    "strength=%u",
+                    g_xinput_landing_vibration_ms,
+                    g_landing_vibration_percent.load(
+                        std::memory_order_relaxed));
   }
 }
 
@@ -1389,6 +1539,66 @@ void* __cdecl HookOffensiveSpellLaunch(void* actor, void* launch_context,
   return projectile;
 }
 
+void* __cdecl HookRangedWeaponLaunch(void* actor, void* launch_context,
+                                     void* launch_output) {
+  int32_t weapon_id = -1;
+  SafeReadValue(g_dungeon_base + kActiveCloseCombatWeaponRva, &weapon_id);
+  void* const projectile = g_original_ranged_weapon_launch(
+      actor, launch_context, launch_output);
+
+  uintptr_t player = 0;
+  SafeReadValue(g_dungeon_base + kUiOwnerPointerRva, &player);
+  if (!projectile || !player || reinterpret_cast<uintptr_t>(actor) != player) {
+    return projectile;
+  }
+
+  const uint64_t now = GetTickCount64();
+  g_last_controller_attack_ms.store(now, std::memory_order_release);
+  const bool was_pending = g_ranged_shot_vibration_pending.exchange(
+      true, std::memory_order_acq_rel);
+  if (!was_pending) {
+    AppendNativeLog(
+        "game_event ranged_projectile queued actor=%08llX weapon=%d "
+        "projectile=%08llX source_rva=%08llX duration_ms=%u",
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(actor)),
+        weapon_id,
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(projectile)),
+        static_cast<unsigned long long>(kRangedWeaponLaunchRva),
+        g_xinput_ranged_shot_vibration_ms);
+  }
+  return projectile;
+}
+
+void __cdecl HookUseConsumable(int32_t item_id) {
+  uintptr_t player = 0;
+  SafeReadValue(g_dungeon_base + kUiOwnerPointerRva, &player);
+  int32_t before = 0;
+  const bool before_valid =
+      player && ReadEntityHealth(reinterpret_cast<void*>(player), &before);
+
+  g_original_use_consumable(item_id);
+
+  int32_t after = 0;
+  const bool after_valid =
+      player && ReadEntityHealth(reinterpret_cast<void*>(player), &after);
+  if (!before_valid || !after_valid || after <= before) {
+    return;
+  }
+
+  const int32_t healed = after - before;
+  const bool was_pending = g_healing_vibration_pending.exchange(
+      true, std::memory_order_acq_rel);
+  if (!was_pending) {
+    AppendNativeLog(
+        "game_event healing_consumable queued item=%d healed_q14=%d "
+        "hp=%d->%d source_rva=%08llX duration_ms=%u",
+        item_id, healed, before / kHealthFixedScale,
+        after / kHealthFixedScale,
+        static_cast<unsigned long long>(kUseConsumableRva),
+        g_xinput_healing_vibration_ms);
+  }
+}
+
 int __cdecl HookDamageHandler(void* target, int32_t requested_damage,
                               uintptr_t damage_flags, uintptr_t impact_event,
                               uintptr_t source) {
@@ -1421,6 +1631,23 @@ int __cdecl HookDamageHandler(void* target, int32_t requested_damage,
     StartEventVibration(&g_damage_vibration_until_ms,
                         &g_damage_vibration_percent, now,
                         g_xinput_damage_vibration_ms, percent);
+    const uint32_t whole_damage_hp = static_cast<uint32_t>(
+        (static_cast<int64_t>(applied_damage) + kHealthFixedScale - 1) /
+        kHealthFixedScale);
+    const bool heavy_damage =
+        whole_damage_hp >= g_xinput_heavy_damage_threshold_hp;
+    if (heavy_damage) {
+      StartEventVibration(&g_heavy_damage_vibration_until_ms, nullptr, now,
+                          g_xinput_heavy_damage_vibration_ms,
+                          g_xinput_vibration_strength_percent);
+      AppendNativeLog(
+          "game_event heavy_player_impact hp=%u threshold=%u "
+          "duration_ms=%u source=%08llX flags=%08llX",
+          whole_damage_hp, g_xinput_heavy_damage_threshold_hp,
+          g_xinput_heavy_damage_vibration_ms,
+          static_cast<unsigned long long>(source),
+          static_cast<unsigned long long>(damage_flags));
+    }
     if (before > 0 && after <= 0) {
       StartEventVibration(&g_death_vibration_until_ms, nullptr, now,
                           g_xinput_death_vibration_ms,
@@ -1825,8 +2052,18 @@ void UpdateControllerSelector(const XINPUT_GAMEPAD& pad, bool gameplay) {
   if (!g_controller_selector.row_open || g_controller_selector.cancelled) {
     return;
   }
+  const uint32_t previous_slot = g_controller_selector.slot;
   g_controller_selector.slot =
       RightStickSlot(pad, g_controller_selector.slot);
+  if (g_controller_selector.slot != previous_slot) {
+    g_selector_tick_vibration_pending.store(true,
+                                             std::memory_order_release);
+    AppendNativeLog("game_event selector_tick category=%u slot=%u->%u "
+                    "duration_ms=%u",
+                    g_controller_selector.category, previous_slot,
+                    g_controller_selector.slot,
+                    g_xinput_selector_tick_vibration_ms);
+  }
   const bool available = ControllerSlotAvailable(
       g_controller_selector.category, g_controller_selector.slot);
   PublishControllerSelector(true, g_controller_selector.category,
@@ -4515,11 +4752,80 @@ void AdvanceSceneHistory(SceneSnapshot&& current) {
   g_previous_snapshot = std::move(current);
 }
 
+void ObservePlayerLanding(const SceneSnapshot& current) {
+  const bool position_valid = current.player_cached_position_valid ||
+                              current.player_position_valid;
+  if (!position_valid || !current.player_contact_count_valid) {
+    g_landing_observer_valid = false;
+    g_landing_observer_airborne = false;
+    g_landing_observer_airborne_ticks = 0;
+    g_landing_observer_peak_vertical_delta = 0;
+    return;
+  }
+  const int32_t current_y = current.player_cached_position_valid
+                                ? current.player_cached_position[1]
+                                : current.player_position[1];
+  if (!g_landing_observer_valid) {
+    g_landing_observer_valid = true;
+    g_landing_observer_previous_y = current_y;
+    g_landing_observer_airborne = current.player_contact_count == 0;
+    g_landing_observer_airborne_ticks =
+        g_landing_observer_airborne ? 1u : 0u;
+    return;
+  }
+
+  const int32_t vertical_delta = static_cast<int32_t>(std::min<int64_t>(
+      std::llabs(static_cast<int64_t>(current_y) -
+                 g_landing_observer_previous_y),
+      std::numeric_limits<int32_t>::max()));
+  const bool has_contact = current.player_contact_count != 0;
+  if (!has_contact) {
+    g_landing_observer_airborne = true;
+    ++g_landing_observer_airborne_ticks;
+    g_landing_observer_peak_vertical_delta = std::max(
+        g_landing_observer_peak_vertical_delta, vertical_delta);
+  } else if (g_landing_observer_airborne) {
+    // Require both a real airborne endpoint and meaningful vertical motion.
+    // This rejects ordinary wall/pipe contacts, which can also increment the
+    // engine's contact counter while the player stays on the floor.
+    constexpr int32_t kMinimumLandingVerticalDelta = 24;
+    const int32_t peak = std::max(g_landing_observer_peak_vertical_delta,
+                                  vertical_delta);
+    if (g_landing_observer_airborne_ticks >= 1u &&
+        peak >= kMinimumLandingVerticalDelta) {
+      const uint32_t raw_percent = static_cast<uint32_t>(std::clamp(
+          42 + peak / 8, 42, 90));
+      const uint32_t scaled_percent = static_cast<uint32_t>(
+          (static_cast<uint64_t>(raw_percent) *
+               g_xinput_vibration_strength_percent +
+           50u) /
+          100u);
+      g_landing_vibration_percent.store(scaled_percent,
+                                         std::memory_order_release);
+      g_landing_vibration_pending.store(true, std::memory_order_release);
+      AppendNativeLog(
+          "game_event landing queued airborne_ticks=%u peak_vertical=%d "
+          "contacts=%u strength=%u duration_ms=%u",
+          g_landing_observer_airborne_ticks, peak,
+          current.player_contact_count, scaled_percent,
+          g_xinput_landing_vibration_ms);
+    }
+    g_landing_observer_airborne = false;
+    g_landing_observer_airborne_ticks = 0;
+    g_landing_observer_peak_vertical_delta = 0;
+  }
+  g_landing_observer_previous_y = current_y;
+}
+
 void ResetSceneHistory() {
   FlushPresentationTraceBuffer();
   g_active_presentation_trace = {};
   g_older_snapshot = {};
   g_previous_snapshot = {};
+  g_landing_observer_valid = false;
+  g_landing_observer_airborne = false;
+  g_landing_observer_airborne_ticks = 0;
+  g_landing_observer_peak_vertical_delta = 0;
   g_player_contact_exact_cooldown = 0u;
   g_player_contact_hit_window = 0u;
   g_player_contact_hits_in_window = 0u;
@@ -4750,6 +5056,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
 
   SceneSnapshot current = CaptureScene(context);
   ConsumePendingContactProjection(&current);
+  ObservePlayerLanding(current);
   const uint64_t source_tick =
       g_source_ticks.fetch_add(1, std::memory_order_relaxed) + 1;
   SampleUiEligibility();
@@ -5084,6 +5391,24 @@ void InitializePatchState() {
   g_xinput_spell_cast_vibration_ms = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"XInput", L"SpellCastVibrationMs", 260),
       80, 600));
+  g_xinput_ranged_shot_vibration_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"RangedShotVibrationMs", 115),
+      40, 350));
+  g_xinput_healing_vibration_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"HealingVibrationMs", 320),
+      100, 800));
+  g_xinput_selector_tick_vibration_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"SelectorTickVibrationMs", 38),
+      15, 120));
+  g_xinput_landing_vibration_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"LandingVibrationMs", 145),
+      50, 450));
+  g_xinput_heavy_damage_vibration_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"HeavyDamageVibrationMs", 380),
+      120, 900));
+  g_xinput_heavy_damage_threshold_hp = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"HeavyDamageThresholdHp", 12),
+      4, 100));
   g_xinput_hit_vibration_ms = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"XInput", L"HitVibrationMs", 150), 60, 400));
   g_xinput_damage_vibration_ms = static_cast<uint32_t>(std::clamp(
@@ -5153,8 +5478,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.47 tuned block action feedback "
-      "and offensive projectile XInput vibration, "
+      "Deathtrap native render overlay 0.0.48 full event XInput haptics: "
+      "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
       "session: "
@@ -5187,7 +5512,8 @@ void InitializePatchState() {
       "are observation-only and commit through Dungeon.dll+0x90610 once per "
       "real gameplay tick (enabled=%u invert=%u); XInput controller=%u "
       "base_bindings=%u hold_ms=%u deadzones=%d/%d radial=%d center_y=%d "
-      "vibration=%u/%u%% action=%u/%u/%u/%ums event=%u/%u/%ums "
+      "vibration=%u/%u%% action=%u/%u/%u/%ums event=%u/%u/%u/%u/%u/"
+      "%u/%ums heavy=%uhp/%ums "
       "available=%u "
       "message_lifetime=%u%% ui=%u_ticks/%u pst=%u_ticks/%u",
       g_weapon_wheel_enabled ? 1u : 0u,
@@ -5205,9 +5531,15 @@ void InitializePatchState() {
       g_xinput_block_vibration_ms,
       g_xinput_successful_block_vibration_ms,
       g_xinput_spell_cast_vibration_ms,
+      g_xinput_ranged_shot_vibration_ms,
+      g_xinput_healing_vibration_ms,
+      g_xinput_selector_tick_vibration_ms,
+      g_xinput_landing_vibration_ms,
       g_xinput_hit_vibration_ms,
       g_xinput_damage_vibration_ms,
       g_xinput_death_vibration_ms,
+      g_xinput_heavy_damage_threshold_hp,
+      g_xinput_heavy_damage_vibration_ms,
       g_xinput_set_state ? 1u : 0u,
       g_ui_message_lifetime_percent,
       g_ui_message_lifetime_ticks,
@@ -5432,6 +5764,60 @@ bool InstallDeathtrapNativeRenderHooks() {
   } else {
     AppendNativeLog("game_event spell_cast_hook=create_failed status=%d",
                     static_cast<int>(create_spell_cast));
+  }
+
+  // 0x1CEC0 is the retail ranged-projectile factory. It returns null when
+  // the actor cannot fire (including missing ammunition), so this hook never
+  // vibrates merely because RT was pressed.
+  void* const ranged_shot_target =
+      g_dungeon_base + kRangedWeaponLaunchRva;
+  const MH_STATUS create_ranged_shot = MH_CreateHook(
+      ranged_shot_target,
+      reinterpret_cast<void*>(&HookRangedWeaponLaunch),
+      reinterpret_cast<void**>(&g_original_ranged_weapon_launch));
+  if (create_ranged_shot == MH_OK ||
+      create_ranged_shot == MH_ERROR_ALREADY_CREATED) {
+    const MH_STATUS enable_ranged_shot = MH_EnableHook(ranged_shot_target);
+    if (enable_ranged_shot == MH_OK ||
+        enable_ranged_shot == MH_ERROR_ENABLED) {
+      g_ranged_weapon_hook_installed.store(true, std::memory_order_release);
+      AppendNativeLog("game_event ranged_projectile_hook=active rva=%08llX",
+                      static_cast<unsigned long long>(
+                          kRangedWeaponLaunchRva));
+    } else {
+      AppendNativeLog(
+          "game_event ranged_projectile_hook=enable_failed status=%d",
+          static_cast<int>(enable_ranged_shot));
+    }
+  } else {
+    AppendNativeLog(
+        "game_event ranged_projectile_hook=create_failed status=%d",
+        static_cast<int>(create_ranged_shot));
+  }
+
+  // The common consumable dispatcher is shared by all eight F4 slots. Read
+  // the engine-owned player health on both sides and signal only a real
+  // increase, which excludes utility items and failed/full-health attempts.
+  void* const consumable_target = g_dungeon_base + kUseConsumableRva;
+  const MH_STATUS create_consumable = MH_CreateHook(
+      consumable_target, reinterpret_cast<void*>(&HookUseConsumable),
+      reinterpret_cast<void**>(&g_original_use_consumable));
+  if (create_consumable == MH_OK ||
+      create_consumable == MH_ERROR_ALREADY_CREATED) {
+    const MH_STATUS enable_consumable = MH_EnableHook(consumable_target);
+    if (enable_consumable == MH_OK ||
+        enable_consumable == MH_ERROR_ENABLED) {
+      g_consumable_hook_installed.store(true, std::memory_order_release);
+      AppendNativeLog("game_event consumable_hook=active rva=%08llX "
+                      "qualification=health_increase",
+                      static_cast<unsigned long long>(kUseConsumableRva));
+    } else {
+      AppendNativeLog("game_event consumable_hook=enable_failed status=%d",
+                      static_cast<int>(enable_consumable));
+    }
+  } else {
+    AppendNativeLog("game_event consumable_hook=create_failed status=%d",
+                    static_cast<int>(create_consumable));
   }
 
   // Diagnostic-only and non-fatal. Unlike the reverted V26 experiment, this

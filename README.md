@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.47`.
+Current development version: `0.0.48`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -132,8 +132,16 @@ D3D11 settings, first-run verification and troubleshooting.
   on focus loss and after controller disconnect. Configure
   `VibrationEnabled`, `VibrationStrengthPercent`, `MeleeSwingVibrationMs`,
   `BlockVibrationMs`,
-  `SuccessfulBlockVibrationMs`, `SpellCastVibrationMs`, `HitVibrationMs`,
+  `SuccessfulBlockVibrationMs`, `SpellCastVibrationMs`,
+  `RangedShotVibrationMs`, `HealingVibrationMs`,
+  `SelectorTickVibrationMs`, `LandingVibrationMs`,
+  `HeavyDamageVibrationMs`, `HeavyDamageThresholdHp`, `HitVibrationMs`,
   `DamageVibrationMs` and `DeathVibrationMs` in the `[XInput]` section.
+  Ranged feedback is emitted only after the retail engine creates a real
+  projectile; healing requires a measured health increase; landing requires
+  an airborne-to-contact transition with vertical motion; and the heavy
+  envelope extends only confirmed player damage at or above the configured
+  threshold.
 - From process startup onward, the right stick moves the native menu pointer,
   A clicks/confirms and skips movies, the left stick or D-pad emits arrow
   navigation, B/Start goes back, and X is an alternate loading/movie skip.
