@@ -101,16 +101,18 @@ Synthetic render phases do not poll or consume input.
 
 ## XInput category bridge
 
-Version 0.0.29 splits XInput polling by ownership. Gameplay is polled once at
+Version 0.0.30 splits XInput polling by ownership. Gameplay is polled once at
 the real `Dungeon.dll+0x80600` boundary, while a lightweight frontend poll is
 active from process startup through movies, loading screens and menus. D-pad
 holds write only the retail selector mode
 byte at `+0x1086FC`, whose values 1 through 4 already dispatch the original
 close-combat, ranged, spell, and consumable rows. Direct selection uses the
 retail commit paths at `+0x90610`, `+0x90740`, `+0x7BAF0`, and `+0x7B9C0`.
-Availability is always checked through `+0x7BD30` first. The consumable path is
-reachable only after explicit A confirmation while its D-pad direction stays
-held.
+Availability is always checked through `+0x7BD30` first. Ranged and consumable
+paths are reachable only after explicit A confirmation while their D-pad
+direction stays held. A short D-pad-right tap does not enter the ranged row:
+it holds the retail `ACTION_CHALK_CROSS` binding (`C`) across one real scheduler
+interval so the legacy DirectInput poll cannot miss a zero-duration pulse.
 
 The hook at `Dungeon.dll+0x772A0` receives the retail 12-byte inventory-slot
 draw state (coordinates, icon, selected/available flags, slot number and
@@ -123,8 +125,11 @@ longer paints its old debug squares.
 Base controller bindings are emitted as ordinary foreground keyboard/mouse
 transitions. Dedicated J/K bindings call the retail side-step actions without
 the Ctrl+W diagonal collision. The right stick reaches the relative-mouse path
-only in menus or while the retail first-person mode is toggled. The retail
-action parser remains the sole owner of movement, combat, menus and collision.
+only in menus or while the retail first-person mode is toggled. Menu-pointer
+speed is independent from first-person sensitivity; first-person look uses a
+static precision curve rather than temporal filtering, avoiding extra input
+latency. The retail action parser remains the sole owner of movement, combat,
+menus and collision.
 
 Pause menus keep the live gameplay pointers, so Start maintains a small
 controller-only context latch rather than guessing from those pointers. Menu

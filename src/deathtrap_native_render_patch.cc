@@ -283,14 +283,17 @@ uint32_t g_xinput_selector_hold_ms = 225;
 int32_t g_xinput_left_deadzone = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
 int32_t g_xinput_right_deadzone = XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
 int32_t g_xinput_trigger_threshold = XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
-int32_t g_xinput_mouse_pixels = 18;
+int32_t g_xinput_first_person_pixels = 12;
+int32_t g_xinput_menu_mouse_pixels = 6;
+double g_xinput_right_stick_curve = 1.35;
 bool g_xinput_invert_right_y = false;
 int32_t g_xinput_selector_radius = 104;
 int32_t g_xinput_selector_center_y = 316;
 double g_xinput_movement_threshold = 0.14;
-double g_xinput_run_threshold = 0.58;
-double g_xinput_run_release_threshold = 0.42;
+double g_xinput_run_threshold = 0.50;
+double g_xinput_run_release_threshold = 0.30;
 bool g_xinput_run_active = false;
+uint32_t g_xinput_chalk_pulse_ticks = 0;
 uint64_t g_weapon_wheel_switches = 0;
 uint64_t g_weapon_wheel_rejections = 0;
 uint64_t g_suppressed_midpoints = 0;
@@ -751,7 +754,7 @@ struct ControllerSelectorState {
   bool direction_down = false;
   bool row_open = false;
   bool cancelled = false;
-  bool consumable_used = false;
+  bool selection_confirmed = false;
   uint32_t category = 0;
   uint32_t slot = 0;
   uint64_t pressed_ms = 0;
@@ -769,6 +772,7 @@ enum class InjectedKey : size_t {
   kSpace,
   kE,
   kQ,
+  kC,
   kTab,
   kEscape,
   kUp,
@@ -812,7 +816,7 @@ class ScopedXInputPoll {
 
 constexpr std::array<WORD, static_cast<size_t>(InjectedKey::kCount)>
     kInjectedVirtualKeys = {L'W', L'S', L'A', L'D', L'J', L'K', VK_LSHIFT,
-                            VK_SPACE, L'E', L'Q', VK_TAB, VK_ESCAPE,
+                            VK_SPACE, L'E', L'Q', L'C', VK_TAB, VK_ESCAPE,
                             VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, VK_RETURN};
 
 bool IsGameForeground() {
@@ -867,12 +871,13 @@ void InjectMouseRight(bool down) {
   }
 }
 
-void InjectRelativeMouseMove(double normalized_x, double normalized_y) {
+void InjectRelativeMouseMove(double normalized_x, double normalized_y,
+                             int32_t pixels_per_tick) {
   const LONG movement_x = static_cast<LONG>(std::lround(
-      normalized_x * static_cast<double>(g_xinput_mouse_pixels)));
+      normalized_x * static_cast<double>(pixels_per_tick)));
   const double y_sign = g_xinput_invert_right_y ? 1.0 : -1.0;
   const LONG movement_y = static_cast<LONG>(std::lround(
-      normalized_y * y_sign * static_cast<double>(g_xinput_mouse_pixels)));
+      normalized_y * y_sign * static_cast<double>(pixels_per_tick)));
   if (movement_x == 0 && movement_y == 0) {
     return;
   }
@@ -884,7 +889,15 @@ void InjectRelativeMouseMove(double normalized_x, double normalized_y) {
   SendInput(1, &input, sizeof(input));
 }
 
+double CurvedStick(double value, double exponent) {
+  if (value == 0.0) {
+    return 0.0;
+  }
+  return std::copysign(std::pow(std::abs(value), exponent), value);
+}
+
 void ReleaseInjectedControllerInput() {
+  g_xinput_chalk_pulse_ticks = 0;
   for (size_t i = 0; i < g_injected_keys.size(); ++i) {
     InjectVirtualKey(static_cast<InjectedKey>(i), false);
   }
@@ -1171,11 +1184,22 @@ void UpdateControllerSelector(const XINPUT_GAMEPAD& pad, bool gameplay) {
     if (!g_controller_selector.row_open &&
         !g_controller_selector.cancelled && duration < g_xinput_selector_hold_ms &&
         g_controller_selector.category != 4u) {
-      const uint32_t next = NextAvailableControllerSlot(
-          g_controller_selector.category, g_controller_selector.slot);
-      CommitControllerSlot(g_controller_selector.category, next);
+      if (g_controller_selector.category == 2u) {
+        // Chalk is a distinct PC action (ACTION_CHALK_CROSS), not one of the
+        // six ranged-weapon inventory entries. A quick D-pad-right tap uses
+        // that retail action; holding right still opens the ranged selector.
+        // Keep C asserted until the next real scheduler poll. Sending down and
+        // up back-to-back can be lost by the game's legacy DirectInput path.
+        g_xinput_chalk_pulse_ticks = 1;
+        AppendNativeLog("xinput chalk action");
+      } else {
+        const uint32_t next = NextAvailableControllerSlot(
+            g_controller_selector.category, g_controller_selector.slot);
+        CommitControllerSlot(g_controller_selector.category, next);
+      }
     } else if (g_controller_selector.row_open &&
                !g_controller_selector.cancelled &&
+               g_controller_selector.category != 2u &&
                g_controller_selector.category != 4u) {
       CommitControllerSlot(g_controller_selector.category,
                            g_controller_selector.slot);
@@ -1200,18 +1224,20 @@ void UpdateControllerSelector(const XINPUT_GAMEPAD& pad, bool gameplay) {
       g_controller_selector.category, g_controller_selector.slot);
   PublishControllerSelector(true, g_controller_selector.category,
                             g_controller_selector.slot, available,
-                            g_controller_selector.category == 4u);
+                            g_controller_selector.category == 2u ||
+                                g_controller_selector.category == 4u);
   if (pad.wButtons & XINPUT_GAMEPAD_B) {
     g_controller_selector.cancelled = true;
     SetNativeSelectorMode(0);
     PublishControllerSelector(false, 0, 0, false, false);
     AppendNativeLog("xinput selector cancel category=%u",
                     g_controller_selector.category);
-  } else if (g_controller_selector.category == 4u && available &&
-             !g_controller_selector.consumable_used &&
+  } else if ((g_controller_selector.category == 2u ||
+              g_controller_selector.category == 4u) &&
+             available && !g_controller_selector.selection_confirmed &&
              (pad.wButtons & XINPUT_GAMEPAD_A)) {
-    g_controller_selector.consumable_used =
-        CommitControllerSlot(4u, g_controller_selector.slot);
+    g_controller_selector.selection_confirmed = CommitControllerSlot(
+        g_controller_selector.category, g_controller_selector.slot);
     g_controller_selector.cancelled = true;
     SetNativeSelectorMode(0);
     PublishControllerSelector(false, 0, 0, false, false);
@@ -1275,6 +1301,10 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
                          (buttons & XINPUT_GAMEPAD_A));
     InjectVirtualKey(InjectedKey::kE, buttons & XINPUT_GAMEPAD_X);
     InjectVirtualKey(InjectedKey::kQ, buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
+    InjectVirtualKey(InjectedKey::kC, g_xinput_chalk_pulse_ticks != 0);
+    if (g_xinput_chalk_pulse_ticks != 0) {
+      --g_xinput_chalk_pulse_ticks;
+    }
     if (!selector_captures_controls &&
         (pressed & XINPUT_GAMEPAD_RIGHT_THUMB)) {
       g_xinput_first_person_toggled = !g_xinput_first_person_toggled;
@@ -1294,7 +1324,10 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     InjectVirtualKey(InjectedKey::kEnter, false);
 
     if (!selector_captures_controls && g_xinput_first_person_toggled) {
-      InjectRelativeMouseMove(right_x, right_y);
+      InjectRelativeMouseMove(
+          CurvedStick(right_x, g_xinput_right_stick_curve),
+          CurvedStick(right_y, g_xinput_right_stick_curve),
+          g_xinput_first_person_pixels);
     }
   } else {
     g_xinput_first_person_toggled = false;
@@ -1313,6 +1346,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
                      (buttons & (XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_X)) != 0);
     InjectVirtualKey(InjectedKey::kE, false);
     InjectVirtualKey(InjectedKey::kQ, false);
+    InjectVirtualKey(InjectedKey::kC, false);
     InjectVirtualKey(InjectedKey::kTab, false);
     InjectMouseLeft(false);
     InjectMouseRight(false);
@@ -1327,10 +1361,11 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     InjectVirtualKey(InjectedKey::kEnter,
                      (buttons & XINPUT_GAMEPAD_A) != 0);
     const int32_t menu_mouse_x = static_cast<int32_t>(std::lround(
-        right_x * static_cast<double>(g_xinput_mouse_pixels)));
+        right_x * static_cast<double>(g_xinput_menu_mouse_pixels)));
     const double menu_y_sign = g_xinput_invert_right_y ? 1.0 : -1.0;
     const int32_t menu_mouse_y = static_cast<int32_t>(std::lround(
-        right_y * menu_y_sign * static_cast<double>(g_xinput_mouse_pixels)));
+        right_y * menu_y_sign *
+        static_cast<double>(g_xinput_menu_mouse_pixels)));
     SubmitDeathtrapXInputMouseState(
         menu_mouse_x, menu_mouse_y,
         (buttons & XINPUT_GAMEPAD_A) != 0, false);
@@ -1396,6 +1431,7 @@ void UpdateDeathtrapXInput() {
   const bool selector_captures_controls =
       g_controller_selector.direction_down &&
       (g_controller_selector.row_open ||
+       g_controller_selector.category == 2u ||
        g_controller_selector.category == 4u);
   UpdateControllerBaseBindings(state.Gamepad, gameplay,
                                selector_captures_controls);
@@ -4413,8 +4449,13 @@ void InitializePatchState() {
       ConfiguredInteger(L"XInput", L"TriggerThreshold",
                         XINPUT_GAMEPAD_TRIGGER_THRESHOLD),
       0, 255);
-  g_xinput_mouse_pixels = std::clamp(
-      ConfiguredInteger(L"XInput", L"RightStickPixelsPerTick", 18), 1, 80);
+  g_xinput_first_person_pixels = std::clamp(
+      ConfiguredInteger(L"XInput", L"RightStickPixelsPerTick", 12), 1, 80);
+  g_xinput_menu_mouse_pixels = std::clamp(
+      ConfiguredInteger(L"XInput", L"MenuRightStickPixelsPerTick", 6), 1, 40);
+  g_xinput_right_stick_curve = static_cast<double>(std::clamp(
+      ConfiguredInteger(L"XInput", L"RightStickResponseCurvePercent", 135),
+      100, 250)) / 100.0;
   g_xinput_invert_right_y =
       ConfiguredInteger(L"XInput", L"InvertRightY", 0) != 0;
   g_xinput_selector_radius = std::clamp(
@@ -4425,10 +4466,10 @@ void InitializePatchState() {
       ConfiguredInteger(L"XInput", L"MovementThresholdPercent", 14),
       10, 60)) / 100.0;
   g_xinput_run_threshold = static_cast<double>(std::clamp(
-      ConfiguredInteger(L"XInput", L"RunThresholdPercent", 58),
+      ConfiguredInteger(L"XInput", L"RunThresholdPercent", 50),
       40, 95)) / 100.0;
   g_xinput_run_release_threshold = static_cast<double>(std::clamp(
-      ConfiguredInteger(L"XInput", L"RunReleaseThresholdPercent", 42),
+      ConfiguredInteger(L"XInput", L"RunReleaseThresholdPercent", 30),
       20, 80)) / 100.0;
   if (g_xinput_run_release_threshold >= g_xinput_run_threshold) {
     g_xinput_run_release_threshold =
@@ -4462,7 +4503,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.29 startup controller and stable run "
+      "Deathtrap native render overlay 0.0.30 contextual ranged confirmation "
+      "and tuned controller response "
       "integer x3 presentation "
       "session: "
       "unchanged v31 "

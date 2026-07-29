@@ -131,7 +131,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.29`
+The render log must begin with the `Deathtrap native render overlay 0.0.30`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -160,7 +160,7 @@ down selects the next one).
 
 ## XInput controller layer
 
-Version 0.0.29 dynamically loads the first available Microsoft XInput runtime
+Version 0.0.30 dynamically loads the first available Microsoft XInput runtime
 (`xinput1_4`, `xinput1_3`, then `xinput9_1_0`). Gameplay is polled only at a
 real game scheduler boundary, while a separate lightweight frontend poll is
 available immediately at process startup for movies, loading and menus.
@@ -173,6 +173,8 @@ retail side-step actions. R3 toggles the retail first-person view; while it is
 active, both right-stick axes use the game's native relative-mouse path. This
 keeps the normal follow camera predictable and provides two-axis aiming without
 writing camera transforms. Set `InvertRightY=1` to invert vertical look.
+`RightStickPixelsPerTick=12` and `RightStickResponseCurvePercent=135` provide a
+slower precision response near stick center without adding temporal latency.
 
 In startup movies, loading screens and menus, right stick moves the existing
 game pointer, A clicks/confirms and sends the native movie-skip key, left stick
@@ -182,27 +184,34 @@ and buffered DirectInput mouse reads because different retail frontend screens
 use different legacy polling modes. Pressing Start explicitly switches the
 bridge between gameplay and pause-menu contexts. The layer never draws or
 captures a second cursor.
+`MenuRightStickPixelsPerTick=6` controls the frontend pointer independently of
+first-person look sensitivity.
 
 D-pad maps to the four retail selectors: up close combat, right ranged, down
-spells, and left potions/charms. A short tap cycles the next available item in
-the first three categories. Holding a direction for `SelectorHoldMs` opens the
-game's inventory selector. Its native slot renderer is repositioned into a
-large eight-direction ring, so the real icon, number, stack quantity and active
-highlight are preserved. Move the right stick to choose slot 1–8 and release
-to equip. `SelectorRadius` and `SelectorCenterY` adjust the ring in the game's
+spells, and left potions/charms. A short up/down tap cycles the next available
+close-combat weapon or spell. A short right tap generates the PC build's
+standalone `ACTION_CHALK_CROSS` action (`C` in the retail `keys.cfg`), which is
+separate from the six ranged-weapon inventory entries. Holding a direction for
+`SelectorHoldMs` opens the game's inventory selector. Its native slot renderer
+is repositioned into a large eight-direction ring, so the real icon, number,
+stack quantity and active highlight are preserved. Move the right stick to
+choose slot 1–8. Up/down equip on release; ranged and consumable selections
+require A. `SelectorRadius` and `SelectorCenterY` adjust the ring in the game's
 logical coordinate space.
 
 The validated 4:3 center is `SelectorCenterY=316`; the retail UI uses an
 upward-growing Y axis with its origin near the bottom edge, not D3D screen
 coordinates. `MovementThresholdPercent=14` keeps tank turning responsive.
-Running engages at `RunThresholdPercent=58` and disengages only below
-`RunReleaseThresholdPercent=42`; this hysteresis prevents noisy or diagonal
+Running engages at `RunThresholdPercent=50` and disengages only below
+`RunReleaseThresholdPercent=30`; this hysteresis prevents noisy or diagonal
 full-stick samples from interrupting a run with a one-tick walk transition.
 
-The consumable category never activates on release. Keep D-pad left held,
-choose a slot, and press A to use it; B or release cancels. This guard prevents
-an accidental potion or charm use. Set `XInput/Enabled=0` to disable the whole
-layer, or `XInput/BaseBindings=0` to test only the D-pad selector.
+The ranged and consumable categories never activate on release. Keep their
+D-pad direction held, choose a slot, and press A to equip or use it; B or
+release cancels. This prevents accidental ranged changes or consumption and
+leaves a short D-pad-right tap available for chalk. Set `XInput/Enabled=0` to
+disable the whole layer, or `XInput/BaseBindings=0` to test only the D-pad
+selector.
 
 The layout follows two established conventions: a community controller setup
 uses the right stick as a mouse for menus and first-person view, while hold,

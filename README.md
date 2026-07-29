@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.29`.
+Current development version: `0.0.30`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -103,26 +103,29 @@ D3D11 settings, first-run verification and troubleshooting.
   horizontal axis to the game's native side-step actions. A jumps/climbs, X
   operates, RT attacks, LT blocks, RB casts, and Start opens the menu. R3
   toggles first-person view, where the right stick controls both look axes.
-  `XInput/InvertRightY=1` reverses its vertical axis.
+  `XInput/InvertRightY=1` reverses its vertical axis. First-person look uses a
+  precision curve (`RightStickResponseCurvePercent=135`) and a reduced
+  `RightStickPixelsPerTick=12`, giving finer movement near stick center.
 - From process startup onward, the right stick moves the native menu pointer,
   A clicks/confirms and skips movies, the left stick or D-pad emits arrow
   navigation, B/Start goes back, and X is an alternate loading/movie skip.
+  `MenuRightStickPixelsPerTick=6` controls pointer speed independently.
 - `XInput/MovementThresholdPercent=14` restores responsive turning. Running
-  engages at `RunThresholdPercent=58` and remains latched until the stick falls
-  below `RunReleaseThresholdPercent=42`, preventing brief diagonal/noisy stick
+  engages at `RunThresholdPercent=50` and remains latched until the stick falls
+  below `RunReleaseThresholdPercent=30`, preventing brief diagonal/noisy stick
   samples from repeatedly dropping the character back to a walk.
 - D-pad selects the four native inventory categories: up close combat, right
-  ranged, down spells, left potions/charms. A tap cycles the next available
-  item for the first three categories. Holding for 225 ms opens a large radial
-  selector; the right stick selects slots 1–8. The game's own renderer supplies
-  each real icon, number, quantity and selection highlight. Potions and charms
-  are used only with A while D-pad left remains held; B or release cancels
-  without consuming one.
+  ranged, down spells, left potions/charms. A short up/down tap cycles close
+  combat/spells; a short right tap invokes the PC version's separate chalk-mark
+  action. Holding for 225 ms opens a large radial selector; the right stick
+  selects slots 1–8. The game's own renderer supplies each real icon, number,
+  quantity and selection highlight. Ranged items and potions/charms require A
+  while their D-pad direction remains held; B or release cancels.
 - `XInput/BaseBindings=0` keeps only the category selector and leaves all base
   controller buttons untouched.
 - `Diagnostics/DebugLog=1`: write `deathtrap_native_render.log` and
   `deathtrap_native_present.log`. Logging is normally off, but remains enabled
-  in the 0.0.29 test config.
+  in the 0.0.30 test config.
 
 ## Building
 
