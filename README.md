@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.33`.
+Current development version: `0.0.34`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -118,20 +118,19 @@ D3D11 settings, first-run verification and troubleshooting.
   ranged, down spells, left potions/charms. A short tap cycles the next
   available entry. Holding for 225 ms opens a large radial selector; the right
   stick selects slots 1–8. In the ranged row, slots 1–6 are weapons, slot 7 is
-  unused, and slot 8 invokes the PC version's separate chalk-mark action. The
+  unused, and slot 8 invokes the PC version's native F2+8 chalk path. The
   game's own renderer supplies each real inventory icon, number, quantity and
-  selection highlight. Chalk confirmation is queued as retail action `0x1A`
-  and injected at the game's own gameplay handler (`Dungeon.dll+0x85C60`),
-  before its native chalk-object update rather than at the later render stage,
-  and asserted only for that one native update, so it cannot be lost in
-  legacy DirectInput polling or repeated by synthetic render phases. Ranged
+  selection highlight. Chalk confirmation calls the same dedicated routine
+  as the retail F2+8 entry (`Dungeon.dll+0x458B0`) with the current gameplay
+  owner. It does not synthesize C and cannot be repeated by synthetic render
+  phases. Ranged
   items, chalk and potions/charms require A while their D-pad direction remains
   held; B or release cancels.
 - `XInput/BaseBindings=0` keeps only the category selector and leaves all base
   controller buttons untouched.
 - `Diagnostics/DebugLog=1`: write `deathtrap_native_render.log` and
   `deathtrap_native_present.log`. Logging is normally off, but remains enabled
-  in the 0.0.33 test config.
+  in the 0.0.34 test config.
 
 ## Building
 

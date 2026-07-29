@@ -45,7 +45,7 @@ the overlay deliberately does not take cursor ownership.
 - Keep vertical mouse-look disabled unless a later camera investigation can
   preserve framing and collision visibility.
 
-## Phase 5: XInput (implemented through 0.0.33)
+## Phase 5: XInput (implemented through 0.0.34)
 
 - Dynamically support modern Xbox controllers without redistributing XInput.
 - Drive the original keyboard/mouse actions with configurable deadzones,
@@ -54,12 +54,13 @@ the overlay deliberately does not take cursor ownership.
 - Provide right-stick pointer control, A click and keyboard fallbacks in menus.
 - Map D-pad to the four native inventory groups and right stick to eight direct
   slots, rendered radially with the retail icons, numbers and quantities.
-- Pulse chalk's retail volatile action state only inside its native gameplay
-  update at `Dungeon.dll+0x85C60`, before the game creates or updates the
-  chalk object; never inject this action at the later renderer boundary or
+- Invoke the retail F2+8 chalk routine at `Dungeon.dll+0x458B0` with the
+  current gameplay owner; never substitute the separate C action or invoke it
   during synthetic render phases.
-- Reserve ranged radial slot 8 for the PC build's standalone chalk-cross
-  action; the six native ranged weapons remain slots 1–6.
+- Reserve ranged radial slot 8 for the PC build's native chalk entry; the six
+  ranged inventory weapons remain slots 1–6 and slot 7 stays empty.
+- Take over a keyboard-opened native F1-F4 selector when D-pad input begins,
+  so switching input devices cannot block the radial selector.
 - Require explicit A confirmation for ranged items and consumables, and allow
   B/release cancel.
 - Add remapping and vibration only after this layout is gameplay-tested.

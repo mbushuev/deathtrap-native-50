@@ -101,7 +101,7 @@ Synthetic render phases do not poll or consume input.
 
 ## XInput category bridge
 
-Version 0.0.33 splits XInput polling by ownership. Gameplay is polled once at
+Version 0.0.34 splits XInput polling by ownership. Gameplay is polled once at
 the real `Dungeon.dll+0x80600` boundary, while a lightweight frontend poll is
 active from process startup through movies, loading screens and menus. D-pad
 holds write only the retail selector mode
@@ -109,18 +109,18 @@ byte at `+0x1086FC`, whose values 1 through 4 already dispatch the original
 close-combat, ranged, spell, and consumable rows. Direct selection uses the
 retail commit paths at `+0x90610`, `+0x90740`, `+0x7BAF0`, and `+0x7B9C0`.
 Availability is checked through `+0x7BD30` first for real inventory entries.
-The PC ranged row has six such entries; radial slot 7 stays empty and slot 8 is
-a bridge-owned virtual entry for the separate retail `ACTION_CHALK_CROSS`
-binding. Ranged, chalk and consumable paths require explicit A confirmation
-while their D-pad direction stays held. Chalk is action ID `0x1A`. The bridge
-queues confirmation at the scheduler boundary and consumes it inside the
-game's own `Dungeon.dll+0x85C60` gameplay handler on the following tick. This
-preserves the retail chalk-object creation and release path instead of pulsing
-the action after gameplay processing has already finished. It temporarily sets
-the retail volatile action state at `+0x1D89F8` only while that gameplay
-handler executes, then restores the previous state immediately. This bypasses
-the already-finished DirectInput poll without altering the persistent binding
-table, and synthetic render phases can neither consume nor repeat the action.
+The PC ranged row has six inventory entries; radial slot 7 stays empty and slot
+8 mirrors the dedicated chalk entry drawn by the retail F2 selector. Ranged,
+chalk and consumable paths require explicit A confirmation while their D-pad
+direction stays held. Chalk confirmation resolves the current gameplay owner
+from `[game_root+0x114]` and calls `Dungeon.dll+0x458B0`, the same routine
+invoked by the original F2+8 path. It does not emulate the separate C binding,
+and synthetic render phases can neither consume nor repeat the call.
+
+If a keyboard F1-F4 row was already left open, the first D-pad press closes
+that latched native selector mode and transfers ownership to the controller
+selector. This prevents keyboard-to-controller switching from permanently
+blocking the radial menu.
 
 The hook at `Dungeon.dll+0x772A0` receives the retail 12-byte inventory-slot
 draw state (coordinates, icon, selected/available flags, slot number and

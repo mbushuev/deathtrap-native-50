@@ -48,12 +48,8 @@ constexpr uintptr_t kSelectCloseCombatWeaponRva = 0x00090610u;
 constexpr uintptr_t kSelectRangedWeaponRva = 0x00090740u;
 constexpr uintptr_t kSelectSpellRva = 0x0007BAF0u;
 constexpr uintptr_t kUseConsumableRva = 0x0007B9C0u;
+constexpr uintptr_t kUseChalkRva = 0x000458B0u;
 constexpr uintptr_t kInventorySlotDrawRva = 0x000772A0u;
-constexpr uintptr_t kInputActionPressedRva = 0x0007B740u;
-constexpr uintptr_t kChalkActionStateRva = 0x001D89F8u;
-constexpr uintptr_t kChalkActionUpdateRva = 0x00085C60u;
-constexpr uintptr_t kChalkActionLatchRva = 0x000FC2ECu;
-constexpr int32_t kChalkActionId = 0x1A;
 constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
 constexpr size_t kMovementStageProbeCount = 95u;
 constexpr size_t kMovementCallbackProbeCount = 64u;
@@ -298,7 +294,6 @@ double g_xinput_movement_threshold = 0.14;
 double g_xinput_run_threshold = 0.50;
 double g_xinput_run_release_threshold = 0.30;
 bool g_xinput_run_active = false;
-bool g_xinput_chalk_action_pending = false;
 uint64_t g_xinput_chalk_actions_asserted = 0;
 uint64_t g_weapon_wheel_switches = 0;
 uint64_t g_weapon_wheel_rejections = 0;
@@ -353,13 +348,11 @@ using RendererFn = void(__cdecl*)(void* context);
 using InventorySlotDrawFn = void(__cdecl*)(void* slot);
 using RenderCacheUpdateFn = void(__cdecl*)(void* owner);
 using BackendFlipFn = void(__cdecl*)();
-using ChalkActionUpdateFn = void(__cdecl*)();
 
 RenderPresentWaitFn g_original_render_present_wait = nullptr;
 RendererFn g_renderer = nullptr;
 RendererFn g_original_renderer = nullptr;
 InventorySlotDrawFn g_original_inventory_slot_draw = nullptr;
-ChalkActionUpdateFn g_original_chalk_action_update = nullptr;
 RenderCacheUpdateFn g_scene_cache_update = nullptr;
 RenderCacheUpdateFn g_camera_cache_update = nullptr;
 thread_local ActivePresentationTrace g_active_presentation_trace;
@@ -905,7 +898,6 @@ double CurvedStick(double value, double exponent) {
 }
 
 void ReleaseInjectedControllerInput() {
-  g_xinput_chalk_action_pending = false;
   for (size_t i = 0; i < g_injected_keys.size(); ++i) {
     InjectVirtualKey(static_cast<InjectedKey>(i), false);
   }
@@ -1036,9 +1028,8 @@ bool ControllerSlotAvailable(uint32_t category, uint32_t slot) {
     case 1:
       return NativeWeaponAvailable(static_cast<int32_t>(slot));
     case 2:
-      // The PC build exposes six ranged inventory objects, then keeps chalk
-      // as a standalone ACTION_CHALK_CROSS action rather than an inventory
-      // object. Reserve radial slot 8 for that action; slot 7 stays empty.
+      // The retail F2 selector exposes six ranged inventory objects, leaves
+      // slot 7 empty and draws a dedicated chalk entry in slot 8.
       return (slot < 6u &&
               NativeInventoryItemAvailable(8 + static_cast<int32_t>(slot))) ||
              slot == 7u;
@@ -1051,6 +1042,34 @@ bool ControllerSlotAvailable(uint32_t category, uint32_t slot) {
     default:
       return false;
   }
+}
+
+bool UseNativeChalk() {
+  uintptr_t game_root = 0;
+  uintptr_t gameplay_owner = 0;
+  if (!SafeReadValue(g_dungeon_base + kGameRootPointerRva, &game_root) ||
+      !game_root ||
+      !SafeReadValue(reinterpret_cast<const void*>(game_root + 0x114u),
+                     &gameplay_owner) ||
+      !gameplay_owner) {
+    AppendNativeLog("xinput chalk F2+8 owner unavailable");
+    return false;
+  }
+  __try {
+    reinterpret_cast<void(__cdecl*)(void*)>(
+        g_dungeon_base + kUseChalkRva)(
+        reinterpret_cast<void*>(gameplay_owner));
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    AppendNativeLog("xinput chalk F2+8 native call failed owner=%08llX",
+                    static_cast<unsigned long long>(gameplay_owner));
+    return false;
+  }
+  ++g_xinput_chalk_actions_asserted;
+  AppendNativeLog("xinput chalk F2+8 native call owner=%08llX total=%llu",
+                  static_cast<unsigned long long>(gameplay_owner),
+                  static_cast<unsigned long long>(
+                      g_xinput_chalk_actions_asserted));
+  return true;
 }
 
 uint32_t CurrentControllerSlot(uint32_t category) {
@@ -1087,11 +1106,12 @@ bool CommitControllerSlot(uint32_t category, uint32_t slot) {
       }
       case 2: {
         if (slot == 7u) {
-          // Queue the retail ACTION_CHALK_CROSS action. It is asserted later,
-          // only around the one exact engine callback that consumes actions;
-          // synthetic render phases never observe or repeat it.
-          g_xinput_chalk_action_pending = true;
-          AppendNativeLog("xinput chalk action source=radial slot=8");
+          // Match the retail F2+8 selector exactly. Its eighth entry does not
+          // select a ranged inventory ID and does not use ACTION_CHALK_CROSS;
+          // it invokes the dedicated chalk routine with the gameplay owner.
+          if (!UseNativeChalk()) {
+            return false;
+          }
           break;
         }
         constexpr std::array<int32_t, 6> kActions = {
@@ -1182,9 +1202,16 @@ void UpdateControllerSelector(const XINPUT_GAMEPAD& pad, bool gameplay) {
   const uint64_t now = GetTickCount64();
   if (!g_controller_selector.direction_down && category != 0u) {
     uint8_t native_mode = 0;
-    if (!SafeReadValue(g_dungeon_base + kUiSelectorModeRva, &native_mode) ||
-        native_mode != 0) {
+    if (!SafeReadValue(g_dungeon_base + kUiSelectorModeRva, &native_mode)) {
       return;
+    }
+    if (native_mode != 0) {
+      // A keyboard-opened F1-F4 row remains latched after its key is released.
+      // D-pad input explicitly takes ownership so the controller selector is
+      // never permanently blocked by the old row.
+      SetNativeSelectorMode(0);
+      AppendNativeLog("xinput selector takeover native_mode=%u category=%u",
+                      native_mode, category);
     }
     g_controller_selector.direction_down = true;
     g_controller_selector.category = category;
@@ -1311,10 +1338,8 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
                          (buttons & XINPUT_GAMEPAD_A));
     InjectVirtualKey(InjectedKey::kE, buttons & XINPUT_GAMEPAD_X);
     InjectVirtualKey(InjectedKey::kQ, buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
-    // 0.0.31 briefly emitted the retail C binding here. Dungeon.dll polls
-    // DirectInput before this scheduler boundary, so that edge could be gone
-    // before ACTION_CHALK_CROSS was materialized. The exact callback wrapper
-    // below now drives the native transient action state directly.
+    // Chalk is dispatched only by the radial selector through the exact
+    // retail F2+8 routine. Never synthesize the unrelated C binding here.
     InjectVirtualKey(InjectedKey::kC, false);
     if (!selector_captures_controls &&
         (pressed & XINPUT_GAMEPAD_RIGHT_THUMB)) {
@@ -4121,50 +4146,6 @@ void CallOriginalRenderPresentWait(void* context, int wait) {
   g_original_render_present_wait(context, wait);
 }
 
-void __cdecl HookChalkActionUpdate() {
-  if (!g_xinput_chalk_action_pending || !g_dungeon_base) {
-    g_original_chalk_action_update();
-    return;
-  }
-
-  g_xinput_chalk_action_pending = false;
-  int32_t saved_chalk_state = 0;
-  int32_t latch_before = -1;
-  constexpr int32_t kPressed = 1;
-  void* const chalk_state = g_dungeon_base + kChalkActionStateRva;
-  if (!SafeReadValue(chalk_state, &saved_chalk_state) ||
-      !SafeWrite(chalk_state, &kPressed, sizeof(kPressed))) {
-    AppendNativeLog("xinput chalk gameplay assertion failed");
-    g_original_chalk_action_update();
-    return;
-  }
-
-  SafeReadValue(g_dungeon_base + kChalkActionLatchRva, &latch_before);
-  int32_t native_query = -1;
-  __try {
-    native_query = reinterpret_cast<int32_t(__cdecl*)(int32_t)>(
-        g_dungeon_base + kInputActionPressedRva)(kChalkActionId);
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-    native_query = -2;
-  }
-  ++g_xinput_chalk_actions_asserted;
-  AppendNativeLog(
-      "xinput chalk gameplay handler asserted id=%02X query=%d "
-      "latch_before=%d total=%llu",
-      kChalkActionId, native_query, latch_before,
-      static_cast<unsigned long long>(g_xinput_chalk_actions_asserted));
-
-  g_original_chalk_action_update();
-
-  int32_t latch_after = -1;
-  SafeReadValue(g_dungeon_base + kChalkActionLatchRva, &latch_after);
-  SafeWrite(chalk_state, &saved_chalk_state, sizeof(saved_chalk_state));
-  AppendNativeLog(
-      "xinput chalk gameplay handler consumed latch_after=%d "
-      "restored_state=%d",
-      latch_after, saved_chalk_state);
-}
-
 void __cdecl HookRenderPresentWait(void* context, int wait) {
   if ((GetAsyncKeyState(VK_F11) & 1) != 0) {
     const uint32_t previous =
@@ -4562,7 +4543,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.33 gameplay-stage chalk action "
+      "Deathtrap native render overlay 0.0.34 native F2+8 chalk path "
       "and tuned controller response "
       "integer x3 presentation "
       "session: "
@@ -4683,36 +4664,17 @@ bool InstallDeathtrapNativeRenderHooks() {
     return false;
   }
 
-  void* const chalk_action_target =
-      g_dungeon_base + kChalkActionUpdateRva;
-  const MH_STATUS create_chalk_action = MH_CreateHook(
-      chalk_action_target, reinterpret_cast<void*>(&HookChalkActionUpdate),
-      reinterpret_cast<void**>(&g_original_chalk_action_update));
-  if (create_chalk_action != MH_OK &&
-      create_chalk_action != MH_ERROR_ALREADY_CREATED) {
-    MH_DisableHook(inventory_slot_target);
-    return false;
-  }
-  const MH_STATUS enable_chalk_action = MH_EnableHook(chalk_action_target);
-  if (enable_chalk_action != MH_OK &&
-      enable_chalk_action != MH_ERROR_ENABLED) {
-    MH_DisableHook(inventory_slot_target);
-    return false;
-  }
-
   void* const renderer_target = g_dungeon_base + kRendererRva;
   const MH_STATUS create_renderer = MH_CreateHook(
       renderer_target, reinterpret_cast<void*>(&HookRenderer),
       reinterpret_cast<void**>(&g_original_renderer));
   if (create_renderer != MH_OK &&
       create_renderer != MH_ERROR_ALREADY_CREATED) {
-    MH_DisableHook(chalk_action_target);
     MH_DisableHook(inventory_slot_target);
     return false;
   }
   const MH_STATUS enable_renderer = MH_EnableHook(renderer_target);
   if (enable_renderer != MH_OK && enable_renderer != MH_ERROR_ENABLED) {
-    MH_DisableHook(chalk_action_target);
     MH_DisableHook(inventory_slot_target);
     return false;
   }
@@ -4723,14 +4685,12 @@ bool InstallDeathtrapNativeRenderHooks() {
       reinterpret_cast<void**>(&g_original_render_present_wait));
   if (create != MH_OK && create != MH_ERROR_ALREADY_CREATED) {
     MH_DisableHook(renderer_target);
-    MH_DisableHook(chalk_action_target);
     MH_DisableHook(inventory_slot_target);
     return false;
   }
   const MH_STATUS enable = MH_EnableHook(scheduler_target);
   if (enable != MH_OK && enable != MH_ERROR_ENABLED) {
     MH_DisableHook(renderer_target);
-    MH_DisableHook(chalk_action_target);
     MH_DisableHook(inventory_slot_target);
     return false;
   }

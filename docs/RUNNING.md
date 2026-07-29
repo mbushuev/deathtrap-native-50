@@ -131,7 +131,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.33`
+The render log must begin with the `Deathtrap native render overlay 0.0.34`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -160,7 +160,7 @@ down selects the next one).
 
 ## XInput controller layer
 
-Version 0.0.33 dynamically loads the first available Microsoft XInput runtime
+Version 0.0.34 dynamically loads the first available Microsoft XInput runtime
 (`xinput1_4`, `xinput1_3`, then `xinput9_1_0`). Gameplay is polled only at a
 real game scheduler boundary, while a separate lightweight frontend poll is
 available immediately at process startup for movies, loading and menus.
@@ -193,11 +193,11 @@ Holding a direction for `SelectorHoldMs` opens the game's inventory selector.
 Its native slot renderer is repositioned into a large eight-direction ring, so
 real inventory icons, numbers, stack quantities and active highlights are
 preserved. Move the right stick to choose slot 1–8. The PC ranged row contains
-only six inventory weapons; slot 7 remains unused and slot 8 is reserved by the
-bridge for the standalone `ACTION_CHALK_CROSS` action (`C` in retail
-`keys.cfg`). The controller path does not synthesize a late `C` keystroke: it
-asserts native action ID `0x1A` for exactly one original engine callback and
-then restores the prior volatile state. Up/down equip on release; ranged,
+only six inventory weapons; slot 7 remains unused and slot 8 is the retail
+F2+8 chalk entry. Controller confirmation calls its dedicated native routine
+at `Dungeon.dll+0x458B0` with the current gameplay owner, exactly as the
+original ranged selector does. It does not synthesize the separate C binding.
+Up/down equip on release; ranged,
 chalk and consumable selections require A. `SelectorRadius` and
 `SelectorCenterY` adjust the ring in the game's logical coordinate space.
 
