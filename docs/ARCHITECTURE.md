@@ -147,6 +147,23 @@ delta is a replaceable single sample, preventing accumulated cursor jumps
 across loading screens. The frontend poll never calls `Dungeon.dll` inventory
 or gameplay actions; those remain owned by the scheduler thread.
 
+## XInput vibration output
+
+Version 0.0.39 resolves `XInputSetState` from the same dynamically selected
+system runtime as `XInputGetState`. Vibration is an output-only controller
+layer: it never writes game state and is updated only from a real input poll,
+not from either synthetic render phase. A right-trigger threshold transition
+starts a short high-frequency attack-action envelope; a left-trigger
+transition starts a lighter low-frequency block envelope. Overlapping envelopes
+use the stronger value independently for each motor.
+
+The last motor values are cached, so `XInputSetState` is called only when the
+output changes. Both motors are explicitly cleared when gameplay loses input
+ownership, the radial selector captures controls, focus is lost, the gamepad
+disconnects, or injected controller state is released. This first stage is
+action acknowledgement rather than hit detection. Damage and confirmed-impact
+rumble must later originate from a proven simulation event.
+
 ## Original text lifetime at the higher render rate
 
 `Dungeon.dll+0x8F4C0` draws the transient on-screen messages and decrements the

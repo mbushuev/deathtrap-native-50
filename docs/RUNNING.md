@@ -137,7 +137,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.38`
+The render log must begin with the `Deathtrap native render overlay 0.0.39`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -171,6 +171,23 @@ Version 0.0.36 dynamically loads the first available Microsoft XInput runtime
 real game scheduler boundary, while a separate lightweight frontend poll is
 available immediately at process startup for movies, loading and menus.
 Synthetic native-render phases never poll or repeat controller input.
+
+Version 0.0.39 also loads `XInputSetState` from that runtime. RT starts an
+85 ms attack-action pulse and LT a distinct 55 ms block-action pulse at the
+default 70% master strength. Configure or disable them with:
+
+```ini
+[XInput]
+VibrationEnabled=1
+VibrationStrengthPercent=70
+AttackVibrationMs=85
+BlockVibrationMs=55
+```
+
+The motors are forced to zero outside active gameplay, while the radial
+selector owns the controls, on focus loss and after controller disconnect.
+The attack pulse acknowledges the action input only; confirmed-hit and player
+damage feedback require a separately verified engine event and are not faked.
 
 The default gameplay layout is left-stick forward/backward and tank turning,
 A jump/climb, X operate, RT primary attack, LT parry/block, RB cast spell and

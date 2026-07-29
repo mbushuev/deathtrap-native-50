@@ -838,6 +838,7 @@ void ConsumePendingWeaponWheel() {
 }
 
 using DynamicXInputGetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
+using DynamicXInputSetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_VIBRATION*);
 
 struct ControllerSelectorState {
   bool direction_down = false;
@@ -874,6 +875,7 @@ enum class InjectedKey : size_t {
 
 HMODULE g_xinput_module = nullptr;
 DynamicXInputGetStateFn g_xinput_get_state = nullptr;
+DynamicXInputSetStateFn g_xinput_set_state = nullptr;
 ControllerSelectorState g_controller_selector;
 std::array<bool, static_cast<size_t>(InjectedKey::kCount)>
     g_injected_keys{};
@@ -884,6 +886,16 @@ WORD g_previous_xinput_buttons = 0;
 bool g_xinput_first_person_toggled = false;
 std::atomic<bool> g_xinput_menu_mode{true};
 bool g_xinput_previous_native_gameplay = false;
+bool g_xinput_vibration_enabled = true;
+uint32_t g_xinput_vibration_strength_percent = 70u;
+uint32_t g_xinput_attack_vibration_ms = 85u;
+uint32_t g_xinput_block_vibration_ms = 55u;
+BYTE g_previous_xinput_left_trigger = 0;
+BYTE g_previous_xinput_right_trigger = 0;
+WORD g_applied_vibration_left = 0;
+WORD g_applied_vibration_right = 0;
+uint64_t g_attack_vibration_until_ms = 0;
+uint64_t g_block_vibration_until_ms = 0;
 std::atomic_flag g_xinput_poll_guard = ATOMIC_FLAG_INIT;
 
 class ScopedXInputPoll {
@@ -985,6 +997,87 @@ double CurvedStick(double value, double exponent) {
   return std::copysign(std::pow(std::abs(value), exponent), value);
 }
 
+WORD VibrationMotorValue(uint32_t percent, double channel_scale) {
+  const double scaled = std::clamp(
+      static_cast<double>(percent) * channel_scale, 0.0, 100.0);
+  return static_cast<WORD>(std::lround(
+      scaled * static_cast<double>(std::numeric_limits<WORD>::max()) / 100.0));
+}
+
+void ApplyControllerVibration(WORD left_motor, WORD right_motor) {
+  if (left_motor == g_applied_vibration_left &&
+      right_motor == g_applied_vibration_right) {
+    return;
+  }
+  if (!g_xinput_set_state) {
+    g_applied_vibration_left = 0;
+    g_applied_vibration_right = 0;
+    return;
+  }
+  XINPUT_VIBRATION vibration = {};
+  vibration.wLeftMotorSpeed = left_motor;
+  vibration.wRightMotorSpeed = right_motor;
+  if (g_xinput_set_state(g_xinput_controller_index, &vibration) ==
+      ERROR_SUCCESS) {
+    g_applied_vibration_left = left_motor;
+    g_applied_vibration_right = right_motor;
+  }
+}
+
+void StopControllerVibration() {
+  g_attack_vibration_until_ms = 0;
+  g_block_vibration_until_ms = 0;
+  g_previous_xinput_left_trigger = 0;
+  g_previous_xinput_right_trigger = 0;
+  ApplyControllerVibration(0, 0);
+}
+
+void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
+                               bool selector_captures_controls) {
+  if (!g_xinput_vibration_enabled || !gameplay ||
+      selector_captures_controls || !g_xinput_set_state) {
+    StopControllerVibration();
+    return;
+  }
+
+  const uint64_t now = GetTickCount64();
+  const bool attack_pressed =
+      pad.bRightTrigger >= g_xinput_trigger_threshold &&
+      g_previous_xinput_right_trigger < g_xinput_trigger_threshold;
+  const bool block_pressed =
+      pad.bLeftTrigger >= g_xinput_trigger_threshold &&
+      g_previous_xinput_left_trigger < g_xinput_trigger_threshold;
+  if (attack_pressed) {
+    g_attack_vibration_until_ms = now + g_xinput_attack_vibration_ms;
+  }
+  if (block_pressed) {
+    g_block_vibration_until_ms = now + g_xinput_block_vibration_ms;
+  }
+  g_previous_xinput_left_trigger = pad.bLeftTrigger;
+  g_previous_xinput_right_trigger = pad.bRightTrigger;
+
+  WORD left_motor = 0;
+  WORD right_motor = 0;
+  if (now < g_attack_vibration_until_ms) {
+    // A short high-frequency pulse confirms the native attack action without
+    // pretending to know whether the weapon hit an enemy.
+    left_motor = VibrationMotorValue(g_xinput_vibration_strength_percent,
+                                     0.32);
+    right_motor = VibrationMotorValue(g_xinput_vibration_strength_percent,
+                                      0.82);
+  }
+  if (now < g_block_vibration_until_ms) {
+    // Blocking is deliberately lower-frequency and lighter than attacking.
+    left_motor = std::max(
+        left_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.50));
+    right_motor = std::max(
+        right_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.14));
+  }
+  ApplyControllerVibration(left_motor, right_motor);
+}
+
 void ReleaseInjectedControllerInput() {
   for (size_t i = 0; i < g_injected_keys.size(); ++i) {
     InjectVirtualKey(static_cast<InjectedKey>(i), false);
@@ -997,6 +1090,7 @@ void ReleaseInjectedControllerInput() {
   g_xinput_menu_mode.store(true, std::memory_order_release);
   g_xinput_previous_native_gameplay = false;
   g_previous_xinput_buttons = 0;
+  StopControllerVibration();
 }
 
 bool LoadXInputRuntime() {
@@ -1015,6 +1109,8 @@ bool LoadXInputRuntime() {
     if (function) {
       g_xinput_module = module;
       g_xinput_get_state = function;
+      g_xinput_set_state = reinterpret_cast<DynamicXInputSetStateFn>(
+          GetProcAddress(module, "XInputSetState"));
       return true;
     }
     FreeLibrary(module);
@@ -1382,6 +1478,7 @@ double NormalizedStick(SHORT value, int32_t deadzone) {
 
 void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
                                   bool selector_captures_controls) {
+  UpdateControllerVibration(pad, gameplay, selector_captures_controls);
   if (!g_xinput_base_bindings) {
     ReleaseInjectedControllerInput();
     return;
@@ -4586,6 +4683,15 @@ void InitializePatchState() {
       100, 250)) / 100.0;
   g_xinput_invert_right_y =
       ConfiguredInteger(L"XInput", L"InvertRightY", 0) != 0;
+  g_xinput_vibration_enabled =
+      ConfiguredInteger(L"XInput", L"VibrationEnabled", 1) != 0;
+  g_xinput_vibration_strength_percent = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"VibrationStrengthPercent", 70),
+      0, 100));
+  g_xinput_attack_vibration_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"AttackVibrationMs", 85), 20, 250));
+  g_xinput_block_vibration_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"BlockVibrationMs", 55), 20, 250));
   g_ui_message_lifetime_percent = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"Text", L"MessageLifetimePercent", 300),
       100, 1000));
@@ -4612,6 +4718,9 @@ void InitializePatchState() {
   if (g_xinput_run_release_threshold >= g_xinput_run_threshold) {
     g_xinput_run_release_threshold =
         std::max(0.20, g_xinput_run_threshold - 0.12);
+  }
+  if (g_xinput_enabled) {
+    LoadXInputRuntime();
   }
   const uint32_t subframes = ConfiguredSubframes();
   g_subframes.store(subframes, std::memory_order_relaxed);
@@ -4646,8 +4755,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.38 transactional PST text "
-      "lifetime and tuned controller response "
+      "Deathtrap native render overlay 0.0.39 XInput vibration, "
+      "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
       "session: "
       "unchanged v31 "
@@ -4679,6 +4788,7 @@ void InitializePatchState() {
       "are observation-only and commit through Dungeon.dll+0x90610 once per "
       "real gameplay tick (enabled=%u invert=%u); XInput controller=%u "
       "base_bindings=%u hold_ms=%u deadzones=%d/%d radial=%d center_y=%d "
+      "vibration=%u/%u%%/%u/%ums available=%u "
       "message_lifetime=%u%% ui=%u_ticks/%u pst=%u_ticks/%u",
       g_weapon_wheel_enabled ? 1u : 0u,
       g_weapon_wheel_invert ? 1u : 0u,
@@ -4689,6 +4799,11 @@ void InitializePatchState() {
       g_xinput_right_deadzone,
       g_xinput_selector_radius,
       g_xinput_selector_center_y,
+      g_xinput_vibration_enabled ? 1u : 0u,
+      g_xinput_vibration_strength_percent,
+      g_xinput_attack_vibration_ms,
+      g_xinput_block_vibration_ms,
+      g_xinput_set_state ? 1u : 0u,
       g_ui_message_lifetime_percent,
       g_ui_message_lifetime_ticks,
       g_ui_message_lifetime_patched ? 1u : 0u,

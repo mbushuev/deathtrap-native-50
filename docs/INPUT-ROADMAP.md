@@ -63,7 +63,21 @@ the overlay deliberately does not take cursor ownership.
   so switching input devices cannot block the radial selector.
 - Require explicit A confirmation for ranged items and consumables, and allow
   B/release cancel.
-- Add remapping and vibration only after this layout is gameplay-tested.
+- Add remapping only after this layout is gameplay-tested.
+
+## Phase 6: XInput vibration (implemented in 0.0.39)
+
+- Load `XInputSetState` from the same system XInput runtime used for polling.
+- Emit one bounded pulse on the RT attack threshold transition and a distinct,
+  lighter pulse on the LT block threshold transition.
+- Never advance vibration from synthetic render phases and never reinterpret
+  an attack-button press as a confirmed weapon hit.
+- Stop both motors on menus, selector capture, focus loss, disconnect and
+  controller-input release.
+- Keep strength and pulse durations configurable in the `[XInput]` section.
+
+Health-loss and confirmed-impact feedback remains future work because it must
+be connected to a proven simulation event, not inferred from screen effects.
 
 ### Selected layout rationale
 
