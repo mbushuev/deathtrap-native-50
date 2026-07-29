@@ -84,12 +84,19 @@ Dungeon.dll+0x2F380(controller, x, y, z, room_or_sector, update_flags)
 therefore bypasses `0x2F380`; runtime `0.0.51` traces proved that this is the
 branch used in ordinary gameplay at many camera locations.
 
-Both branches copy their desired point to a local three-integer vector and
-pass it to `Dungeon.dll+0x2DF60`. That common resolver owns the collision query
-(`0x2E3A0` / `0x30910`), room clipping and smoothing. Version `0.0.52` therefore
-detours `0x2DF60`, changes only that mutable local desired-position vector
-after right-stick engagement, and invokes the original resolver once. It does
-not run a second update and does not patch the camera node or published matrix.
+Both branches eventually reach `Dungeon.dll+0x2DF60`, but the local vector it
+receives is primarily used for sector lookup. Runtime `0.0.52` traces showed
+the requested orbit yaw changing through a full circle while the published
+camera returned to a fixed endpoint. Therefore changing this local vector is
+not sufficient.
+
+Version `0.0.53` detours the mode-3 dispatcher itself at `0x2F310`. Once the
+right stick engages orbit, it bypasses the old rail/fixed-camera pre-check and
+submits the orbit target through the same `0x2F380` call used by the normal
+free-camera branch. `0x2F380` then refreshes camera state and invokes the
+original resolver exactly once. The camera node and published matrix remain
+untouched, and the native collision, room clipping and smoothing pipeline
+remains downstream.
 
 Right-stick input is sequenced on real source ticks. Multiple synthetic 50 Hz
 render phases can reuse the resulting orbit endpoint but cannot integrate the
