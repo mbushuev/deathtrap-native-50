@@ -137,7 +137,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.40`
+The render log must begin with the `Deathtrap native render overlay 0.0.41`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -175,7 +175,8 @@ Synthetic native-render phases never poll or repeat controller input.
 Version 0.0.39 also loads `XInputSetState` from that runtime. Version 0.0.40
 tunes the default profile for the game's low input-poll frequency: RT starts a
 120 ms attack-action pulse and LT a distinct 90 ms block-action pulse at 100%
-master strength. Configure or disable them with:
+master strength. Version 0.0.41 adds engine-confirmed hit, player-damage and
+death envelopes. Configure or disable them with:
 
 ```ini
 [XInput]
@@ -183,12 +184,18 @@ VibrationEnabled=1
 VibrationStrengthPercent=100
 AttackVibrationMs=120
 BlockVibrationMs=90
+HitVibrationMs=150
+DamageVibrationMs=240
+DeathVibrationMs=700
 ```
 
 The motors are forced to zero outside active gameplay, while the radial
 selector owns the controls, on focus loss and after controller disconnect.
-The attack pulse acknowledges the action input only; confirmed-hit and player
-damage feedback require a separately verified engine event and are not faked.
+The initial RT pulse still acknowledges the action input only. The additional
+impact pulse is emitted only when `Dungeon.dll+0x1C130` actually reduces target
+health. Player damage and death are identified by comparing that target with
+the current player object. With diagnostic logging enabled, the corresponding
+records are `game_event confirmed_hit` and `game_event player_damage`.
 
 The default gameplay layout is left-stick forward/backward and tank turning,
 A jump/climb, X operate, RT primary attack, LT parry/block, RB cast spell and

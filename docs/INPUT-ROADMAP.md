@@ -76,11 +76,19 @@ the overlay deliberately does not take cursor ownership.
   controller-input release.
 - Keep strength and pulse durations configurable in the `[XInput]` section.
 
-Health-loss and confirmed-impact feedback remains future work because it must
-be connected to a proven simulation event, not inferred from screen effects.
 Version 0.0.40 raises the tested action profile to 100% master strength with
 120/90 ms attack/block envelopes so pulses survive the game's coarse input
 poll cadence and remain clearly distinguishable.
+
+Version 0.0.41 completes the first engine-event feedback stage:
+
+- hook the verified common damage handler at `Dungeon.dll+0x1C130`;
+- require a real positive Q14 health delta before emitting an event;
+- distinguish player damage and death through the live player object;
+- attribute non-player damage to a recent RT/RB controller action before
+  emitting a confirmed-hit pulse;
+- merge event envelopes with the existing action envelopes per motor without
+  polling or mutating the game from synthetic render phases.
 
 ### Selected layout rationale
 

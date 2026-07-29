@@ -55,6 +55,10 @@ constexpr uintptr_t kUseConsumableRva = 0x0007B9C0u;
 constexpr uintptr_t kUseChalkRva = 0x000458B0u;
 constexpr uintptr_t kInventorySlotDrawRva = 0x000772A0u;
 constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
+constexpr uintptr_t kDamageHandlerRva = 0x0001C130u;
+constexpr uintptr_t kEntityDataOffset = 0x2Cu;
+constexpr uintptr_t kEntityHealthOffset = 0x1030u;
+constexpr int32_t kHealthFixedScale = 16384;
 constexpr size_t kMovementStageProbeCount = 95u;
 constexpr size_t kMovementCallbackProbeCount = 64u;
 constexpr std::array<uintptr_t, 5> kMovementDynamicCallbackRvas = {
@@ -280,6 +284,7 @@ std::atomic<uint64_t> g_source_ticks{0};
 std::atomic<uint64_t> g_interpolated_frames{0};
 std::atomic<uint64_t> g_interpolated_nodes{0};
 std::atomic<bool> g_render_hook_installed{false};
+std::atomic<bool> g_damage_hook_installed{false};
 std::atomic<bool> g_movement_stage_probes_installed{false};
 std::atomic<bool> g_movement_callback_probe_installed{false};
 std::atomic<int32_t> g_pending_weapon_wheel_detents{0};
@@ -376,6 +381,10 @@ using RendererFn = void(__cdecl*)(void* context);
 using InventorySlotDrawFn = void(__cdecl*)(void* slot);
 using RenderCacheUpdateFn = void(__cdecl*)(void* owner);
 using BackendFlipFn = void(__cdecl*)();
+using DamageHandlerFn = int(__cdecl*)(void* target, int32_t requested_damage,
+                                     uintptr_t damage_flags,
+                                     uintptr_t impact_event,
+                                     uintptr_t source);
 
 RenderPresentWaitFn g_original_render_present_wait = nullptr;
 RendererFn g_renderer = nullptr;
@@ -383,6 +392,7 @@ RendererFn g_original_renderer = nullptr;
 InventorySlotDrawFn g_original_inventory_slot_draw = nullptr;
 RenderCacheUpdateFn g_scene_cache_update = nullptr;
 RenderCacheUpdateFn g_camera_cache_update = nullptr;
+DamageHandlerFn g_original_damage_handler = nullptr;
 thread_local ActivePresentationTrace g_active_presentation_trace;
 std::vector<PresentationTraceSample> g_presentation_trace_buffer;
 
@@ -890,12 +900,21 @@ bool g_xinput_vibration_enabled = true;
 uint32_t g_xinput_vibration_strength_percent = 100u;
 uint32_t g_xinput_attack_vibration_ms = 120u;
 uint32_t g_xinput_block_vibration_ms = 90u;
+uint32_t g_xinput_hit_vibration_ms = 150u;
+uint32_t g_xinput_damage_vibration_ms = 240u;
+uint32_t g_xinput_death_vibration_ms = 700u;
 BYTE g_previous_xinput_left_trigger = 0;
 BYTE g_previous_xinput_right_trigger = 0;
 WORD g_applied_vibration_left = 0;
 WORD g_applied_vibration_right = 0;
 uint64_t g_attack_vibration_until_ms = 0;
 uint64_t g_block_vibration_until_ms = 0;
+std::atomic<uint64_t> g_last_controller_attack_ms{0};
+std::atomic<uint64_t> g_hit_vibration_until_ms{0};
+std::atomic<uint64_t> g_damage_vibration_until_ms{0};
+std::atomic<uint64_t> g_death_vibration_until_ms{0};
+std::atomic<uint32_t> g_hit_vibration_percent{0};
+std::atomic<uint32_t> g_damage_vibration_percent{0};
 std::atomic_flag g_xinput_poll_guard = ATOMIC_FLAG_INIT;
 
 class ScopedXInputPoll {
@@ -1027,6 +1046,12 @@ void ApplyControllerVibration(WORD left_motor, WORD right_motor) {
 void StopControllerVibration() {
   g_attack_vibration_until_ms = 0;
   g_block_vibration_until_ms = 0;
+  g_last_controller_attack_ms.store(0, std::memory_order_relaxed);
+  g_hit_vibration_until_ms.store(0, std::memory_order_relaxed);
+  g_damage_vibration_until_ms.store(0, std::memory_order_relaxed);
+  g_death_vibration_until_ms.store(0, std::memory_order_relaxed);
+  g_hit_vibration_percent.store(0, std::memory_order_relaxed);
+  g_damage_vibration_percent.store(0, std::memory_order_relaxed);
   g_previous_xinput_left_trigger = 0;
   g_previous_xinput_right_trigger = 0;
   ApplyControllerVibration(0, 0);
@@ -1047,11 +1072,20 @@ void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
   const bool block_pressed =
       pad.bLeftTrigger >= g_xinput_trigger_threshold &&
       g_previous_xinput_left_trigger < g_xinput_trigger_threshold;
+  const bool spell_pressed =
+      (pad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0 &&
+      (g_previous_xinput_buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER) == 0;
   if (attack_pressed) {
     g_attack_vibration_until_ms = now + g_xinput_attack_vibration_ms;
+    g_last_controller_attack_ms.store(now, std::memory_order_release);
     AppendNativeLog("xinput vibration attack strength=%u duration_ms=%u",
                     g_xinput_vibration_strength_percent,
                     g_xinput_attack_vibration_ms);
+  }
+  if (spell_pressed) {
+    // This is only an attribution window. The actual impact envelope starts
+    // exclusively after the engine's damage callback confirms lost health.
+    g_last_controller_attack_ms.store(now, std::memory_order_release);
   }
   if (block_pressed) {
     g_block_vibration_until_ms = now + g_xinput_block_vibration_ms;
@@ -1081,7 +1115,152 @@ void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
         right_motor,
         VibrationMotorValue(g_xinput_vibration_strength_percent, 0.30));
   }
+  const uint64_t hit_until =
+      g_hit_vibration_until_ms.load(std::memory_order_acquire);
+  if (now < hit_until) {
+    const uint32_t percent =
+        g_hit_vibration_percent.load(std::memory_order_relaxed);
+    left_motor = std::max(left_motor, VibrationMotorValue(percent, 0.60));
+    right_motor = std::max(right_motor, VibrationMotorValue(percent, 1.00));
+  }
+  const uint64_t damage_until =
+      g_damage_vibration_until_ms.load(std::memory_order_acquire);
+  if (now < damage_until) {
+    const uint32_t percent =
+        g_damage_vibration_percent.load(std::memory_order_relaxed);
+    left_motor = std::max(left_motor, VibrationMotorValue(percent, 1.00));
+    right_motor = std::max(right_motor, VibrationMotorValue(percent, 0.65));
+  }
+  const uint64_t death_until =
+      g_death_vibration_until_ms.load(std::memory_order_acquire);
+  if (now < death_until) {
+    left_motor = std::max(
+        left_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 1.00));
+    right_motor = std::max(
+        right_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.45));
+  }
   ApplyControllerVibration(left_motor, right_motor);
+}
+
+bool ReadEntityHealth(void* target, int32_t* health) {
+  if (!target || !health) {
+    return false;
+  }
+  uintptr_t entity_data = 0;
+  return SafeReadValue(reinterpret_cast<const uint8_t*>(target) +
+                           kEntityDataOffset,
+                       &entity_data) &&
+         entity_data &&
+         SafeReadValue(reinterpret_cast<const void*>(entity_data +
+                                                      kEntityHealthOffset),
+                       health);
+}
+
+uint32_t EventVibrationPercent(int32_t applied_damage, uint32_t base_percent,
+                               uint32_t percent_per_hp) {
+  const uint32_t whole_hp = static_cast<uint32_t>(std::max<int64_t>(
+      1, (static_cast<int64_t>(applied_damage) + kHealthFixedScale - 1) /
+             kHealthFixedScale));
+  const uint32_t event_percent =
+      std::min(100u, base_percent + whole_hp * percent_per_hp);
+  return static_cast<uint32_t>((static_cast<uint64_t>(event_percent) *
+                                g_xinput_vibration_strength_percent +
+                                50u) /
+                               100u);
+}
+
+void StartEventVibration(std::atomic<uint64_t>* deadline,
+                         std::atomic<uint32_t>* strength, uint64_t now,
+                         uint32_t duration_ms, uint32_t percent) {
+  if (strength) {
+    // Each confirmed event owns its intensity. The deadline still extends
+    // monotonically, but a stale stronger hit must not permanently pin all
+    // later impacts to the same motor level.
+    strength->store(percent, std::memory_order_release);
+  }
+  const uint64_t desired = now + duration_ms;
+  uint64_t observed = deadline->load(std::memory_order_relaxed);
+  while (observed < desired &&
+         !deadline->compare_exchange_weak(observed, desired,
+                                          std::memory_order_release,
+                                          std::memory_order_relaxed)) {
+  }
+}
+
+int __cdecl HookDamageHandler(void* target, int32_t requested_damage,
+                              uintptr_t damage_flags, uintptr_t impact_event,
+                              uintptr_t source) {
+  int32_t before = 0;
+  const bool before_valid = ReadEntityHealth(target, &before);
+  const int result = g_original_damage_handler(
+      target, requested_damage, damage_flags, impact_event, source);
+  int32_t after = 0;
+  const bool after_valid = ReadEntityHealth(target, &after);
+  if (!before_valid || !after_valid || after >= before) {
+    return result;
+  }
+
+  const int32_t applied_damage = before - after;
+  uintptr_t player = 0;
+  SafeReadValue(g_dungeon_base + kUiOwnerPointerRva, &player);
+  const bool player_damaged = player != 0 &&
+                              reinterpret_cast<uintptr_t>(target) == player;
+  const uint64_t now = GetTickCount64();
+  const uint32_t before_hp = static_cast<uint32_t>(
+      std::max<int64_t>(0, static_cast<int64_t>(before)) /
+      kHealthFixedScale);
+  const uint32_t after_hp = static_cast<uint32_t>(
+      std::max<int64_t>(0, static_cast<int64_t>(after)) /
+      kHealthFixedScale);
+
+  if (player_damaged) {
+    const uint32_t percent =
+        EventVibrationPercent(applied_damage, 72u, 3u);
+    StartEventVibration(&g_damage_vibration_until_ms,
+                        &g_damage_vibration_percent, now,
+                        g_xinput_damage_vibration_ms, percent);
+    if (before > 0 && after <= 0) {
+      StartEventVibration(&g_death_vibration_until_ms, nullptr, now,
+                          g_xinput_death_vibration_ms,
+                          g_xinput_vibration_strength_percent);
+    }
+    AppendNativeLog(
+        "game_event player_damage target=%08llX requested_q14=%d "
+        "applied_q14=%d hp=%u->%u death=%u result=%d source=%08llX "
+        "impact_event=%08llX damage_flags=%08llX",
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(target)),
+        requested_damage, applied_damage, before_hp, after_hp,
+        after <= 0 ? 1u : 0u, result,
+        static_cast<unsigned long long>(source),
+        static_cast<unsigned long long>(impact_event),
+        static_cast<unsigned long long>(damage_flags));
+    return result;
+  }
+
+  const uint64_t last_attack =
+      g_last_controller_attack_ms.load(std::memory_order_acquire);
+  // Attribute non-player damage to the controller only while a recent native
+  // attack or spell action can plausibly have produced it. This prevents
+  // ambient traps and enemy-on-enemy damage from vibrating the player's pad.
+  if (last_attack != 0 && now >= last_attack && now - last_attack <= 1250u) {
+    const uint32_t percent =
+        EventVibrationPercent(applied_damage, 68u, 4u);
+    StartEventVibration(&g_hit_vibration_until_ms, &g_hit_vibration_percent,
+                        now, g_xinput_hit_vibration_ms, percent);
+    AppendNativeLog(
+        "game_event confirmed_hit target=%08llX requested_q14=%d "
+        "applied_q14=%d hp=%u->%u result=%d source=%08llX "
+        "impact_event=%08llX damage_flags=%08llX age_ms=%llu",
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(target)),
+        requested_damage, applied_damage, before_hp, after_hp, result,
+        static_cast<unsigned long long>(source),
+        static_cast<unsigned long long>(impact_event),
+        static_cast<unsigned long long>(damage_flags),
+        static_cast<unsigned long long>(now - last_attack));
+  }
+  return result;
 }
 
 void ReleaseInjectedControllerInput() {
@@ -4698,6 +4877,12 @@ void InitializePatchState() {
       ConfiguredInteger(L"XInput", L"AttackVibrationMs", 120), 20, 250));
   g_xinput_block_vibration_ms = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"XInput", L"BlockVibrationMs", 90), 20, 250));
+  g_xinput_hit_vibration_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"HitVibrationMs", 150), 60, 400));
+  g_xinput_damage_vibration_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"DamageVibrationMs", 240), 80, 600));
+  g_xinput_death_vibration_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"DeathVibrationMs", 700), 200, 1500));
   g_ui_message_lifetime_percent = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"Text", L"MessageLifetimePercent", 300),
       100, 1000));
@@ -4761,7 +4946,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.40 stronger XInput vibration, "
+      "Deathtrap native render overlay 0.0.41 engine-event XInput vibration, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
       "session: "
@@ -4794,7 +4979,7 @@ void InitializePatchState() {
       "are observation-only and commit through Dungeon.dll+0x90610 once per "
       "real gameplay tick (enabled=%u invert=%u); XInput controller=%u "
       "base_bindings=%u hold_ms=%u deadzones=%d/%d radial=%d center_y=%d "
-      "vibration=%u/%u%%/%u/%ums available=%u "
+      "vibration=%u/%u%% action=%u/%ums event=%u/%u/%ums available=%u "
       "message_lifetime=%u%% ui=%u_ticks/%u pst=%u_ticks/%u",
       g_weapon_wheel_enabled ? 1u : 0u,
       g_weapon_wheel_invert ? 1u : 0u,
@@ -4809,6 +4994,9 @@ void InitializePatchState() {
       g_xinput_vibration_strength_percent,
       g_xinput_attack_vibration_ms,
       g_xinput_block_vibration_ms,
+      g_xinput_hit_vibration_ms,
+      g_xinput_damage_vibration_ms,
+      g_xinput_death_vibration_ms,
       g_xinput_set_state ? 1u : 0u,
       g_ui_message_lifetime_percent,
       g_ui_message_lifetime_ticks,
@@ -4923,6 +5111,27 @@ bool InstallDeathtrapNativeRenderHooks() {
     MH_DisableHook(renderer_target);
     MH_DisableHook(inventory_slot_target);
     return false;
+  }
+
+  // Optional event feedback. Failure must never disable the stable native-50
+  // renderer or controller input layer.
+  void* const damage_target = g_dungeon_base + kDamageHandlerRva;
+  const MH_STATUS create_damage = MH_CreateHook(
+      damage_target, reinterpret_cast<void*>(&HookDamageHandler),
+      reinterpret_cast<void**>(&g_original_damage_handler));
+  if (create_damage == MH_OK || create_damage == MH_ERROR_ALREADY_CREATED) {
+    const MH_STATUS enable_damage = MH_EnableHook(damage_target);
+    if (enable_damage == MH_OK || enable_damage == MH_ERROR_ENABLED) {
+      g_damage_hook_installed.store(true, std::memory_order_release);
+      AppendNativeLog("game_event damage_hook=active rva=%08llX",
+                      static_cast<unsigned long long>(kDamageHandlerRva));
+    } else {
+      AppendNativeLog("game_event damage_hook=enable_failed status=%d",
+                      static_cast<int>(enable_damage));
+    }
+  } else {
+    AppendNativeLog("game_event damage_hook=create_failed status=%d",
+                    static_cast<int>(create_damage));
   }
 
   // Diagnostic-only and non-fatal. Unlike the reverted V26 experiment, this

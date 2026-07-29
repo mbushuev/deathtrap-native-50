@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.40`.
+Current development version: `0.0.41`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -110,11 +110,15 @@ D3D11 settings, first-run verification and troubleshooting.
   precision curve (`RightStickResponseCurvePercent=135`) and a reduced
   `RightStickPixelsPerTick=12`, giving finer movement near stick center.
 - XInput vibration is enabled by default. RT produces a short high-frequency
-  attack-action pulse and LT a lighter low-frequency block-action pulse. The
-  motors stop in menus, on focus loss and after controller disconnect. These
-  pulses confirm native actions; they do not claim a weapon hit. Configure
-  `VibrationEnabled`, `VibrationStrengthPercent`, `AttackVibrationMs` and
-  `BlockVibrationMs` in the `[XInput]` section.
+  attack-action pulse and LT a lighter low-frequency block-action pulse.
+  Version 0.0.41 additionally hooks the game's verified damage handler and
+  emits distinct envelopes for a confirmed hit, player damage and death. A hit
+  is accepted only after target health actually decreases and only within the
+  attribution window of a recent controller attack or spell. The motors stop
+  in menus, on focus loss and after controller disconnect. Configure
+  `VibrationEnabled`, `VibrationStrengthPercent`, `AttackVibrationMs`,
+  `BlockVibrationMs`, `HitVibrationMs`, `DamageVibrationMs` and
+  `DeathVibrationMs` in the `[XInput]` section.
 - From process startup onward, the right stick moves the native menu pointer,
   A clicks/confirms and skips movies, the left stick or D-pad emits arrow
   navigation, B/Start goes back, and X is an alternate loading/movie skip.
@@ -139,7 +143,7 @@ D3D11 settings, first-run verification and troubleshooting.
   controller buttons untouched.
 - `Diagnostics/DebugLog=1`: write `deathtrap_native_render.log` and
   `deathtrap_native_present.log`. Logging is normally off, but remains enabled
-  in the 0.0.40 test config.
+  in the 0.0.41 diagnostic test config.
 
 ## Building
 

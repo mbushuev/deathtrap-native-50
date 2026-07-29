@@ -161,10 +161,26 @@ The last motor values are cached, so `XInputSetState` is called only when the
 output changes. Both motors are explicitly cleared when gameplay loses input
 ownership, the radial selector captures controls, focus is lost, the gamepad
 disconnects, or injected controller state is released. This first stage is
-action acknowledgement rather than hit detection. Damage and confirmed-impact
-rumble must later originate from a proven simulation event.
+action acknowledgement rather than hit detection.
 Version 0.0.40 strengthens and lengthens the two envelopes after hardware
 testing showed the initial conservative profile was barely perceptible.
+
+Version 0.0.41 adds a simulation-event layer without changing simulation
+state. Static analysis identified `Dungeon.dll+0x1C130` as the common damage
+handler. The target's data pointer is at `target+0x2C`, and its signed health is
+stored at `data+0x1030` in Q14 fixed point (`16384 == 1 HP`). The hook snapshots
+health before and after the original handler and ignores calls that do not
+produce a positive delta. Comparing the target with the live player pointer at
+`Dungeon.dll+0x34F9D0` distinguishes damage taken and death.
+
+Damage to a non-player target becomes confirmed-hit feedback only within 1250
+ms of a controller RT attack or RB spell action. This attribution window keeps
+ambient trap and enemy-on-enemy damage from driving the controller while still
+covering the game's coarse 16.7 Hz simulation cadence. Event deadlines are
+published atomically by the damage hook and consumed by the normal real-tick
+XInput output path. Synthetic render passes therefore neither create nor age
+rumble events. Engine-event hook failure is explicitly non-fatal to the stable
+native-50 renderer and controller input layer.
 
 ## Original text lifetime at the higher render rate
 
