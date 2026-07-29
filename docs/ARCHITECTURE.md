@@ -182,6 +182,16 @@ XInput output path. Synthetic render passes therefore neither create nor age
 rumble events. Engine-event hook failure is explicitly non-fatal to the stable
 native-50 renderer and controller input layer.
 
+Version 0.0.42 adds a second non-fatal engine hook at
+`Dungeon.dll+0x1D620`. This is the retail melee attack-window evaluator, not
+an input callback: it verifies the `ACTION_ATTACK_1` combat flag, reads the
+current animation frame through the actor's model, and compares it with the
+start/end bytes at `actor+0x10C -> descriptor+0x09/+0x0A`. A rising edge for
+the live player therefore marks the weapon's active downstroke even on a
+miss. The hook publishes one bounded full-motor envelope atomically; the
+normal real-tick XInput path remains the only code that calls
+`XInputSetState`. Confirmed damage can overlap this envelope independently.
+
 ## Original text lifetime at the higher render rate
 
 `Dungeon.dll+0x8F4C0` draws the transient on-screen messages and decrements the

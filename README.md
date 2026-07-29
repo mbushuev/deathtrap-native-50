@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.41`.
+Current development version: `0.0.42`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -114,9 +114,13 @@ D3D11 settings, first-run verification and troubleshooting.
   Version 0.0.41 additionally hooks the game's verified damage handler and
   emits distinct envelopes for a confirmed hit, player damage and death. A hit
   is accepted only after target health actually decreases and only within the
-  attribution window of a recent controller attack or spell. The motors stop
-  in menus, on focus loss and after controller disconnect. Configure
+  attribution window of a recent controller attack or spell. Version 0.0.42
+  also follows the engine's own melee animation damage window;
+  its rising edge adds a stronger full-motor downstroke pulse even when the
+  weapon misses. This is not a fixed delay from RT. The motors stop in menus,
+  on focus loss and after controller disconnect. Configure
   `VibrationEnabled`, `VibrationStrengthPercent`, `AttackVibrationMs`,
+  `MeleeSwingVibrationMs`,
   `BlockVibrationMs`, `HitVibrationMs`, `DamageVibrationMs` and
   `DeathVibrationMs` in the `[XInput]` section.
 - From process startup onward, the right stick moves the native menu pointer,

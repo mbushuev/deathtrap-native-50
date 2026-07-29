@@ -90,6 +90,16 @@ Version 0.0.41 completes the first engine-event feedback stage:
 - merge event envelopes with the existing action envelopes per motor without
   polling or mutating the game from synthetic render phases.
 
+Version 0.0.42 binds the melee downstroke itself:
+
+- hook the verified melee attack-window evaluator at
+  `Dungeon.dll+0x1D620`;
+- trigger only on the live player's inactive-to-active window transition;
+- use the engine animation frame and descriptor boundaries rather than an
+  RT-relative timer;
+- emit the stronger pulse even on a miss, while retaining collision feedback
+  as an independent overlapping event.
+
 ### Selected layout rationale
 
 The game does not expose a normal third-person free-camera action, so permanent

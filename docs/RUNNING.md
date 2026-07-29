@@ -137,7 +137,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.41`
+The render log must begin with the `Deathtrap native render overlay 0.0.42`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -176,13 +176,15 @@ Version 0.0.39 also loads `XInputSetState` from that runtime. Version 0.0.40
 tunes the default profile for the game's low input-poll frequency: RT starts a
 120 ms attack-action pulse and LT a distinct 90 ms block-action pulse at 100%
 master strength. Version 0.0.41 adds engine-confirmed hit, player-damage and
-death envelopes. Configure or disable them with:
+death envelopes. Version 0.0.42 adds a stronger engine-timed melee downstroke
+envelope that also occurs on a miss. Configure or disable them with:
 
 ```ini
 [XInput]
 VibrationEnabled=1
 VibrationStrengthPercent=100
 AttackVibrationMs=120
+MeleeSwingVibrationMs=170
 BlockVibrationMs=90
 HitVibrationMs=150
 DamageVibrationMs=240
@@ -196,6 +198,8 @@ impact pulse is emitted only when `Dungeon.dll+0x1C130` actually reduces target
 health. Player damage and death are identified by comparing that target with
 the current player object. With diagnostic logging enabled, the corresponding
 records are `game_event confirmed_hit` and `game_event player_damage`.
+The melee animation marker appears as `game_event melee_downstroke`, including
+the observed animation frame, descriptor window and active weapon ID.
 
 The default gameplay layout is left-stick forward/backward and tank turning,
 A jump/climb, X operate, RT primary attack, LT parry/block, RB cast spell and

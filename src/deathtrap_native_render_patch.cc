@@ -56,6 +56,7 @@ constexpr uintptr_t kUseChalkRva = 0x000458B0u;
 constexpr uintptr_t kInventorySlotDrawRva = 0x000772A0u;
 constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
 constexpr uintptr_t kDamageHandlerRva = 0x0001C130u;
+constexpr uintptr_t kMeleeAttackWindowRva = 0x0001D620u;
 constexpr uintptr_t kEntityDataOffset = 0x2Cu;
 constexpr uintptr_t kEntityHealthOffset = 0x1030u;
 constexpr int32_t kHealthFixedScale = 16384;
@@ -285,6 +286,7 @@ std::atomic<uint64_t> g_interpolated_frames{0};
 std::atomic<uint64_t> g_interpolated_nodes{0};
 std::atomic<bool> g_render_hook_installed{false};
 std::atomic<bool> g_damage_hook_installed{false};
+std::atomic<bool> g_melee_attack_window_hook_installed{false};
 std::atomic<bool> g_movement_stage_probes_installed{false};
 std::atomic<bool> g_movement_callback_probe_installed{false};
 std::atomic<int32_t> g_pending_weapon_wheel_detents{0};
@@ -385,6 +387,7 @@ using DamageHandlerFn = int(__cdecl*)(void* target, int32_t requested_damage,
                                      uintptr_t damage_flags,
                                      uintptr_t impact_event,
                                      uintptr_t source);
+using MeleeAttackWindowFn = int(__cdecl*)(void* actor);
 
 RenderPresentWaitFn g_original_render_present_wait = nullptr;
 RendererFn g_renderer = nullptr;
@@ -393,6 +396,7 @@ InventorySlotDrawFn g_original_inventory_slot_draw = nullptr;
 RenderCacheUpdateFn g_scene_cache_update = nullptr;
 RenderCacheUpdateFn g_camera_cache_update = nullptr;
 DamageHandlerFn g_original_damage_handler = nullptr;
+MeleeAttackWindowFn g_original_melee_attack_window = nullptr;
 thread_local ActivePresentationTrace g_active_presentation_trace;
 std::vector<PresentationTraceSample> g_presentation_trace_buffer;
 
@@ -899,6 +903,7 @@ bool g_xinput_previous_native_gameplay = false;
 bool g_xinput_vibration_enabled = true;
 uint32_t g_xinput_vibration_strength_percent = 100u;
 uint32_t g_xinput_attack_vibration_ms = 120u;
+uint32_t g_xinput_melee_swing_vibration_ms = 170u;
 uint32_t g_xinput_block_vibration_ms = 90u;
 uint32_t g_xinput_hit_vibration_ms = 150u;
 uint32_t g_xinput_damage_vibration_ms = 240u;
@@ -909,6 +914,8 @@ WORD g_applied_vibration_left = 0;
 WORD g_applied_vibration_right = 0;
 uint64_t g_attack_vibration_until_ms = 0;
 uint64_t g_block_vibration_until_ms = 0;
+std::atomic<uint64_t> g_melee_swing_vibration_until_ms{0};
+std::atomic<bool> g_player_melee_attack_window_active{false};
 std::atomic<uint64_t> g_last_controller_attack_ms{0};
 std::atomic<uint64_t> g_hit_vibration_until_ms{0};
 std::atomic<uint64_t> g_damage_vibration_until_ms{0};
@@ -1046,6 +1053,9 @@ void ApplyControllerVibration(WORD left_motor, WORD right_motor) {
 void StopControllerVibration() {
   g_attack_vibration_until_ms = 0;
   g_block_vibration_until_ms = 0;
+  g_melee_swing_vibration_until_ms.store(0, std::memory_order_relaxed);
+  g_player_melee_attack_window_active.store(false,
+                                             std::memory_order_relaxed);
   g_last_controller_attack_ms.store(0, std::memory_order_relaxed);
   g_hit_vibration_until_ms.store(0, std::memory_order_relaxed);
   g_damage_vibration_until_ms.store(0, std::memory_order_relaxed);
@@ -1114,6 +1124,19 @@ void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
     right_motor = std::max(
         right_motor,
         VibrationMotorValue(g_xinput_vibration_strength_percent, 0.30));
+  }
+  const uint64_t melee_swing_until =
+      g_melee_swing_vibration_until_ms.load(std::memory_order_acquire);
+  if (now < melee_swing_until) {
+    // This is the engine-confirmed active/downstroke phase, not a delay from
+    // the trigger press. Make it substantially heavier than the action
+    // acknowledgement, while still allowing collision feedback to overlap.
+    left_motor = std::max(
+        left_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 1.00));
+    right_motor = std::max(
+        right_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 1.00));
   }
   const uint64_t hit_until =
       g_hit_vibration_until_ms.load(std::memory_order_acquire);
@@ -1187,6 +1210,58 @@ void StartEventVibration(std::atomic<uint64_t>* deadline,
                                           std::memory_order_release,
                                           std::memory_order_relaxed)) {
   }
+}
+
+int __cdecl HookMeleeAttackWindow(void* actor) {
+  const int active = g_original_melee_attack_window(actor);
+  uintptr_t player = 0;
+  SafeReadValue(g_dungeon_base + kUiOwnerPointerRva, &player);
+  if (!player || reinterpret_cast<uintptr_t>(actor) != player) {
+    return active;
+  }
+
+  const bool in_window = active != 0;
+  const bool was_in_window = g_player_melee_attack_window_active.exchange(
+      in_window, std::memory_order_acq_rel);
+  if (in_window && !was_in_window) {
+    const uint64_t now = GetTickCount64();
+    StartEventVibration(&g_melee_swing_vibration_until_ms, nullptr, now,
+                        g_xinput_melee_swing_vibration_ms,
+                        g_xinput_vibration_strength_percent);
+
+    uintptr_t attack_descriptor = 0;
+    uint8_t start_frame = 0xFFu;
+    uint8_t end_frame = 0xFFu;
+    uint16_t animation_frame = 0xFFFFu;
+    uintptr_t model_owner = 0;
+    uintptr_t model = 0;
+    if (SafeReadValue(reinterpret_cast<const uint8_t*>(actor) + 0x10u,
+                      &model_owner) &&
+        model_owner &&
+        SafeReadValue(reinterpret_cast<const void*>(model_owner), &model) &&
+        model) {
+      SafeReadValue(reinterpret_cast<const void*>(model + 0x58u),
+                    &animation_frame);
+    }
+    if (SafeReadValue(reinterpret_cast<const uint8_t*>(actor) + 0x10Cu,
+                      &attack_descriptor) &&
+        attack_descriptor) {
+      SafeReadValue(reinterpret_cast<const void*>(attack_descriptor + 0x09u),
+                    &start_frame);
+      SafeReadValue(reinterpret_cast<const void*>(attack_descriptor + 0x0Au),
+                    &end_frame);
+    }
+    int32_t weapon_id = -1;
+    SafeReadValue(g_dungeon_base + kActiveCloseCombatWeaponRva, &weapon_id);
+    AppendNativeLog(
+        "game_event melee_downstroke actor=%08llX weapon=%d frame=%u "
+        "window=%u..%u duration_ms=%u",
+        static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(actor)),
+        weapon_id, static_cast<unsigned>(animation_frame),
+        static_cast<unsigned>(start_frame), static_cast<unsigned>(end_frame),
+        g_xinput_melee_swing_vibration_ms);
+  }
+  return active;
 }
 
 int __cdecl HookDamageHandler(void* target, int32_t requested_damage,
@@ -4875,6 +4950,8 @@ void InitializePatchState() {
       0, 100));
   g_xinput_attack_vibration_ms = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"XInput", L"AttackVibrationMs", 120), 20, 250));
+  g_xinput_melee_swing_vibration_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"MeleeSwingVibrationMs", 170), 40, 400));
   g_xinput_block_vibration_ms = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"XInput", L"BlockVibrationMs", 90), 20, 250));
   g_xinput_hit_vibration_ms = static_cast<uint32_t>(std::clamp(
@@ -4946,7 +5023,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.41 engine-event XInput vibration, "
+      "Deathtrap native render overlay 0.0.42 melee-downstroke XInput vibration, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
       "session: "
@@ -4979,7 +5056,7 @@ void InitializePatchState() {
       "are observation-only and commit through Dungeon.dll+0x90610 once per "
       "real gameplay tick (enabled=%u invert=%u); XInput controller=%u "
       "base_bindings=%u hold_ms=%u deadzones=%d/%d radial=%d center_y=%d "
-      "vibration=%u/%u%% action=%u/%ums event=%u/%u/%ums available=%u "
+      "vibration=%u/%u%% action=%u/%u/%ums event=%u/%u/%ums available=%u "
       "message_lifetime=%u%% ui=%u_ticks/%u pst=%u_ticks/%u",
       g_weapon_wheel_enabled ? 1u : 0u,
       g_weapon_wheel_invert ? 1u : 0u,
@@ -4993,6 +5070,7 @@ void InitializePatchState() {
       g_xinput_vibration_enabled ? 1u : 0u,
       g_xinput_vibration_strength_percent,
       g_xinput_attack_vibration_ms,
+      g_xinput_melee_swing_vibration_ms,
       g_xinput_block_vibration_ms,
       g_xinput_hit_vibration_ms,
       g_xinput_damage_vibration_ms,
@@ -5132,6 +5210,34 @@ bool InstallDeathtrapNativeRenderHooks() {
   } else {
     AppendNativeLog("game_event damage_hook=create_failed status=%d",
                     static_cast<int>(create_damage));
+  }
+
+  // The retail melee window evaluator compares the current animation frame
+  // with the attack descriptor's start/end markers. Its rising edge is the
+  // closest engine-owned marker for the weapon downstroke and exists even
+  // when no target is hit. Like damage feedback, failure is non-fatal.
+  void* const melee_window_target =
+      g_dungeon_base + kMeleeAttackWindowRva;
+  const MH_STATUS create_melee_window = MH_CreateHook(
+      melee_window_target, reinterpret_cast<void*>(&HookMeleeAttackWindow),
+      reinterpret_cast<void**>(&g_original_melee_attack_window));
+  if (create_melee_window == MH_OK ||
+      create_melee_window == MH_ERROR_ALREADY_CREATED) {
+    const MH_STATUS enable_melee_window = MH_EnableHook(melee_window_target);
+    if (enable_melee_window == MH_OK ||
+        enable_melee_window == MH_ERROR_ENABLED) {
+      g_melee_attack_window_hook_installed.store(true,
+                                                  std::memory_order_release);
+      AppendNativeLog("game_event melee_window_hook=active rva=%08llX",
+                      static_cast<unsigned long long>(
+                          kMeleeAttackWindowRva));
+    } else {
+      AppendNativeLog("game_event melee_window_hook=enable_failed status=%d",
+                      static_cast<int>(enable_melee_window));
+    }
+  } else {
+    AppendNativeLog("game_event melee_window_hook=create_failed status=%d",
+                    static_cast<int>(create_melee_window));
   }
 
   // Diagnostic-only and non-fatal. Unlike the reverted V26 experiment, this
