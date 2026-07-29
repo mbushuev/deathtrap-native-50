@@ -137,7 +137,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.43`
+The render log must begin with the `Deathtrap native render overlay 0.0.44`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -173,18 +173,19 @@ available immediately at process startup for movies, loading and menus.
 Synthetic native-render phases never poll or repeat controller input.
 
 Version 0.0.39 also loads `XInputSetState` from that runtime. Version 0.0.40
-tunes the default profile for the game's low input-poll frequency: RT starts a
-120 ms attack-action pulse and LT a distinct 90 ms block-action pulse at 100%
-master strength. Version 0.0.41 adds engine-confirmed hit, player-damage and
+tuned the first action profile for the game's low input-poll frequency.
+Version 0.0.44 removes the raw RT pulse: attack rumble now begins only on the
+engine-confirmed melee downstroke. LT retains a distinct 90 ms light
+block-action pulse at 100% master strength. Version 0.0.41 adds
+engine-confirmed hit, player-damage and
 death envelopes. Version 0.0.42 adds a stronger engine-timed melee downstroke
-envelope that also occurs on a miss. Version 0.0.43 adds engine-confirmed
+envelope that also occurs on a miss. Version 0.0.44 fixes engine-confirmed
 successful-block and spell-launch envelopes. Configure or disable them with:
 
 ```ini
 [XInput]
 VibrationEnabled=1
 VibrationStrengthPercent=100
-AttackVibrationMs=120
 MeleeSwingVibrationMs=170
 BlockVibrationMs=90
 SuccessfulBlockVibrationMs=210
@@ -196,15 +197,17 @@ DeathVibrationMs=700
 
 The motors are forced to zero outside active gameplay, while the radial
 selector owns the controls, on focus loss and after controller disconnect.
-The initial RT pulse still acknowledges the action input only. The additional
-impact pulse is emitted only when `Dungeon.dll+0x1C130` actually reduces target
+RT input alone never drives a motor. The melee envelope starts only when the
+retail animation enters its accepted damage window. The additional impact
+pulse is emitted only when `Dungeon.dll+0x1C130` actually reduces target
 health. Player damage and death are identified by comparing that target with
 the current player object. With diagnostic logging enabled, the corresponding
 records are `game_event confirmed_hit` and `game_event player_damage`.
 The melee animation marker appears as `game_event melee_downstroke`, including
 the observed animation frame, descriptor window and active weapon ID.
-Successful parries appear as `game_event successful_block` only after the
-retail contact branch accepts the block; simply pressing LT is insufficient.
+Successful parries appear as `game_event successful_block` only after either
+retail defended-contact branch accepts the collision while the player's live
+parry bit is set; simply pressing LT is insufficient.
 An accepted launch appears as `game_event spell_cast`, including the selected
 spell ID. Repeated RB input while the actor is already in the cast callback
 does not start another launch envelope.

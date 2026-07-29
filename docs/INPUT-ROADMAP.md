@@ -68,8 +68,8 @@ the overlay deliberately does not take cursor ownership.
 ## Phase 6: XInput vibration (implemented in 0.0.39)
 
 - Load `XInputSetState` from the same system XInput runtime used for polling.
-- Emit one bounded pulse on the RT attack threshold transition and a distinct,
-  lighter pulse on the LT block threshold transition.
+- Emit a light pulse on the LT block threshold transition; never vibrate from
+  the RT edge alone.
 - Never advance vibration from synthetic render phases and never reinterpret
   an attack-button press as a confirmed weapon hit.
 - Stop both motors on menus, selector capture, focus loss, disconnect and
@@ -100,15 +100,18 @@ Version 0.0.42 binds the melee downstroke itself:
 - emit the stronger pulse even on a miss, while retaining collision feedback
   as an independent overlapping event.
 
-Version 0.0.43 binds defensive contact and magic launch to accepted engine
+Version 0.0.44 binds defensive contact and magic launch to accepted engine
 events:
 
-- identify a successful player parry by the exact `0x1C789` return callsite
-  of the shared `0x1D2F0` impact helper;
+- identify a successful player parry through the `0x1C789` and `0x1C7E4`
+  defended-contact return callsites of the shared `0x1D2F0` impact helper;
+- require the live player-defender's `0x10000` parry bit at the moment of
+  contact;
 - require the retail parry checks to have completed instead of inferring a
   block from LT or from the absence of damage;
-- hook the accepted spell-state transition at `0x83440` and reject actors
-  already executing the active-cast callback;
+- hook the accepted spell-state transition at `0x83440`, resolve the player
+  through its controller wrapper, and reject wrappers already executing the
+  active-cast callback;
 - keep confirmed block and spell envelopes independently configurable and
   composable with melee, hit, damage and death feedback.
 

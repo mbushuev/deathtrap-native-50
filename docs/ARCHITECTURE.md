@@ -174,7 +174,8 @@ produce a positive delta. Comparing the target with the live player pointer at
 `Dungeon.dll+0x34F9D0` distinguishes damage taken and death.
 
 Damage to a non-player target becomes confirmed-hit feedback only within 1250
-ms of a controller RT attack or RB spell action. This attribution window keeps
+ms of an engine-confirmed player downstroke or spell launch. This attribution
+window keeps
 ambient trap and enemy-on-enemy damage from driving the controller while still
 covering the game's coarse 16.7 Hz simulation cadence. Event deadlines are
 published atomically by the damage hook and consumed by the normal real-tick
@@ -192,20 +193,22 @@ miss. The hook publishes one bounded full-motor envelope atomically; the
 normal real-tick XInput path remains the only code that calls
 `XInputSetState`. Confirmed damage can overlap this envelope independently.
 
-Version 0.0.43 adds two more non-fatal, observation-only event hooks. The
-combat sound helper at `Dungeon.dll+0x1D2F0` is shared, so the hook accepts it
-only when its return address is the successful-parry callsite at
-`Dungeon.dll+0x1C789` and the defender is the live player. That callsite is
-reached only after the retail parry flag, attack mask, animation window,
-facing and geometry tests pass, and it bypasses the normal damage path.
+Version 0.0.44 corrects two more non-fatal, observation-only event hooks. The
+combat sound helper at `Dungeon.dll+0x1D2F0` is shared, so the hook accepts the
+two defended-contact return callsites at `Dungeon.dll+0x1C789` and
+`Dungeon.dll+0x1C7E4`, then requires both the live player as defender and the
+live `0x10000` parry flag at `defender+0x2C -> data+0x28`. This covers the
+alternate collision resolution used by enemy attacks without treating
+ordinary weapon contact as a successful block.
 
 Spell feedback hooks `Dungeon.dll+0x83440`, the routine entered after the
-cast action and selected-spell checks. The hook requires the live player and
-rejects calls whose actor callback already equals the active cast callback at
-`Dungeon.dll+0x83510`; therefore holding or repeating RB during an existing
-cast does not masquerade as another launch. Both hooks only publish atomic
-deadlines. As with all other feedback, the real input poll remains the sole
-owner of `XInputSetState`.
+cast action and selected-spell checks. Its first argument is a controller
+wrapper, not the actor itself; the actor is read from the wrapper's first
+field and compared with the live player. Calls whose wrapper callback already
+equals the active cast callback at `Dungeon.dll+0x83510` are rejected, so
+holding or repeating RB during an existing cast does not masquerade as
+another launch. Both hooks only publish atomic deadlines. As with all other
+feedback, the real input poll remains the sole owner of `XInputSetState`.
 
 ## Original text lifetime at the higher render rate
 

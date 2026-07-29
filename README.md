@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.43`.
+Current development version: `0.0.44`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -109,21 +109,24 @@ D3D11 settings, first-run verification and troubleshooting.
   `XInput/InvertRightY=1` reverses its vertical axis. First-person look uses a
   precision curve (`RightStickResponseCurvePercent=135`) and a reduced
   `RightStickPixelsPerTick=12`, giving finer movement near stick center.
-- XInput vibration is enabled by default. RT produces a short high-frequency
-  attack-action pulse and LT a lighter low-frequency block-action pulse.
+- XInput vibration is enabled by default. LT produces a light low-frequency
+  block-action pulse. RT itself never vibrates: attack feedback begins only
+  when the engine accepts the melee downstroke, so pressing attack while the
+  character remains in block cannot create a false pulse.
   Version 0.0.41 additionally hooks the game's verified damage handler and
   emits distinct envelopes for a confirmed hit, player damage and death. A hit
   is accepted only after target health actually decreases and only within the
   attribution window of a recent controller attack or spell. Version 0.0.42
   also follows the engine's own melee animation damage window;
   its rising edge adds a stronger full-motor downstroke pulse even when the
-  weapon misses. This is not a fixed delay from RT. Version 0.0.43 adds a
+  weapon misses. This is not a fixed delay from RT. Version 0.0.44 adds a
   heavier confirmed-parry impact only after the retail facing, animation and
-  geometry tests succeed, plus a distinct high-frequency pulse when the
-  engine actually enters its spell-cast state. The motors stop in menus,
+  geometry tests succeed on either retail defended-contact path, plus a
+  distinct high-frequency pulse when the controller-owned actor actually
+  enters its spell-cast state. The motors stop in menus,
   on focus loss and after controller disconnect. Configure
-  `VibrationEnabled`, `VibrationStrengthPercent`, `AttackVibrationMs`,
-  `MeleeSwingVibrationMs`, `BlockVibrationMs`,
+  `VibrationEnabled`, `VibrationStrengthPercent`, `MeleeSwingVibrationMs`,
+  `BlockVibrationMs`,
   `SuccessfulBlockVibrationMs`, `SpellCastVibrationMs`, `HitVibrationMs`,
   `DamageVibrationMs` and `DeathVibrationMs` in the `[XInput]` section.
 - From process startup onward, the right stick moves the native menu pointer,
