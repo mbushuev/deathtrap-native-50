@@ -48,6 +48,15 @@ constexpr uintptr_t kUiOwnerPointerRva = 0x0034F9D0u;
 constexpr uintptr_t kEngineFrameCounterRva = 0x001D24DCu;
 constexpr uintptr_t kPublishedCameraMatrixRva = 0x001D4110u;
 constexpr uintptr_t kRetailCameraManagerPointerRva = 0x001F11C0u;
+// Dungeon.dll+0x30E30 dispatches the retail camera state machine through this
+// global controller. Unlike the small context camera owner above, this object
+// contains the active mode, target and cached camera values used by the
+// first-person and third-person paths.
+constexpr uintptr_t kCameraControllerRva = 0x001044A0u;
+constexpr uintptr_t kCameraControllerFlagsRva = 0x00104620u;
+constexpr uintptr_t kCameraControllerCallback0Rva = 0x00104640u;
+constexpr uintptr_t kCameraControllerCallback1Rva = 0x00104644u;
+constexpr uintptr_t kCameraControllerModeRva = 0x00104679u;
 constexpr uintptr_t kActiveCloseCombatWeaponRva = 0x001D8A68u;
 constexpr uintptr_t kActiveSpellRva = 0x001D8A6Cu;
 constexpr uintptr_t kInventoryLookupRva = 0x0007BD30u;
@@ -107,6 +116,7 @@ constexpr size_t kCameraOwnerCallbackOffset = 0x18u;
 constexpr size_t kCameraOwnerProbeDwords = 64u;
 constexpr size_t kCameraManagerProbeDwords = 32u;
 constexpr size_t kCameraNodeProbeDwords = 80u;
+constexpr size_t kCameraControllerProbeDwords = 168u;
 constexpr size_t kMaximumSceneNodes = 8192u;
 constexpr size_t kContextPrimaryCallbackOffset = 0x50u;
 constexpr size_t kContextSecondaryCallbackOffset = 0x54u;
@@ -300,13 +310,19 @@ struct CameraProbeSnapshot {
   uintptr_t manager_node = 0;
   uintptr_t node = 0;
   uintptr_t callback = 0;
+  uintptr_t controller_callback0 = 0;
+  uintptr_t controller_callback1 = 0;
+  uint32_t controller_flags = 0;
+  uint8_t controller_mode = 0;
   std::array<uint32_t, kCameraOwnerProbeDwords> owner_fields{};
   std::array<uint32_t, kCameraManagerProbeDwords> manager_fields{};
   std::array<uint32_t, kCameraNodeProbeDwords> node_fields{};
+  std::array<uint32_t, kCameraControllerProbeDwords> controller_fields{};
   Matrix3x4 published_matrix{};
   bool owner_valid = false;
   bool manager_valid = false;
   bool node_valid = false;
+  bool controller_valid = false;
   bool published_valid = false;
   bool initialized = false;
 };
@@ -3989,6 +4005,17 @@ void ProbeCameraState(void* context, const SceneSnapshot& scene,
                 &current.context_owner);
   SafeReadValue(g_dungeon_base + kRetailCameraManagerPointerRva,
                 &current.manager);
+  current.controller_valid = SafeRead(
+      g_dungeon_base + kCameraControllerRva,
+      current.controller_fields.data(), sizeof(current.controller_fields));
+  SafeReadValue(g_dungeon_base + kCameraControllerFlagsRva,
+                &current.controller_flags);
+  SafeReadValue(g_dungeon_base + kCameraControllerCallback0Rva,
+                &current.controller_callback0);
+  SafeReadValue(g_dungeon_base + kCameraControllerCallback1Rva,
+                &current.controller_callback1);
+  SafeReadValue(g_dungeon_base + kCameraControllerModeRva,
+                &current.controller_mode);
   if (current.context_owner) {
     SafeReadValue(reinterpret_cast<const void*>(
                       current.context_owner + kCameraNodeOffset),
@@ -4024,12 +4051,14 @@ void ProbeCameraState(void* context, const SceneSnapshot& scene,
        g_camera_probe_previous.node != current.node ||
        g_camera_probe_previous.callback != current.callback);
   if (!g_camera_probe_previous.initialized || identity_changed) {
-    char baseline[512] = {};
+    char baseline[768] = {};
     const int length = std::snprintf(
         baseline, sizeof(baseline),
         "camera_probe baseline tick=%llu context=%08llX owner=%08llX "
         "manager=%08llX manager_node=%08llX node=%08llX callback_rva=%08llX "
-        "owner_valid=%u manager_valid=%u node_valid=%u published_valid=%u\r\n",
+        "controller=%08llX controller_cb=%08llX/%08llX flags=%08X mode=%02X "
+        "owner_valid=%u manager_valid=%u node_valid=%u controller_valid=%u "
+        "published_valid=%u\r\n",
         static_cast<unsigned long long>(source_tick),
         static_cast<unsigned long long>(context_address),
         static_cast<unsigned long long>(current.context_owner),
@@ -4037,8 +4066,17 @@ void ProbeCameraState(void* context, const SceneSnapshot& scene,
         static_cast<unsigned long long>(current.manager_node),
         static_cast<unsigned long long>(current.node),
         static_cast<unsigned long long>(DungeonRva(current.callback)),
+        static_cast<unsigned long long>(
+            reinterpret_cast<uintptr_t>(g_dungeon_base) +
+            kCameraControllerRva),
+        static_cast<unsigned long long>(
+            DungeonRva(current.controller_callback0)),
+        static_cast<unsigned long long>(
+            DungeonRva(current.controller_callback1)),
+        current.controller_flags, static_cast<unsigned>(current.controller_mode),
         current.owner_valid ? 1u : 0u, current.manager_valid ? 1u : 0u,
-        current.node_valid ? 1u : 0u, current.published_valid ? 1u : 0u);
+        current.node_valid ? 1u : 0u, current.controller_valid ? 1u : 0u,
+        current.published_valid ? 1u : 0u);
     if (length > 0) {
       g_camera_probe_log_buffer.append(baseline,
                                        static_cast<size_t>(length));
@@ -4054,6 +4092,7 @@ void ProbeCameraState(void* context, const SceneSnapshot& scene,
   uint32_t owner_changes = 0;
   uint32_t manager_changes = 0;
   uint32_t node_changes = 0;
+  uint32_t controller_changes = 0;
   uint32_t published_changes = 0;
   if (current.owner_valid && g_camera_probe_previous.owner_valid) {
     owner_changes = AppendCameraFieldChanges(
@@ -4069,6 +4108,12 @@ void ProbeCameraState(void* context, const SceneSnapshot& scene,
     node_changes = AppendCameraFieldChanges(
         "n", g_camera_probe_previous.node_fields, current.node_fields,
         &fields);
+  }
+  if (current.controller_valid &&
+      g_camera_probe_previous.controller_valid) {
+    controller_changes = AppendCameraFieldChanges(
+        "c", g_camera_probe_previous.controller_fields,
+        current.controller_fields, &fields);
   }
   if (current.published_valid && g_camera_probe_previous.published_valid) {
     published_changes = AppendCameraFieldChanges(
@@ -4100,15 +4145,33 @@ void ProbeCameraState(void* context, const SceneSnapshot& scene,
                 player_translation.begin());
   }
 
-  char header[1024] = {};
+  const auto controller_field = [&current](size_t offset) -> uint32_t {
+    const size_t index = offset / sizeof(uint32_t);
+    return index < current.controller_fields.size()
+               ? current.controller_fields[index]
+               : 0u;
+  };
+
+  char header[1536] = {};
   const int length = std::snprintf(
       header, sizeof(header),
-      "camera_probe tick=%llu first_person=%u rs=%d/%d changes=%u/%u/%u/%u "
+      "camera_probe tick=%llu first_person=%u rs=%d/%d "
+      "changes=%u/%u/%u/%u/%u ctrl_flags=%08X ctrl_mode=%02X "
+      "ctrl_cb=%08llX/%08llX "
+      "ctrl_key=%08X/%08X/%08X/%08X/%08X/%08X/%08X/%08X/%08X "
       "camera_t=%d/%d/%d player_t=%d/%d/%d fields=[",
       static_cast<unsigned long long>(source_tick),
       g_xinput_first_person_toggled ? 1u : 0u, static_cast<int>(right_x),
       static_cast<int>(right_y), owner_changes, manager_changes, node_changes,
-      published_changes, camera_translation[0], camera_translation[1],
+      controller_changes, published_changes, current.controller_flags,
+      static_cast<unsigned>(current.controller_mode),
+      static_cast<unsigned long long>(DungeonRva(current.controller_callback0)),
+      static_cast<unsigned long long>(DungeonRva(current.controller_callback1)),
+      controller_field(0x19Cu), controller_field(0x1ACu),
+      controller_field(0x1B0u), controller_field(0x1DCu),
+      controller_field(0x1E0u), controller_field(0x1E4u),
+      controller_field(0x1E8u), controller_field(0x1ECu),
+      controller_field(0x27Cu), camera_translation[0], camera_translation[1],
       camera_translation[2], player_translation[0], player_translation[1],
       player_translation[2]);
   if (length > 0) {
@@ -5698,7 +5761,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.49 camera-owner diagnostics: "
+      "Deathtrap native render overlay 0.0.50 camera-controller diagnostics: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
