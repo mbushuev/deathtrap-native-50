@@ -192,6 +192,21 @@ miss. The hook publishes one bounded full-motor envelope atomically; the
 normal real-tick XInput path remains the only code that calls
 `XInputSetState`. Confirmed damage can overlap this envelope independently.
 
+Version 0.0.43 adds two more non-fatal, observation-only event hooks. The
+combat sound helper at `Dungeon.dll+0x1D2F0` is shared, so the hook accepts it
+only when its return address is the successful-parry callsite at
+`Dungeon.dll+0x1C789` and the defender is the live player. That callsite is
+reached only after the retail parry flag, attack mask, animation window,
+facing and geometry tests pass, and it bypasses the normal damage path.
+
+Spell feedback hooks `Dungeon.dll+0x83440`, the routine entered after the
+cast action and selected-spell checks. The hook requires the live player and
+rejects calls whose actor callback already equals the active cast callback at
+`Dungeon.dll+0x83510`; therefore holding or repeating RB during an existing
+cast does not masquerade as another launch. Both hooks only publish atomic
+deadlines. As with all other feedback, the real input poll remains the sole
+owner of `XInputSetState`.
+
 ## Original text lifetime at the higher render rate
 
 `Dungeon.dll+0x8F4C0` draws the transient on-screen messages and decrements the

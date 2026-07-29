@@ -100,6 +100,18 @@ Version 0.0.42 binds the melee downstroke itself:
 - emit the stronger pulse even on a miss, while retaining collision feedback
   as an independent overlapping event.
 
+Version 0.0.43 binds defensive contact and magic launch to accepted engine
+events:
+
+- identify a successful player parry by the exact `0x1C789` return callsite
+  of the shared `0x1D2F0` impact helper;
+- require the retail parry checks to have completed instead of inferring a
+  block from LT or from the absence of damage;
+- hook the accepted spell-state transition at `0x83440` and reject actors
+  already executing the active-cast callback;
+- keep confirmed block and spell envelopes independently configurable and
+  composable with melee, hit, damage and death feedback.
+
 ### Selected layout rationale
 
 The game does not expose a normal third-person free-camera action, so permanent

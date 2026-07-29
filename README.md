@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.42`.
+Current development version: `0.0.43`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -117,12 +117,15 @@ D3D11 settings, first-run verification and troubleshooting.
   attribution window of a recent controller attack or spell. Version 0.0.42
   also follows the engine's own melee animation damage window;
   its rising edge adds a stronger full-motor downstroke pulse even when the
-  weapon misses. This is not a fixed delay from RT. The motors stop in menus,
+  weapon misses. This is not a fixed delay from RT. Version 0.0.43 adds a
+  heavier confirmed-parry impact only after the retail facing, animation and
+  geometry tests succeed, plus a distinct high-frequency pulse when the
+  engine actually enters its spell-cast state. The motors stop in menus,
   on focus loss and after controller disconnect. Configure
   `VibrationEnabled`, `VibrationStrengthPercent`, `AttackVibrationMs`,
-  `MeleeSwingVibrationMs`,
-  `BlockVibrationMs`, `HitVibrationMs`, `DamageVibrationMs` and
-  `DeathVibrationMs` in the `[XInput]` section.
+  `MeleeSwingVibrationMs`, `BlockVibrationMs`,
+  `SuccessfulBlockVibrationMs`, `SpellCastVibrationMs`, `HitVibrationMs`,
+  `DamageVibrationMs` and `DeathVibrationMs` in the `[XInput]` section.
 - From process startup onward, the right stick moves the native menu pointer,
   A clicks/confirms and skips movies, the left stick or D-pad emits arrow
   navigation, B/Start goes back, and X is an alternate loading/movie skip.

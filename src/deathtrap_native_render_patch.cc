@@ -4,6 +4,8 @@
 
 #include <Xinput.h>
 
+#include <intrin.h>
+
 #include <MinHook.h>
 
 #include <algorithm>
@@ -47,6 +49,7 @@ constexpr uintptr_t kUiCountdownStateRva = 0x001D89F0u;
 constexpr uintptr_t kUiOwnerPointerRva = 0x0034F9D0u;
 constexpr uintptr_t kEngineFrameCounterRva = 0x001D24DCu;
 constexpr uintptr_t kActiveCloseCombatWeaponRva = 0x001D8A68u;
+constexpr uintptr_t kActiveSpellRva = 0x001D8A6Cu;
 constexpr uintptr_t kInventoryLookupRva = 0x0007BD30u;
 constexpr uintptr_t kSelectCloseCombatWeaponRva = 0x00090610u;
 constexpr uintptr_t kSelectRangedWeaponRva = 0x00090740u;
@@ -57,6 +60,10 @@ constexpr uintptr_t kInventorySlotDrawRva = 0x000772A0u;
 constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
 constexpr uintptr_t kDamageHandlerRva = 0x0001C130u;
 constexpr uintptr_t kMeleeAttackWindowRva = 0x0001D620u;
+constexpr uintptr_t kCombatImpactSoundRva = 0x0001D2F0u;
+constexpr uintptr_t kSuccessfulParryReturnRva = 0x0001C789u;
+constexpr uintptr_t kStartSpellCastRva = 0x00083440u;
+constexpr uintptr_t kSpellCastActiveCallbackRva = 0x00083510u;
 constexpr uintptr_t kEntityDataOffset = 0x2Cu;
 constexpr uintptr_t kEntityHealthOffset = 0x1030u;
 constexpr int32_t kHealthFixedScale = 16384;
@@ -287,6 +294,8 @@ std::atomic<uint64_t> g_interpolated_nodes{0};
 std::atomic<bool> g_render_hook_installed{false};
 std::atomic<bool> g_damage_hook_installed{false};
 std::atomic<bool> g_melee_attack_window_hook_installed{false};
+std::atomic<bool> g_combat_impact_hook_installed{false};
+std::atomic<bool> g_spell_cast_hook_installed{false};
 std::atomic<bool> g_movement_stage_probes_installed{false};
 std::atomic<bool> g_movement_callback_probe_installed{false};
 std::atomic<int32_t> g_pending_weapon_wheel_detents{0};
@@ -388,6 +397,8 @@ using DamageHandlerFn = int(__cdecl*)(void* target, int32_t requested_damage,
                                      uintptr_t impact_event,
                                      uintptr_t source);
 using MeleeAttackWindowFn = int(__cdecl*)(void* actor);
+using CombatImpactSoundFn = void(__cdecl*)(void* attacker, void* defender);
+using StartSpellCastFn = void(__cdecl*)(void* actor, int32_t alternate_cast);
 
 RenderPresentWaitFn g_original_render_present_wait = nullptr;
 RendererFn g_renderer = nullptr;
@@ -397,6 +408,8 @@ RenderCacheUpdateFn g_scene_cache_update = nullptr;
 RenderCacheUpdateFn g_camera_cache_update = nullptr;
 DamageHandlerFn g_original_damage_handler = nullptr;
 MeleeAttackWindowFn g_original_melee_attack_window = nullptr;
+CombatImpactSoundFn g_original_combat_impact_sound = nullptr;
+StartSpellCastFn g_original_start_spell_cast = nullptr;
 thread_local ActivePresentationTrace g_active_presentation_trace;
 std::vector<PresentationTraceSample> g_presentation_trace_buffer;
 
@@ -905,6 +918,8 @@ uint32_t g_xinput_vibration_strength_percent = 100u;
 uint32_t g_xinput_attack_vibration_ms = 120u;
 uint32_t g_xinput_melee_swing_vibration_ms = 170u;
 uint32_t g_xinput_block_vibration_ms = 90u;
+uint32_t g_xinput_successful_block_vibration_ms = 210u;
+uint32_t g_xinput_spell_cast_vibration_ms = 260u;
 uint32_t g_xinput_hit_vibration_ms = 150u;
 uint32_t g_xinput_damage_vibration_ms = 240u;
 uint32_t g_xinput_death_vibration_ms = 700u;
@@ -915,6 +930,8 @@ WORD g_applied_vibration_right = 0;
 uint64_t g_attack_vibration_until_ms = 0;
 uint64_t g_block_vibration_until_ms = 0;
 std::atomic<uint64_t> g_melee_swing_vibration_until_ms{0};
+std::atomic<uint64_t> g_successful_block_vibration_until_ms{0};
+std::atomic<uint64_t> g_spell_cast_vibration_until_ms{0};
 std::atomic<bool> g_player_melee_attack_window_active{false};
 std::atomic<uint64_t> g_last_controller_attack_ms{0};
 std::atomic<uint64_t> g_hit_vibration_until_ms{0};
@@ -1054,6 +1071,9 @@ void StopControllerVibration() {
   g_attack_vibration_until_ms = 0;
   g_block_vibration_until_ms = 0;
   g_melee_swing_vibration_until_ms.store(0, std::memory_order_relaxed);
+  g_successful_block_vibration_until_ms.store(0,
+                                               std::memory_order_relaxed);
+  g_spell_cast_vibration_until_ms.store(0, std::memory_order_relaxed);
   g_player_melee_attack_window_active.store(false,
                                              std::memory_order_relaxed);
   g_last_controller_attack_ms.store(0, std::memory_order_relaxed);
@@ -1134,6 +1154,31 @@ void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
     left_motor = std::max(
         left_motor,
         VibrationMotorValue(g_xinput_vibration_strength_percent, 1.00));
+    right_motor = std::max(
+        right_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 1.00));
+  }
+  const uint64_t successful_block_until =
+      g_successful_block_vibration_until_ms.load(std::memory_order_acquire);
+  if (now < successful_block_until) {
+    // A confirmed weapon-to-parry contact is a heavier low-frequency event
+    // than merely pressing LT. It is raised only by the engine's successful
+    // parry branch after facing, animation-window and geometry checks pass.
+    left_motor = std::max(
+        left_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 1.00));
+    right_motor = std::max(
+        right_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.70));
+  }
+  const uint64_t spell_cast_until =
+      g_spell_cast_vibration_until_ms.load(std::memory_order_acquire);
+  if (now < spell_cast_until) {
+    // Spell launch favours the high-frequency motor, giving it a distinct
+    // texture from melee, damage and a successful defensive impact.
+    left_motor = std::max(
+        left_motor,
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.70));
     right_motor = std::max(
         right_motor,
         VibrationMotorValue(g_xinput_vibration_strength_percent, 1.00));
@@ -1262,6 +1307,67 @@ int __cdecl HookMeleeAttackWindow(void* actor) {
         g_xinput_melee_swing_vibration_ms);
   }
   return active;
+}
+
+void __cdecl HookCombatImpactSound(void* attacker, void* defender) {
+  // The same sound helper is also called by a non-parry collision path. The
+  // return address uniquely identifies the retail branch that has already
+  // passed every successful-block test at Dungeon.dll+0x1C720..0x1C780.
+  const uintptr_t return_address =
+      reinterpret_cast<uintptr_t>(_ReturnAddress());
+  g_original_combat_impact_sound(attacker, defender);
+
+  uintptr_t player = 0;
+  SafeReadValue(g_dungeon_base + kUiOwnerPointerRva, &player);
+  if (!player || reinterpret_cast<uintptr_t>(defender) != player ||
+      return_address != reinterpret_cast<uintptr_t>(g_dungeon_base) +
+                            kSuccessfulParryReturnRva) {
+    return;
+  }
+
+  const uint64_t now = GetTickCount64();
+  StartEventVibration(&g_successful_block_vibration_until_ms, nullptr, now,
+                      g_xinput_successful_block_vibration_ms,
+                      g_xinput_vibration_strength_percent);
+  AppendNativeLog(
+      "game_event successful_block defender=%08llX attacker=%08llX "
+      "return_rva=%08llX duration_ms=%u",
+      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(defender)),
+      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(attacker)),
+      static_cast<unsigned long long>(kSuccessfulParryReturnRva),
+      g_xinput_successful_block_vibration_ms);
+}
+
+void __cdecl HookStartSpellCast(void* actor, int32_t alternate_cast) {
+  uintptr_t player = 0;
+  uintptr_t active_callback = 0;
+  SafeReadValue(g_dungeon_base + kUiOwnerPointerRva, &player);
+  const bool callback_valid = actor &&
+      SafeReadValue(reinterpret_cast<const uint8_t*>(actor) + 0x2F0u,
+                    &active_callback);
+  const bool starts_new_player_cast =
+      player && reinterpret_cast<uintptr_t>(actor) == player &&
+      callback_valid &&
+      active_callback != reinterpret_cast<uintptr_t>(g_dungeon_base) +
+                             kSpellCastActiveCallbackRva;
+
+  g_original_start_spell_cast(actor, alternate_cast);
+  if (!starts_new_player_cast) {
+    return;
+  }
+
+  const uint64_t now = GetTickCount64();
+  StartEventVibration(&g_spell_cast_vibration_until_ms, nullptr, now,
+                      g_xinput_spell_cast_vibration_ms,
+                      g_xinput_vibration_strength_percent);
+  g_last_controller_attack_ms.store(now, std::memory_order_release);
+  int32_t spell_id = -1;
+  SafeReadValue(g_dungeon_base + kActiveSpellRva, &spell_id);
+  AppendNativeLog(
+      "game_event spell_cast actor=%08llX spell=%d alternate=%d "
+      "duration_ms=%u",
+      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(actor)),
+      spell_id, alternate_cast, g_xinput_spell_cast_vibration_ms);
 }
 
 int __cdecl HookDamageHandler(void* target, int32_t requested_damage,
@@ -4954,6 +5060,12 @@ void InitializePatchState() {
       ConfiguredInteger(L"XInput", L"MeleeSwingVibrationMs", 170), 40, 400));
   g_xinput_block_vibration_ms = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"XInput", L"BlockVibrationMs", 90), 20, 250));
+  g_xinput_successful_block_vibration_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"SuccessfulBlockVibrationMs", 210),
+      60, 500));
+  g_xinput_spell_cast_vibration_ms = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"SpellCastVibrationMs", 260),
+      80, 600));
   g_xinput_hit_vibration_ms = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"XInput", L"HitVibrationMs", 150), 60, 400));
   g_xinput_damage_vibration_ms = static_cast<uint32_t>(std::clamp(
@@ -5023,7 +5135,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.42 melee-downstroke XInput vibration, "
+      "Deathtrap native render overlay 0.0.43 confirmed parry and spell-cast "
+      "XInput vibration, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
       "session: "
@@ -5056,7 +5169,8 @@ void InitializePatchState() {
       "are observation-only and commit through Dungeon.dll+0x90610 once per "
       "real gameplay tick (enabled=%u invert=%u); XInput controller=%u "
       "base_bindings=%u hold_ms=%u deadzones=%d/%d radial=%d center_y=%d "
-      "vibration=%u/%u%% action=%u/%u/%ums event=%u/%u/%ums available=%u "
+      "vibration=%u/%u%% action=%u/%u/%u/%u/%ums event=%u/%u/%ums "
+      "available=%u "
       "message_lifetime=%u%% ui=%u_ticks/%u pst=%u_ticks/%u",
       g_weapon_wheel_enabled ? 1u : 0u,
       g_weapon_wheel_invert ? 1u : 0u,
@@ -5072,6 +5186,8 @@ void InitializePatchState() {
       g_xinput_attack_vibration_ms,
       g_xinput_melee_swing_vibration_ms,
       g_xinput_block_vibration_ms,
+      g_xinput_successful_block_vibration_ms,
+      g_xinput_spell_cast_vibration_ms,
       g_xinput_hit_vibration_ms,
       g_xinput_damage_vibration_ms,
       g_xinput_death_vibration_ms,
@@ -5238,6 +5354,62 @@ bool InstallDeathtrapNativeRenderHooks() {
   } else {
     AppendNativeLog("game_event melee_window_hook=create_failed status=%d",
                     static_cast<int>(create_melee_window));
+  }
+
+  // Dungeon.dll+0x1D2F0 is shared by two combat paths, so the hook filters on
+  // the exact return address of the successful-parry callsite. This keeps
+  // ordinary weapon contacts and damage events out of the block envelope.
+  void* const combat_impact_target =
+      g_dungeon_base + kCombatImpactSoundRva;
+  const MH_STATUS create_combat_impact = MH_CreateHook(
+      combat_impact_target, reinterpret_cast<void*>(&HookCombatImpactSound),
+      reinterpret_cast<void**>(&g_original_combat_impact_sound));
+  if (create_combat_impact == MH_OK ||
+      create_combat_impact == MH_ERROR_ALREADY_CREATED) {
+    const MH_STATUS enable_combat_impact =
+        MH_EnableHook(combat_impact_target);
+    if (enable_combat_impact == MH_OK ||
+        enable_combat_impact == MH_ERROR_ENABLED) {
+      g_combat_impact_hook_installed.store(true,
+                                            std::memory_order_release);
+      AppendNativeLog("game_event successful_block_hook=active rva=%08llX "
+                      "callsite_return_rva=%08llX",
+                      static_cast<unsigned long long>(kCombatImpactSoundRva),
+                      static_cast<unsigned long long>(
+                          kSuccessfulParryReturnRva));
+    } else {
+      AppendNativeLog(
+          "game_event successful_block_hook=enable_failed status=%d",
+          static_cast<int>(enable_combat_impact));
+    }
+  } else {
+    AppendNativeLog(
+        "game_event successful_block_hook=create_failed status=%d",
+        static_cast<int>(create_combat_impact));
+  }
+
+  // This function is entered only after the cast input and selected-spell
+  // state have been accepted. Its own active-callback guard suppresses
+  // repeated calls while a spell is already being launched.
+  void* const spell_cast_target = g_dungeon_base + kStartSpellCastRva;
+  const MH_STATUS create_spell_cast = MH_CreateHook(
+      spell_cast_target, reinterpret_cast<void*>(&HookStartSpellCast),
+      reinterpret_cast<void**>(&g_original_start_spell_cast));
+  if (create_spell_cast == MH_OK ||
+      create_spell_cast == MH_ERROR_ALREADY_CREATED) {
+    const MH_STATUS enable_spell_cast = MH_EnableHook(spell_cast_target);
+    if (enable_spell_cast == MH_OK ||
+        enable_spell_cast == MH_ERROR_ENABLED) {
+      g_spell_cast_hook_installed.store(true, std::memory_order_release);
+      AppendNativeLog("game_event spell_cast_hook=active rva=%08llX",
+                      static_cast<unsigned long long>(kStartSpellCastRva));
+    } else {
+      AppendNativeLog("game_event spell_cast_hook=enable_failed status=%d",
+                      static_cast<int>(enable_spell_cast));
+    }
+  } else {
+    AppendNativeLog("game_event spell_cast_hook=create_failed status=%d",
+                    static_cast<int>(create_spell_cast));
   }
 
   // Diagnostic-only and non-fatal. Unlike the reverted V26 experiment, this
