@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.27`.
+Current development version: `0.0.28`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -107,6 +107,9 @@ D3D11 settings, first-run verification and troubleshooting.
 - Outside gameplay, the right stick moves the native menu pointer, A clicks,
   the left stick or D-pad emits arrow navigation, B/Start goes back, and X
   sends Space for loading/continue screens.
+- `XInput/MovementThresholdPercent=24` filters small accidental stick motion;
+  `XInput/RunThresholdPercent=92` reserves automatic running for a nearly full
+  forward/backward deflection instead of making medium motion snap to a run.
 - D-pad selects the four native inventory categories: up close combat, right
   ranged, down spells, left potions/charms. A tap cycles the next available
   item for the first three categories. Holding for 225 ms opens a large radial
@@ -118,7 +121,7 @@ D3D11 settings, first-run verification and troubleshooting.
   controller buttons untouched.
 - `Diagnostics/DebugLog=1`: write `deathtrap_native_render.log` and
   `deathtrap_native_present.log`. Logging is normally off, but remains enabled
-  in the 0.0.27 test config.
+  in the 0.0.28 test config.
 
 ## Building
 

@@ -286,7 +286,9 @@ int32_t g_xinput_trigger_threshold = XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
 int32_t g_xinput_mouse_pixels = 18;
 bool g_xinput_invert_right_y = false;
 int32_t g_xinput_selector_radius = 104;
-int32_t g_xinput_selector_center_y = 120;
+int32_t g_xinput_selector_center_y = 316;
+double g_xinput_movement_threshold = 0.24;
+double g_xinput_run_threshold = 0.92;
 uint64_t g_weapon_wheel_switches = 0;
 uint64_t g_weapon_wheel_rejections = 0;
 uint64_t g_suppressed_midpoints = 0;
@@ -785,6 +787,8 @@ bool g_injected_mouse_right = false;
 bool g_xinput_was_connected = false;
 WORD g_previous_xinput_buttons = 0;
 bool g_xinput_first_person_toggled = false;
+bool g_xinput_menu_mode = false;
+bool g_xinput_previous_native_gameplay = false;
 
 constexpr std::array<WORD, static_cast<size_t>(InjectedKey::kCount)>
     kInjectedVirtualKeys = {L'W', L'S', L'A', L'D', L'J', L'K', VK_LSHIFT,
@@ -868,6 +872,8 @@ void ReleaseInjectedControllerInput() {
   InjectMouseRight(false);
   SubmitDeathtrapXInputMouseState(0, 0, false, false);
   g_xinput_first_person_toggled = false;
+  g_xinput_menu_mode = false;
+  g_xinput_previous_native_gameplay = false;
   g_previous_xinput_buttons = 0;
 }
 
@@ -1219,20 +1225,25 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
   if (gameplay) {
     const bool strafe_modifier =
         (buttons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
-    InjectVirtualKey(InjectedKey::kW, left_y > 0.15);
-    InjectVirtualKey(InjectedKey::kS, left_y < -0.15);
+    InjectVirtualKey(InjectedKey::kW, left_y > g_xinput_movement_threshold);
+    InjectVirtualKey(InjectedKey::kS, left_y < -g_xinput_movement_threshold);
     // Default to the original predictable tank turn on the movement stick.
     // Holding LB changes only the horizontal axis to the retail side-step
     // actions, preserving forward/diagonal movement without Ctrl+W clashes.
     InjectVirtualKey(InjectedKey::kA,
-                     !strafe_modifier && left_x < -0.15);
+                     !strafe_modifier &&
+                         left_x < -g_xinput_movement_threshold);
     InjectVirtualKey(InjectedKey::kD,
-                     !strafe_modifier && left_x > 0.15);
+                     !strafe_modifier &&
+                         left_x > g_xinput_movement_threshold);
     InjectVirtualKey(InjectedKey::kJ,
-                     strafe_modifier && left_x < -0.15);
+                     strafe_modifier &&
+                         left_x < -g_xinput_movement_threshold);
     InjectVirtualKey(InjectedKey::kK,
-                     strafe_modifier && left_x > 0.15);
-    InjectVirtualKey(InjectedKey::kShift, std::abs(left_y) > 0.72);
+                     strafe_modifier &&
+                         left_x > g_xinput_movement_threshold);
+    InjectVirtualKey(InjectedKey::kShift,
+                     std::abs(left_y) > g_xinput_run_threshold);
     InjectVirtualKey(InjectedKey::kSpace,
                      !selector_captures_controls &&
                          (buttons & XINPUT_GAMEPAD_A));
@@ -1319,7 +1330,24 @@ void UpdateDeathtrapXInput() {
                     g_xinput_controller_index);
   }
   g_xinput_was_connected = true;
-  const bool gameplay = DeathtrapGameplayReady(false);
+  const bool native_gameplay = DeathtrapGameplayReady(false);
+  const WORD newly_pressed =
+      state.Gamepad.wButtons & ~g_previous_xinput_buttons;
+  if (!native_gameplay) {
+    g_xinput_menu_mode = true;
+  } else if (!g_xinput_previous_native_gameplay) {
+    // Loading/main-menu -> gameplay is an unambiguous automatic transition.
+    g_xinput_menu_mode = false;
+  }
+  if (native_gameplay && (newly_pressed & XINPUT_GAMEPAD_START)) {
+    // The pause/options menus retain the live player pointer, so the native
+    // gameplay test alone cannot identify them. Start is the authoritative
+    // transition used by the retail game and by this controller bridge.
+    g_xinput_menu_mode = !g_xinput_menu_mode;
+    AppendNativeLog("xinput menu mode=%u", g_xinput_menu_mode ? 1u : 0u);
+  }
+  g_xinput_previous_native_gameplay = native_gameplay;
+  const bool gameplay = native_gameplay && !g_xinput_menu_mode;
   UpdateControllerSelector(state.Gamepad, gameplay);
   const bool selector_captures_controls =
       g_controller_selector.direction_down &&
@@ -4315,7 +4343,13 @@ void InitializePatchState() {
   g_xinput_selector_radius = std::clamp(
       ConfiguredInteger(L"XInput", L"SelectorRadius", 104), 64, 160);
   g_xinput_selector_center_y = std::clamp(
-      ConfiguredInteger(L"XInput", L"SelectorCenterY", 120), 64, 176);
+      ConfiguredInteger(L"XInput", L"SelectorCenterY", 316), 192, 400);
+  g_xinput_movement_threshold = static_cast<double>(std::clamp(
+      ConfiguredInteger(L"XInput", L"MovementThresholdPercent", 24),
+      10, 60)) / 100.0;
+  g_xinput_run_threshold = static_cast<double>(std::clamp(
+      ConfiguredInteger(L"XInput", L"RunThresholdPercent", 92),
+      70, 100)) / 100.0;
   const uint32_t subframes = ConfiguredSubframes();
   g_subframes.store(subframes, std::memory_order_relaxed);
   if (!subframes) {
@@ -4344,7 +4378,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.27 native radial inventory "
+      "Deathtrap native render overlay 0.0.28 centered radial and menu input "
       "integer x3 presentation "
       "session: "
       "unchanged v31 "

@@ -131,7 +131,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.27`
+The render log must begin with the `Deathtrap native render overlay 0.0.28`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -160,7 +160,7 @@ down selects the next one).
 
 ## XInput controller layer
 
-Version 0.0.27 dynamically loads the first available Microsoft XInput runtime
+Version 0.0.28 dynamically loads the first available Microsoft XInput runtime
 (`xinput1_4`, `xinput1_3`, then `xinput9_1_0`) and polls controller 0 only at a
 real game scheduler boundary. Synthetic native-render phases never poll or
 repeat controller input.
@@ -175,7 +175,11 @@ writing camera transforms. Set `InvertRightY=1` to invert vertical look.
 
 In loading screens and menus, right stick moves the existing game pointer, A
 clicks, left stick or D-pad provides arrow-key fallback navigation, B or Start
-goes back, and X sends Space. The layer never draws or captures a second cursor.
+goes back, and X sends Space. The controller mouse is merged directly into the
+game's next DirectInput sample because legacy pause menus retain their gameplay
+object and do not reliably consume modern `SendInput` mouse events. Pressing
+Start explicitly switches the bridge between gameplay and pause-menu contexts.
+The layer never draws or captures a second cursor.
 
 D-pad maps to the four retail selectors: up close combat, right ranged, down
 spells, and left potions/charms. A short tap cycles the next available item in
@@ -185,6 +189,12 @@ large eight-direction ring, so the real icon, number, stack quantity and active
 highlight are preserved. Move the right stick to choose slot 1–8 and release
 to equip. `SelectorRadius` and `SelectorCenterY` adjust the ring in the game's
 logical coordinate space.
+
+The validated 4:3 center is `SelectorCenterY=316`; the retail UI uses an
+upward-growing Y axis with its origin near the bottom edge, not D3D screen
+coordinates. `MovementThresholdPercent=24` filters stick noise and
+`RunThresholdPercent=92` prevents medium deflection from immediately becoming
+a run.
 
 The consumable category never activates on release. Keep D-pad left held,
 choose a slot, and press A to use it; B or release cancels. This guard prevents
