@@ -131,7 +131,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.31`
+The render log must begin with the `Deathtrap native render overlay 0.0.32`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -160,7 +160,7 @@ down selects the next one).
 
 ## XInput controller layer
 
-Version 0.0.31 dynamically loads the first available Microsoft XInput runtime
+Version 0.0.32 dynamically loads the first available Microsoft XInput runtime
 (`xinput1_4`, `xinput1_3`, then `xinput9_1_0`). Gameplay is polled only at a
 real game scheduler boundary, while a separate lightweight frontend poll is
 available immediately at process startup for movies, loading and menus.
@@ -195,9 +195,11 @@ real inventory icons, numbers, stack quantities and active highlights are
 preserved. Move the right stick to choose slot 1–8. The PC ranged row contains
 only six inventory weapons; slot 7 remains unused and slot 8 is reserved by the
 bridge for the standalone `ACTION_CHALK_CROSS` action (`C` in retail
-`keys.cfg`). Up/down equip on release; ranged, chalk and consumable selections
-require A. `SelectorRadius` and `SelectorCenterY` adjust the ring in the game's
-logical coordinate space.
+`keys.cfg`). The controller path does not synthesize a late `C` keystroke: it
+asserts native action ID `0x1A` for exactly one original engine callback and
+then restores the prior volatile state. Up/down equip on release; ranged,
+chalk and consumable selections require A. `SelectorRadius` and
+`SelectorCenterY` adjust the ring in the game's logical coordinate space.
 
 The validated 4:3 center is `SelectorCenterY=316`; the retail UI uses an
 upward-growing Y axis with its origin near the bottom edge, not D3D screen

@@ -49,6 +49,9 @@ constexpr uintptr_t kSelectRangedWeaponRva = 0x00090740u;
 constexpr uintptr_t kSelectSpellRva = 0x0007BAF0u;
 constexpr uintptr_t kUseConsumableRva = 0x0007B9C0u;
 constexpr uintptr_t kInventorySlotDrawRva = 0x000772A0u;
+constexpr uintptr_t kInputActionPressedRva = 0x0007B740u;
+constexpr uintptr_t kChalkActionStateRva = 0x001D89F8u;
+constexpr int32_t kChalkActionId = 0x1A;
 constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
 constexpr size_t kMovementStageProbeCount = 95u;
 constexpr size_t kMovementCallbackProbeCount = 64u;
@@ -293,7 +296,8 @@ double g_xinput_movement_threshold = 0.14;
 double g_xinput_run_threshold = 0.50;
 double g_xinput_run_release_threshold = 0.30;
 bool g_xinput_run_active = false;
-uint32_t g_xinput_chalk_pulse_ticks = 0;
+bool g_xinput_chalk_action_pending = false;
+uint64_t g_xinput_chalk_actions_asserted = 0;
 uint64_t g_weapon_wheel_switches = 0;
 uint64_t g_weapon_wheel_rejections = 0;
 uint64_t g_suppressed_midpoints = 0;
@@ -897,7 +901,7 @@ double CurvedStick(double value, double exponent) {
 }
 
 void ReleaseInjectedControllerInput() {
-  g_xinput_chalk_pulse_ticks = 0;
+  g_xinput_chalk_action_pending = false;
   for (size_t i = 0; i < g_injected_keys.size(); ++i) {
     InjectVirtualKey(static_cast<InjectedKey>(i), false);
   }
@@ -1079,9 +1083,10 @@ bool CommitControllerSlot(uint32_t category, uint32_t slot) {
       }
       case 2: {
         if (slot == 7u) {
-          // Assert the retail C binding across one real scheduler interval so
-          // the legacy DirectInput PRESS source observes a proper edge.
-          g_xinput_chalk_pulse_ticks = 1;
+          // Queue the retail ACTION_CHALK_CROSS action. It is asserted later,
+          // only around the one exact engine callback that consumes actions;
+          // synthetic render phases never observe or repeat it.
+          g_xinput_chalk_action_pending = true;
           AppendNativeLog("xinput chalk action source=radial slot=8");
           break;
         }
@@ -1302,10 +1307,11 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
                          (buttons & XINPUT_GAMEPAD_A));
     InjectVirtualKey(InjectedKey::kE, buttons & XINPUT_GAMEPAD_X);
     InjectVirtualKey(InjectedKey::kQ, buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
-    InjectVirtualKey(InjectedKey::kC, g_xinput_chalk_pulse_ticks != 0);
-    if (g_xinput_chalk_pulse_ticks != 0) {
-      --g_xinput_chalk_pulse_ticks;
-    }
+    // 0.0.31 briefly emitted the retail C binding here. Dungeon.dll polls
+    // DirectInput before this scheduler boundary, so that edge could be gone
+    // before ACTION_CHALK_CROSS was materialized. The exact callback wrapper
+    // below now drives the native transient action state directly.
+    InjectVirtualKey(InjectedKey::kC, false);
     if (!selector_captures_controls &&
         (pressed & XINPUT_GAMEPAD_RIGHT_THUMB)) {
       g_xinput_first_person_toggled = !g_xinput_first_person_toggled;
@@ -4107,6 +4113,46 @@ InterpolatedPassResult RenderInterpolatedPass(
   return result;
 }
 
+void CallOriginalRenderPresentWait(void* context, int wait) {
+  int32_t saved_chalk_state = 0;
+  bool chalk_asserted = false;
+  if (g_xinput_chalk_action_pending && g_dungeon_base) {
+    void* const chalk_state = g_dungeon_base + kChalkActionStateRva;
+    constexpr int32_t kPressed = 1;
+    if (SafeReadValue(chalk_state, &saved_chalk_state) &&
+        SafeWrite(chalk_state, &kPressed, sizeof(kPressed))) {
+      g_xinput_chalk_action_pending = false;
+      chalk_asserted = true;
+      ++g_xinput_chalk_actions_asserted;
+      int32_t native_query = -1;
+      __try {
+        native_query =
+            reinterpret_cast<int32_t(__cdecl*)(int32_t)>(
+                g_dungeon_base + kInputActionPressedRva)(kChalkActionId);
+      } __except (EXCEPTION_EXECUTE_HANDLER) {
+        native_query = -2;
+      }
+      AppendNativeLog(
+          "xinput chalk native action asserted id=%02X state=%d "
+          "query=%d total=%llu",
+          kChalkActionId, kPressed, native_query,
+          static_cast<unsigned long long>(g_xinput_chalk_actions_asserted));
+    } else {
+      g_xinput_chalk_action_pending = false;
+      AppendNativeLog("xinput chalk native action assertion failed");
+    }
+  }
+
+  g_original_render_present_wait(context, wait);
+
+  if (chalk_asserted) {
+    SafeWrite(g_dungeon_base + kChalkActionStateRva, &saved_chalk_state,
+              sizeof(saved_chalk_state));
+    AppendNativeLog("xinput chalk native action released restored_state=%d",
+                    saved_chalk_state);
+  }
+}
+
 void __cdecl HookRenderPresentWait(void* context, int wait) {
   if ((GetAsyncKeyState(VK_F11) & 1) != 0) {
     const uint32_t previous =
@@ -4125,7 +4171,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   ConsumePendingWeaponWheel();
   const uint32_t subframes = g_subframes.load(std::memory_order_relaxed);
   if ((subframes != 2u && subframes != 3u) || wait <= 0 || !g_renderer) {
-    g_original_render_present_wait(context, wait);
+    CallOriginalRenderPresentWait(context, wait);
     return;
   }
 
@@ -4133,7 +4179,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   // Without this, +0x9C still contains the preceding frame and the output
   // sequence moves backward for the midpoint, then jumps forward on exact.
   if (!RefreshCurrentRenderCaches(context)) {
-    g_original_render_present_wait(context, wait);
+    CallOriginalRenderPresentWait(context, wait);
     ResetSceneHistory();
     return;
   }
@@ -4145,7 +4191,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   SampleUiEligibility();
   if (current.nodes.empty() || g_previous_snapshot.nodes.empty() ||
       current.root == 0 || current.root != g_previous_snapshot.root) {
-    g_original_render_present_wait(context, wait);
+    CallOriginalRenderPresentWait(context, wait);
     g_older_snapshot = {};
     g_previous_snapshot = std::move(current);
     return;
@@ -4181,7 +4227,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
           static_cast<unsigned long long>(g_suppressed_midpoints));
       g_last_transition_log_tick = source_tick;
     }
-    g_original_render_present_wait(context, wait);
+    CallOriginalRenderPresentWait(context, wait);
     AdvanceSceneHistory(std::move(current));
     return;
   }
@@ -4214,7 +4260,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
                          interpolation.player_bounds_axis_mask);
   }
   if (!first_pass.rendered) {
-    g_original_render_present_wait(context, wait);
+    CallOriginalRenderPresentWait(context, wait);
     AdvanceSceneHistory(std::move(current));
     return;
   }
@@ -4416,7 +4462,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
         current.player_contact_manifold_projection;
     g_active_presentation_trace.exact_projection_valid = true;
   }
-  g_original_render_present_wait(context, wait);
+  CallOriginalRenderPresentWait(context, wait);
   g_active_presentation_trace.stage = DeathtrapNativePresentationStage::kNone;
   g_active_presentation_trace.exact_scene = nullptr;
   g_player_contact_manifold_endpoint_nodes +=
@@ -4504,7 +4550,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.31 radial chalk action "
+      "Deathtrap native render overlay 0.0.32 native chalk action "
       "and tuned controller response "
       "integer x3 presentation "
       "session: "

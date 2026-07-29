@@ -101,7 +101,7 @@ Synthetic render phases do not poll or consume input.
 
 ## XInput category bridge
 
-Version 0.0.31 splits XInput polling by ownership. Gameplay is polled once at
+Version 0.0.32 splits XInput polling by ownership. Gameplay is polled once at
 the real `Dungeon.dll+0x80600` boundary, while a lightweight frontend poll is
 active from process startup through movies, loading screens and menus. D-pad
 holds write only the retail selector mode
@@ -112,9 +112,12 @@ Availability is checked through `+0x7BD30` first for real inventory entries.
 The PC ranged row has six such entries; radial slot 7 stays empty and slot 8 is
 a bridge-owned virtual entry for the separate retail `ACTION_CHALK_CROSS`
 binding. Ranged, chalk and consumable paths require explicit A confirmation
-while their D-pad direction stays held. Chalk holds `C` across one real
-scheduler interval so the legacy DirectInput poll cannot miss a zero-duration
-pulse.
+while their D-pad direction stays held. Chalk is action ID `0x1A`. The bridge
+queues it at confirmation, then temporarily sets the retail volatile action
+state at `+0x1D89F8` only while the next exact `+0x80600` callback executes.
+The previous state is restored immediately afterward. This bypasses the
+already-finished DirectInput poll without altering the persistent binding
+table, and synthetic render phases can neither consume nor repeat the action.
 
 The hook at `Dungeon.dll+0x772A0` receives the retail 12-byte inventory-slot
 draw state (coordinates, icon, selected/available flags, slot number and
