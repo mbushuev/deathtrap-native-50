@@ -169,19 +169,21 @@ the final camera transform remains engine-owned.
 - Identify the engine's pre-cache camera position/orientation and its collision
   query, if present.
 
-### Phase B: orbit-only prototype (`0.0.51`)
+### Phase B: orbit-only prototype (`0.0.52`)
 
 - Add opt-in yaw/pitch orbit without changing player movement.
 - Preserve menus, selector, first-person and scripted cameras.
 - Interpolate verified camera endpoints through the existing 50 Hz renderer.
 
-The first implementation hooks `Dungeon.dll+0x2F380`, the mode-3
-desired-position entry immediately before the native camera collision and
-smoothing chain. It initializes yaw, pitch and radius from the live retail
-camera only after the player moves the right stick. Input is consumed once per
-real source tick. This phase intentionally keeps tank movement and uses the
-retail camera distance as its initial spring-arm length; camera-relative
-movement and custom obstruction release remain later phases.
+The first runtime attempt hooked `Dungeon.dll+0x2F380`, but tracing proved that
+one active mode-3 branch bypasses it. The corrected implementation hooks the
+shared `Dungeon.dll+0x2DF60` resolver and edits only its mutable local desired
+position before the original collision, room-clipping and smoothing work. It
+initializes yaw, pitch and radius from the live retail camera only after the
+player moves the right stick. Input is consumed once per real source tick.
+This phase intentionally keeps tank movement and uses the retail camera
+distance as its initial spring-arm length; camera-relative movement and custom
+obstruction release remain later phases.
 
 ### Phase C: spring-arm collision
 

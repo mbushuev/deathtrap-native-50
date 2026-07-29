@@ -71,20 +71,25 @@ The `0.0.50` trace confirmed that `controller+0x27C` is byte `3` in ordinary
 third person and byte `4` in first person. The older global byte at
 `Dungeon.dll+0x104679` is not the authoritative camera mode.
 
-The mode dispatcher calls `Dungeon.dll+0x2F310` for mode 3. Its normal branch
-computes a desired camera point from the live player-coordinate pointers at
+The mode dispatcher calls `Dungeon.dll+0x2F310` for mode 3. One branch computes
+a desired camera point from the live player-coordinate pointers at
 `controller+0xFC/+0x100/+0x104`, then calls:
 
 ```text
 Dungeon.dll+0x2F380(controller, x, y, z, room_or_sector, update_flags)
 ```
 
-`0x2F380` forwards the desired point through `0x2F340` and exactly one call to
-`0x2DEF0`. That downstream chain owns the camera target, endpoint history,
-collision query (`0x2E3A0` / `0x30910`) and smoothing. Consequently version
-`0.0.51` detours `0x2F380`, changes only `x/y/z` after right-stick engagement,
-and invokes the original once. It does not run a second update and does not
-patch the node or published matrix.
+`0x2F380` forwards the desired point through `0x2F340` and one call to
+`0x2DEF0`. However, the other active mode-3 branch calls `0x2DEF0` directly and
+therefore bypasses `0x2F380`; runtime `0.0.51` traces proved that this is the
+branch used in ordinary gameplay at many camera locations.
+
+Both branches copy their desired point to a local three-integer vector and
+pass it to `Dungeon.dll+0x2DF60`. That common resolver owns the collision query
+(`0x2E3A0` / `0x30910`), room clipping and smoothing. Version `0.0.52` therefore
+detours `0x2DF60`, changes only that mutable local desired-position vector
+after right-stick engagement, and invokes the original resolver once. It does
+not run a second update and does not patch the camera node or published matrix.
 
 Right-stick input is sequenced on real source ticks. Multiple synthetic 50 Hz
 render phases can reuse the resulting orbit endpoint but cannot integrate the

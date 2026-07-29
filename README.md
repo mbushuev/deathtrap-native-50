@@ -1,10 +1,11 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.51`.
+Current development version: `0.0.52`.
 
 The `modern-third-person-camera` branch contains the first opt-in native orbit
-prototype. It changes the desired mode-3 camera position before the retail
-collision/smoothing pipeline; it never overwrites the final view matrix. See
+prototype. It changes the desired mode-3 camera position at the common native
+resolver before the retail collision/smoothing pipeline; it never overwrites
+the final view matrix. See
 [Camera reverse-engineering notes](docs/CAMERA-REVERSE-ENGINEERING.md) for the
 verified call path and [modern camera design](docs/MODERN-CAMERA-DESIGN.md) for
 the safety boundary.

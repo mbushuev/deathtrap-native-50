@@ -57,11 +57,11 @@ constexpr uintptr_t kCameraControllerFlagsRva = 0x00104620u;
 constexpr uintptr_t kCameraControllerCallback0Rva = 0x00104640u;
 constexpr uintptr_t kCameraControllerCallback1Rva = 0x00104644u;
 constexpr uintptr_t kCameraControllerModeRva = 0x00104679u;
-// The mode-3 path calls this native entry with its desired camera position.
-// The function then performs the retail collision and smoothing work.  The
-// orbit prototype changes only these inputs and deliberately leaves the
-// final matrix, scene graph and visibility pipeline untouched.
-constexpr uintptr_t kConfigureCameraRva = 0x0002F380u;
+// Both mode-3 camera branches converge here with a mutable desired-position
+// vector.  This is downstream of the retail camera-state calculation but
+// upstream of its collision, room clipping and smoothing.  Hooking the common
+// resolver is important: one retail branch bypasses 0x2F380 entirely.
+constexpr uintptr_t kResolveCameraRva = 0x0002DF60u;
 constexpr size_t kCameraControllerPlayerXPointerOffset = 0xFCu;
 constexpr size_t kCameraControllerPlayerYPointerOffset = 0x100u;
 constexpr size_t kCameraControllerPlayerZPointerOffset = 0x104u;
@@ -491,10 +491,10 @@ using RangedWeaponLaunchFn = void*(__cdecl*)(void* actor,
                                              void* launch_context,
                                              void* launch_output);
 using UseConsumableFn = void(__cdecl*)(int32_t item_id);
-using ConfigureCameraFn = void(__cdecl*)(void* controller, int32_t x,
-                                         int32_t y, int32_t z,
-                                         int32_t room_or_sector,
-                                         int32_t update_flags);
+using ResolveCameraFn = uintptr_t(__cdecl*)(void* controller,
+                                            int32_t* desired_position,
+                                            void* camera_context,
+                                            int32_t collision_key);
 
 RenderPresentWaitFn g_original_render_present_wait = nullptr;
 RendererFn g_renderer = nullptr;
@@ -508,7 +508,7 @@ SuccessfulBlockImpactFn g_original_successful_block_impact = nullptr;
 OffensiveSpellLaunchFn g_original_offensive_spell_launch = nullptr;
 RangedWeaponLaunchFn g_original_ranged_weapon_launch = nullptr;
 UseConsumableFn g_original_use_consumable = nullptr;
-ConfigureCameraFn g_original_configure_camera = nullptr;
+ResolveCameraFn g_original_resolve_camera = nullptr;
 thread_local ActivePresentationTrace g_active_presentation_trace;
 std::vector<PresentationTraceSample> g_presentation_trace_buffer;
 
@@ -1246,13 +1246,20 @@ void ResetThirdPersonOrbit(const char* reason) {
   g_third_person_orbit_state = {};
 }
 
-void __cdecl HookConfigureCamera(void* controller, int32_t native_x,
-                                 int32_t native_y, int32_t native_z,
-                                 int32_t room_or_sector,
-                                 int32_t update_flags) {
-  if (!g_original_configure_camera) {
-    return;
+uintptr_t __cdecl HookResolveCamera(void* controller,
+                                    int32_t* desired_position,
+                                    void* camera_context,
+                                    int32_t collision_key) {
+  if (!g_original_resolve_camera) {
+    return 0;
   }
+
+  std::array<int32_t, 3> native{};
+  const bool desired_valid = desired_position &&
+      SafeRead(desired_position, native.data(), sizeof(native));
+  const int32_t native_x = desired_valid ? native[0] : 0;
+  const int32_t native_y = desired_valid ? native[1] : 0;
+  const int32_t native_z = desired_valid ? native[2] : 0;
 
   uint8_t mode = 0;
   const bool mode_valid = controller && SafeReadValue(
@@ -1261,22 +1268,21 @@ void __cdecl HookConfigureCamera(void* controller, int32_t native_x,
       &mode);
   const bool input_active =
       g_third_person_orbit_input_active.load(std::memory_order_acquire);
-  if (!g_third_person_orbit_enabled || !mode_valid ||
+  if (!g_third_person_orbit_enabled || !desired_valid || !mode_valid ||
       mode != kCameraModeThirdPerson || !input_active) {
-    ResetThirdPersonOrbit(!mode_valid ? "invalid_controller" :
+    ResetThirdPersonOrbit(!desired_valid ? "invalid_desired_position" :
+                          !mode_valid ? "invalid_controller" :
                           mode != kCameraModeThirdPerson ? "native_mode" :
                           !input_active ? "input_context" : "disabled");
-    g_original_configure_camera(controller, native_x, native_y, native_z,
-                                room_or_sector, update_flags);
-    return;
+    return g_original_resolve_camera(controller, desired_position,
+                                     camera_context, collision_key);
   }
 
   std::array<int32_t, 3> player{};
   if (!ReadCameraPlayerPosition(controller, &player)) {
     ResetThirdPersonOrbit("player_position");
-    g_original_configure_camera(controller, native_x, native_y, native_z,
-                                room_or_sector, update_flags);
-    return;
+    return g_original_resolve_camera(controller, desired_position,
+                                     camera_context, collision_key);
   }
 
   constexpr double kInputScale = 1000000.0;
@@ -1296,9 +1302,8 @@ void __cdecl HookConfigureCamera(void* controller, int32_t native_x,
     if (!stick_moved ||
         !InitializeThirdPersonOrbit(controller, native_x, native_y, native_z,
                                     player, input_sequence)) {
-      g_original_configure_camera(controller, native_x, native_y, native_z,
-                                  room_or_sector, update_flags);
-      return;
+      return g_original_resolve_camera(controller, desired_position,
+                                       camera_context, collision_key);
     }
   } else {
     const double player_jump = std::hypot(
@@ -1314,9 +1319,8 @@ void __cdecl HookConfigureCamera(void* controller, int32_t native_x,
         !InitializeThirdPersonOrbit(controller, native_x, native_y, native_z,
                                     player, input_sequence)) {
       ResetThirdPersonOrbit("player_teleport");
-      g_original_configure_camera(controller, native_x, native_y, native_z,
-                                  room_or_sector, update_flags);
-      return;
+      return g_original_resolve_camera(controller, desired_position,
+                                       camera_context, collision_key);
     }
   }
 
@@ -1362,8 +1366,12 @@ void __cdecl HookConfigureCamera(void* controller, int32_t native_x,
         g_third_person_orbit_state.radius,
         static_cast<unsigned long long>(input_sequence));
   }
-  g_original_configure_camera(controller, orbit_x, orbit_y, orbit_z,
-                              room_or_sector, update_flags);
+  const std::array<int32_t, 3> orbit = {orbit_x, orbit_y, orbit_z};
+  if (!SafeWrite(desired_position, orbit.data(), sizeof(orbit))) {
+    ResetThirdPersonOrbit("desired_position_write");
+  }
+  return g_original_resolve_camera(controller, desired_position,
+                                   camera_context, collision_key);
 }
 
 WORD VibrationMotorValue(uint32_t percent, double channel_scale) {
@@ -6052,7 +6060,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.51 native third-person orbit: "
+      "Deathtrap native render overlay 0.0.52 common-resolver third-person orbit: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
@@ -6198,26 +6206,25 @@ bool InstallDeathtrapNativeRenderHooks() {
     return false;
   }
 
-  // Optional modern-camera layer. It hooks the native desired-position
-  // entry, not the published view matrix, so all retail collision, room
-  // clipping, visibility and camera smoothing remain downstream. Failure is
-  // isolated from native-50 rendering and every other controller feature.
+  // Optional modern-camera layer. Both retail mode-3 branches converge on
+  // this resolver with a mutable desired-position vector. The hook changes
+  // that vector only; collision, room clipping, visibility and smoothing all
+  // still run exactly once in the original resolver.
   if (g_third_person_orbit_enabled) {
-    void* const configure_camera_target =
-        g_dungeon_base + kConfigureCameraRva;
+    void* const resolve_camera_target = g_dungeon_base + kResolveCameraRva;
     const MH_STATUS create_camera = MH_CreateHook(
-        configure_camera_target,
-        reinterpret_cast<void*>(&HookConfigureCamera),
-        reinterpret_cast<void**>(&g_original_configure_camera));
+        resolve_camera_target,
+        reinterpret_cast<void*>(&HookResolveCamera),
+        reinterpret_cast<void**>(&g_original_resolve_camera));
     if (create_camera == MH_OK ||
         create_camera == MH_ERROR_ALREADY_CREATED) {
-      const MH_STATUS enable_camera = MH_EnableHook(configure_camera_target);
+      const MH_STATUS enable_camera = MH_EnableHook(resolve_camera_target);
       if (enable_camera == MH_OK || enable_camera == MH_ERROR_ENABLED) {
         g_camera_orbit_hook_installed.store(true,
                                              std::memory_order_release);
         AppendNativeLog(
-            "camera_orbit hook=active rva=%08llX mode=3 native_pipeline=1",
-            static_cast<unsigned long long>(kConfigureCameraRva));
+            "camera_orbit hook=active rva=%08llX mode=3 common_resolver=1",
+            static_cast<unsigned long long>(kResolveCameraRva));
       } else {
         AppendNativeLog("camera_orbit hook=enable_failed status=%d",
                         static_cast<int>(enable_camera));
