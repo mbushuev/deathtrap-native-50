@@ -40,6 +40,7 @@ constexpr uintptr_t kUiRenderStateRva = 0x0022B5B0u;
 constexpr uintptr_t kUiSelectorModeRva = 0x001086FCu;
 constexpr uintptr_t kUiMessageStateRva = 0x001D41C8u;
 constexpr uintptr_t kUiMessageEntriesRva = 0x001D4360u;
+constexpr uintptr_t kUiMessageLifetimeImmediateRva = 0x0008F6AFu;
 constexpr uintptr_t kUiCountdownStateRva = 0x001D89F0u;
 constexpr uintptr_t kUiOwnerPointerRva = 0x0034F9D0u;
 constexpr uintptr_t kEngineFrameCounterRva = 0x001D24DCu;
@@ -67,6 +68,7 @@ constexpr size_t kUiMessageEntryCount = 3u;
 constexpr size_t kUiMessageEntriesSize =
     kUiMessageEntrySize * kUiMessageEntryCount;
 constexpr size_t kUiCountdownStateSize = 0x20u;
+constexpr uint32_t kOriginalUiMessageLifetimeTicks = 50u;
 constexpr uint32_t kOriginalGameplayRate = 16u;
 constexpr uint32_t kOriginalPeriodMilliseconds = 60u;
 constexpr double kMatrixFixedScale = 16384.0;
@@ -299,6 +301,9 @@ int32_t g_xinput_first_person_pixels = 12;
 int32_t g_xinput_menu_mouse_pixels = 6;
 double g_xinput_right_stick_curve = 1.35;
 bool g_xinput_invert_right_y = false;
+uint32_t g_ui_message_lifetime_percent = 300u;
+uint32_t g_ui_message_lifetime_ticks = 150u;
+bool g_ui_message_lifetime_patched = false;
 int32_t g_xinput_selector_radius = 104;
 int32_t g_xinput_selector_center_y = 316;
 double g_xinput_movement_threshold = 0.14;
@@ -594,6 +599,29 @@ int ConfiguredInteger(const wchar_t* section, const wchar_t* key,
                       int default_value) {
   const std::wstring ini = ConfigurationPath();
   return GetPrivateProfileIntW(section, key, default_value, ini.c_str());
+}
+
+bool PatchUiMessageLifetime(uint32_t ticks) {
+  if (!g_dungeon_base || ticks == 0u) {
+    return false;
+  }
+  uint32_t original = 0;
+  uint8_t* immediate = g_dungeon_base + kUiMessageLifetimeImmediateRva;
+  if (!SafeReadValue(immediate, &original) ||
+      original != kOriginalUiMessageLifetimeTicks) {
+    return false;
+  }
+  DWORD old_protection = 0;
+  if (!VirtualProtect(immediate, sizeof(ticks), PAGE_EXECUTE_READWRITE,
+                      &old_protection)) {
+    return false;
+  }
+  const bool written = SafeWrite(immediate, &ticks, sizeof(ticks));
+  FlushInstructionCache(GetCurrentProcess(), immediate, sizeof(ticks));
+  DWORD ignored = 0;
+  VirtualProtect(immediate, sizeof(ticks), old_protection, &ignored);
+  uint32_t verified = 0;
+  return written && SafeReadValue(immediate, &verified) && verified == ticks;
 }
 
 void AppendNativeLog(const char* format, ...) {
@@ -4522,6 +4550,12 @@ void InitializePatchState() {
       100, 250)) / 100.0;
   g_xinput_invert_right_y =
       ConfiguredInteger(L"XInput", L"InvertRightY", 0) != 0;
+  g_ui_message_lifetime_percent = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"Text", L"MessageLifetimePercent", 300),
+      100, 1000));
+  g_ui_message_lifetime_ticks = static_cast<uint32_t>(
+      (kOriginalUiMessageLifetimeTicks * g_ui_message_lifetime_percent + 50u) /
+      100u);
   g_xinput_selector_radius = std::clamp(
       ConfiguredInteger(L"XInput", L"SelectorRadius", 104), 64, 160);
   g_xinput_selector_center_y = std::clamp(
@@ -4560,6 +4594,9 @@ void InitializePatchState() {
     return;
   }
 
+  g_ui_message_lifetime_patched =
+      PatchUiMessageLifetime(g_ui_message_lifetime_ticks);
+
   QueryPerformanceFrequency(&g_qpc_frequency);
   g_renderer = reinterpret_cast<RendererFn>(g_dungeon_base + kRendererRva);
   g_scene_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
@@ -4567,7 +4604,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.35 native text-lifetime rollback "
+      "Deathtrap native render overlay 0.0.36 configurable text lifetime "
       "and tuned controller response "
       "integer x3 presentation "
       "session: "
@@ -4599,7 +4636,8 @@ void InitializePatchState() {
       "F11 native A/B and global clock untouched; DirectInput wheel events "
       "are observation-only and commit through Dungeon.dll+0x90610 once per "
       "real gameplay tick (enabled=%u invert=%u); XInput controller=%u "
-      "base_bindings=%u hold_ms=%u deadzones=%d/%d radial=%d center_y=%d",
+      "base_bindings=%u hold_ms=%u deadzones=%d/%d radial=%d center_y=%d "
+      "message_lifetime=%u%%/%u_ticks patched=%u",
       g_weapon_wheel_enabled ? 1u : 0u,
       g_weapon_wheel_invert ? 1u : 0u,
       g_xinput_controller_index,
@@ -4608,7 +4646,10 @@ void InitializePatchState() {
       g_xinput_left_deadzone,
       g_xinput_right_deadzone,
       g_xinput_selector_radius,
-      g_xinput_selector_center_y);
+      g_xinput_selector_center_y,
+      g_ui_message_lifetime_percent,
+      g_ui_message_lifetime_ticks,
+      g_ui_message_lifetime_patched ? 1u : 0u);
   g_state.store(DeathtrapNativeRenderPatchState::kActive,
                 std::memory_order_release);
 }

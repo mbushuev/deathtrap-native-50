@@ -123,6 +123,11 @@ DebugLog=1
 `Subframes=3` produces two render-only phases plus the real endpoint, or about
 50 presented frames per second from the game's approximately 16.7 Hz source.
 
+`[Text] MessageLifetimePercent=300` keeps transient gameplay messages visible
+three times as long as the retail 50-tick duration. Set it to `100` for the
+original duration. It does not affect menus, inventory selectors, animation,
+simulation, input or audio timing.
+
 For one diagnostic run, set `DebugLog=1`, enter actual gameplay and then close
 the game normally. The game directory should contain:
 
@@ -131,7 +136,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.35`
+The render log must begin with the `Deathtrap native render overlay 0.0.36`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -160,7 +165,7 @@ down selects the next one).
 
 ## XInput controller layer
 
-Version 0.0.35 dynamically loads the first available Microsoft XInput runtime
+Version 0.0.36 dynamically loads the first available Microsoft XInput runtime
 (`xinput1_4`, `xinput1_3`, then `xinput9_1_0`). Gameplay is polled only at a
 real game scheduler boundary, while a separate lightweight frontend poll is
 available immediately at process startup for movies, loading and menus.

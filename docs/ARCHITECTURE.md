@@ -160,3 +160,9 @@ transaction. Each midpoint may draw the current text, but its mutation of the
 queue is rolled back immediately. Only the exact endpoint is allowed to age
 the message, preserving the retail duration without changing the stored
 50-tick lifetime or slowing any other UI/gameplay timer.
+
+Version 0.0.36 additionally replaces only the immediate used when a new
+transient message is created. `Text/MessageLifetimePercent=300` changes the
+retail 50-tick value to 150 ticks. The patch validates the original immediate
+before writing it, and it does not scale selector, combat, input, animation or
+other UI countdowns. Values from 100 through 1000 percent are accepted.
