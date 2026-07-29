@@ -193,13 +193,14 @@ miss. The hook publishes one bounded full-motor envelope atomically; the
 normal real-tick XInput path remains the only code that calls
 `XInputSetState`. Confirmed damage can overlap this envelope independently.
 
-Version 0.0.44 corrects two more non-fatal, observation-only event hooks. The
+Version 0.0.45 corrects two more non-fatal, observation-only event hooks. The
 combat sound helper at `Dungeon.dll+0x1D2F0` is shared, so the hook accepts the
 two defended-contact return callsites at `Dungeon.dll+0x1C789` and
-`Dungeon.dll+0x1C7E4`, then requires both the live player as defender and the
-live `0x10000` parry flag at `defender+0x2C -> data+0x28`. This covers the
-alternate collision resolution used by enemy attacks without treating
-ordinary weapon contact as a successful block.
+`Dungeon.dll+0x1C7E4`. Collision-pair traversal may place the live player in
+either helper argument, so both orderings are accepted, but only while the
+controller's LT block state is held. Consequently pressing LT alone does not
+produce the heavy contact pulse, while either real defended-contact ordering
+can deliver it.
 
 Spell feedback hooks `Dungeon.dll+0x83440`, the routine entered after the
 cast action and selected-spell checks. Its first argument is a controller
@@ -207,8 +208,12 @@ wrapper, not the actor itself; the actor is read from the wrapper's first
 field and compared with the live player. Calls whose wrapper callback already
 equals the active cast callback at `Dungeon.dll+0x83510` are rejected, so
 holding or repeating RB during an existing cast does not masquerade as
-another launch. Both hooks only publish atomic deadlines. As with all other
-feedback, the real input poll remains the sole owner of `XInputSetState`.
+another launch. Both hooks publish lock-free pending requests rather than
+wall-clock deadlines. The real input poll remains the sole owner of
+`XInputSetState`, consumes each request, starts its complete envelope at that
+moment, submits the motor command, and only then writes diagnostic telemetry.
+This prevents a low-FPS frame or synchronous debug log from expiring a short
+pulse before the next XInput poll.
 
 ## Original text lifetime at the higher render rate
 

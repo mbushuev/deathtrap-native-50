@@ -67,7 +67,6 @@ constexpr uintptr_t kStartSpellCastRva = 0x00083440u;
 constexpr uintptr_t kSpellCastActiveCallbackRva = 0x00083510u;
 constexpr uintptr_t kEntityDataOffset = 0x2Cu;
 constexpr uintptr_t kEntityCombatFlagsOffset = 0x28u;
-constexpr uint32_t kEntityParryFlag = 0x00010000u;
 constexpr uintptr_t kEntityHealthOffset = 0x1030u;
 constexpr int32_t kHealthFixedScale = 16384;
 constexpr size_t kMovementStageProbeCount = 95u;
@@ -932,6 +931,9 @@ uint64_t g_block_vibration_until_ms = 0;
 std::atomic<uint64_t> g_melee_swing_vibration_until_ms{0};
 std::atomic<uint64_t> g_successful_block_vibration_until_ms{0};
 std::atomic<uint64_t> g_spell_cast_vibration_until_ms{0};
+std::atomic<bool> g_successful_block_vibration_pending{false};
+std::atomic<bool> g_spell_cast_vibration_pending{false};
+std::atomic<bool> g_controller_block_held{false};
 std::atomic<bool> g_player_melee_attack_window_active{false};
 std::atomic<uint64_t> g_last_controller_attack_ms{0};
 std::atomic<uint64_t> g_hit_vibration_until_ms{0};
@@ -1047,6 +1049,10 @@ WORD VibrationMotorValue(uint32_t percent, double channel_scale) {
       scaled * static_cast<double>(std::numeric_limits<WORD>::max()) / 100.0));
 }
 
+void StartEventVibration(std::atomic<uint64_t>* deadline,
+                         std::atomic<uint32_t>* strength, uint64_t now,
+                         uint32_t duration_ms, uint32_t percent);
+
 void ApplyControllerVibration(WORD left_motor, WORD right_motor) {
   if (left_motor == g_applied_vibration_left &&
       right_motor == g_applied_vibration_right) {
@@ -1085,8 +1091,19 @@ void StopControllerVibration() {
   ApplyControllerVibration(0, 0);
 }
 
+void ClearPendingControllerVibrationEvents() {
+  g_successful_block_vibration_pending.store(false,
+                                               std::memory_order_release);
+  g_spell_cast_vibration_pending.store(false, std::memory_order_release);
+  g_controller_block_held.store(false, std::memory_order_release);
+}
+
 void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
                                bool selector_captures_controls) {
+  const bool block_held =
+      g_xinput_vibration_enabled && gameplay && !selector_captures_controls &&
+      pad.bLeftTrigger >= g_xinput_trigger_threshold;
+  g_controller_block_held.store(block_held, std::memory_order_release);
   if (!g_xinput_vibration_enabled || !gameplay ||
       selector_captures_controls || !g_xinput_set_state) {
     StopControllerVibration();
@@ -1094,6 +1111,26 @@ void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
   }
 
   const uint64_t now = GetTickCount64();
+  const bool successful_block_started =
+      g_successful_block_vibration_pending.exchange(
+          false, std::memory_order_acq_rel);
+  if (successful_block_started) {
+    // Event hooks may run after the last XInput poll of a simulation tick.
+    // Start the envelope only when the XInput owner consumes the request so
+    // synchronous game logging or a slow frame can never consume its entire
+    // duration before a motor command is submitted.
+    StartEventVibration(&g_successful_block_vibration_until_ms, nullptr, now,
+                        g_xinput_successful_block_vibration_ms,
+                        g_xinput_vibration_strength_percent);
+  }
+  const bool spell_cast_started =
+      g_spell_cast_vibration_pending.exchange(false,
+                                                std::memory_order_acq_rel);
+  if (spell_cast_started) {
+    StartEventVibration(&g_spell_cast_vibration_until_ms, nullptr, now,
+                        g_xinput_spell_cast_vibration_ms,
+                        g_xinput_vibration_strength_percent);
+  }
   const bool block_pressed =
       pad.bLeftTrigger >= g_xinput_trigger_threshold &&
       g_previous_xinput_left_trigger < g_xinput_trigger_threshold;
@@ -1181,6 +1218,17 @@ void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
         VibrationMotorValue(g_xinput_vibration_strength_percent, 0.45));
   }
   ApplyControllerVibration(left_motor, right_motor);
+  // Log only after SetState has received the motor command. File I/O must not
+  // shorten an event envelope or postpone its first visible sample.
+  if (successful_block_started) {
+    AppendNativeLog("xinput vibration successful_block consumed "
+                    "duration_ms=%u",
+                    g_xinput_successful_block_vibration_ms);
+  }
+  if (spell_cast_started) {
+    AppendNativeLog("xinput vibration spell_cast consumed duration_ms=%u",
+                    g_xinput_spell_cast_vibration_ms);
+  }
 }
 
 bool ReadEntityHealth(void* target, int32_t* health) {
@@ -1285,9 +1333,10 @@ int __cdecl HookMeleeAttackWindow(void* actor) {
 
 void __cdecl HookCombatImpactSound(void* attacker, void* defender) {
   // The same sound helper is reached from both of the retail collision paths
-  // that can resolve a defended contact. The second path is used by several
-  // enemy attacks, so both callsites must be observed and then filtered by the
-  // defender's live parry bit.
+  // that can resolve a defended contact. Actor ordering changes with the
+  // direction in which the collision pair is visited, so the live player may
+  // occupy either argument. A real impact callsite plus held controller block
+  // state is required; pressing LT by itself never raises this event.
   const uintptr_t return_address =
       reinterpret_cast<uintptr_t>(_ReturnAddress());
   g_original_combat_impact_sound(attacker, defender);
@@ -1298,7 +1347,11 @@ void __cdecl HookCombatImpactSound(void* attacker, void* defender) {
   const uintptr_t return_rva = return_address >= module_base
                                    ? return_address - module_base
                                    : 0;
-  if (!player || reinterpret_cast<uintptr_t>(defender) != player ||
+  const bool player_is_attacker =
+      player && reinterpret_cast<uintptr_t>(attacker) == player;
+  const bool player_is_defender =
+      player && reinterpret_cast<uintptr_t>(defender) == player;
+  if ((!player_is_attacker && !player_is_defender) ||
       (return_rva != kSuccessfulParryReturnRva &&
        return_rva != kSuccessfulParryCollisionReturnRva)) {
     return;
@@ -1307,32 +1360,40 @@ void __cdecl HookCombatImpactSound(void* attacker, void* defender) {
   uintptr_t entity_data = 0;
   uint32_t combat_flags = 0;
   const bool flags_valid =
-      SafeReadValue(reinterpret_cast<const uint8_t*>(defender) +
+      SafeReadValue(reinterpret_cast<const uint8_t*>(player) +
                         kEntityDataOffset,
                     &entity_data) &&
       entity_data &&
       SafeReadValue(reinterpret_cast<const void*>(
                         entity_data + kEntityCombatFlagsOffset),
                     &combat_flags);
-  if (!flags_valid || (combat_flags & kEntityParryFlag) == 0) {
+  const bool block_held =
+      g_controller_block_held.load(std::memory_order_acquire);
+  if (!block_held) {
     AppendNativeLog(
         "game_event player_combat_impact rejected return_rva=%08llX "
-        "flags=%08X flags_valid=%d",
-        static_cast<unsigned long long>(return_rva), combat_flags,
+        "player_side=%s flags=%08X flags_valid=%d block_held=0",
+        static_cast<unsigned long long>(return_rva),
+        player_is_defender ? "defender" : "attacker",
+        combat_flags,
         flags_valid ? 1 : 0);
     return;
   }
 
-  const uint64_t now = GetTickCount64();
-  StartEventVibration(&g_successful_block_vibration_until_ms, nullptr, now,
-                      g_xinput_successful_block_vibration_ms,
-                      g_xinput_vibration_strength_percent);
+  const bool was_pending = g_successful_block_vibration_pending.exchange(
+      true, std::memory_order_acq_rel);
+  if (was_pending) {
+    return;
+  }
   AppendNativeLog(
-      "game_event successful_block defender=%08llX attacker=%08llX "
-      "return_rva=%08llX duration_ms=%u",
+      "game_event successful_block queued defender=%08llX attacker=%08llX "
+      "player_side=%s return_rva=%08llX flags=%08X flags_valid=%d "
+      "duration_ms=%u",
       static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(defender)),
       static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(attacker)),
+      player_is_defender ? "defender" : "attacker",
       static_cast<unsigned long long>(return_rva),
+      combat_flags, flags_valid ? 1 : 0,
       g_xinput_successful_block_vibration_ms);
 }
 
@@ -1354,27 +1415,20 @@ void __cdecl HookStartSpellCast(void* controller, int32_t alternate_cast) {
 
   g_original_start_spell_cast(controller, alternate_cast);
   if (!starts_new_player_cast) {
-    AppendNativeLog(
-        "game_event spell_cast rejected controller=%08llX actor=%08llX "
-        "player=%08llX callback=%08llX actor_valid=%d callback_valid=%d",
-        static_cast<unsigned long long>(
-            reinterpret_cast<uintptr_t>(controller)),
-        static_cast<unsigned long long>(controlled_actor),
-        static_cast<unsigned long long>(player),
-        static_cast<unsigned long long>(active_callback),
-        actor_valid ? 1 : 0, callback_valid ? 1 : 0);
     return;
   }
 
   const uint64_t now = GetTickCount64();
-  StartEventVibration(&g_spell_cast_vibration_until_ms, nullptr, now,
-                      g_xinput_spell_cast_vibration_ms,
-                      g_xinput_vibration_strength_percent);
+  const bool was_pending = g_spell_cast_vibration_pending.exchange(
+      true, std::memory_order_acq_rel);
   g_last_controller_attack_ms.store(now, std::memory_order_release);
+  if (was_pending) {
+    return;
+  }
   int32_t spell_id = -1;
   SafeReadValue(g_dungeon_base + kActiveSpellRva, &spell_id);
   AppendNativeLog(
-      "game_event spell_cast controller=%08llX actor=%08llX spell=%d "
+      "game_event spell_cast queued controller=%08llX actor=%08llX spell=%d "
       "alternate=%d duration_ms=%u",
       static_cast<unsigned long long>(
           reinterpret_cast<uintptr_t>(controller)),
@@ -1469,6 +1523,7 @@ void ReleaseInjectedControllerInput() {
   g_xinput_previous_native_gameplay = false;
   g_previous_xinput_buttons = 0;
   StopControllerVibration();
+  ClearPendingControllerVibrationEvents();
 }
 
 bool LoadXInputRuntime() {
@@ -5145,9 +5200,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.44 dual-path parry and "
-      "controller-owned spell-cast "
-      "XInput vibration, "
+      "Deathtrap native render overlay 0.0.45 queued block and spell "
+      "XInput vibration delivery, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
       "session: "

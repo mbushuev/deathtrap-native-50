@@ -137,7 +137,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.44`
+The render log must begin with the `Deathtrap native render overlay 0.0.45`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -174,13 +174,15 @@ Synthetic native-render phases never poll or repeat controller input.
 
 Version 0.0.39 also loads `XInputSetState` from that runtime. Version 0.0.40
 tuned the first action profile for the game's low input-poll frequency.
-Version 0.0.44 removes the raw RT pulse: attack rumble now begins only on the
-engine-confirmed melee downstroke. LT retains a distinct 90 ms light
-block-action pulse at 100% master strength. Version 0.0.41 adds
+Version 0.0.45 retains the removal of the raw RT pulse: attack rumble begins
+only on the engine-confirmed melee downstroke. LT retains a distinct 90 ms
+light block-action pulse at 100% master strength. Version 0.0.41 adds
 engine-confirmed hit, player-damage and
 death envelopes. Version 0.0.42 adds a stronger engine-timed melee downstroke
-envelope that also occurs on a miss. Version 0.0.44 fixes engine-confirmed
-successful-block and spell-launch envelopes. Configure or disable them with:
+envelope that also occurs on a miss. Version 0.0.45 queues successful-block
+and spell-launch events until the real XInput owner consumes them, then starts
+their full duration at the first submitted motor sample. Configure or disable
+them with:
 
 ```ini
 [XInput]

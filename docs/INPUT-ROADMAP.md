@@ -100,20 +100,21 @@ Version 0.0.42 binds the melee downstroke itself:
 - emit the stronger pulse even on a miss, while retaining collision feedback
   as an independent overlapping event.
 
-Version 0.0.44 binds defensive contact and magic launch to accepted engine
+Version 0.0.45 binds defensive contact and magic launch to accepted engine
 events:
 
 - identify a successful player parry through the `0x1C789` and `0x1C7E4`
   defended-contact return callsites of the shared `0x1D2F0` impact helper;
-- require the live player-defender's `0x10000` parry bit at the moment of
-  contact;
-- require the retail parry checks to have completed instead of inferring a
-  block from LT or from the absence of damage;
+- accept either collision-pair actor ordering for the live player, while
+  requiring LT to remain held at the actual impact callsite;
+- require the retail defended-contact path to complete, so LT alone never
+  produces the heavier successful-block pulse;
 - hook the accepted spell-state transition at `0x83440`, resolve the player
   through its controller wrapper, and reject wrappers already executing the
   active-cast callback;
-- keep confirmed block and spell envelopes independently configurable and
-  composable with melee, hit, damage and death feedback.
+- queue confirmed block and spell requests until the XInput owner consumes
+  them, so their full independently configurable envelopes remain composable
+  with melee, hit, damage and death feedback even after a slow frame.
 
 ### Selected layout rationale
 
