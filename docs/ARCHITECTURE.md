@@ -193,23 +193,21 @@ miss. The hook publishes one bounded full-motor envelope atomically; the
 normal real-tick XInput path remains the only code that calls
 `XInputSetState`. Confirmed damage can overlap this envelope independently.
 
-Version 0.0.45 corrects two more non-fatal, observation-only event hooks. The
-combat sound helper at `Dungeon.dll+0x1D2F0` is shared, so the hook accepts the
-two defended-contact return callsites at `Dungeon.dll+0x1C789` and
-`Dungeon.dll+0x1C7E4`. Collision-pair traversal may place the live player in
-either helper argument, so both orderings are accepted, but only while the
-controller's LT block state is held. Consequently pressing LT alone does not
-produce the heavy contact pulse, while either real defended-contact ordering
-can deliver it.
+Version 0.0.46 replaces the earlier input-adjacent approximations with two
+post-validation gameplay events. The successful-block hook is
+`Dungeon.dll+0x834F0`. Both retail callers first verify that the struck actor
+is already in one of the game's block states and that the collision was
+accepted, then `0x834F0` installs the block-impact callback and animation
+`0x61`. Filtering that actor against the live player therefore identifies an
+enemy strike landing on an already raised player block. LT input alone never
+reaches this path.
 
-Spell feedback hooks `Dungeon.dll+0x83440`, the routine entered after the
-cast action and selected-spell checks. Its first argument is a controller
-wrapper, not the actor itself; the actor is read from the wrapper's first
-field and compared with the live player. Calls whose wrapper callback already
-equals the active cast callback at `Dungeon.dll+0x83510` are rejected, so
-holding or repeating RB during an existing cast does not masquerade as
-another launch. Both hooks publish lock-free pending requests rather than
-wall-clock deadlines. The real input poll remains the sole owner of
+Offensive magic feedback hooks `Dungeon.dll+0x1D210`, the retail projectile
+factory used by spell IDs 15 through 21. It is accepted only when the live
+player is the launching actor and the original function returns a non-null
+projectile. Healing and utility actions do not create one through this path,
+so they cannot masquerade as an attack spell. Both hooks publish lock-free
+pending requests rather than wall-clock deadlines. The real input poll remains the sole owner of
 `XInputSetState`, consumes each request, starts its complete envelope at that
 moment, submits the motor command, and only then writes diagnostic telemetry.
 This prevents a low-FPS frame or synchronous debug log from expiring a short

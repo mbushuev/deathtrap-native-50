@@ -76,9 +76,10 @@ the overlay deliberately does not take cursor ownership.
   controller-input release.
 - Keep strength and pulse durations configurable in the `[XInput]` section.
 
-Version 0.0.40 raises the tested action profile to 100% master strength with
-120/90 ms attack/block envelopes so pulses survive the game's coarse input
-poll cadence and remain clearly distinguishable.
+Version 0.0.40 originally raised the tested action profile to 100% master
+strength with 120/90 ms attack/block envelopes. Version 0.0.46 supersedes the
+raw block acknowledgement with a subtle 45 ms pulse; the heavier response is
+reserved for the engine-confirmed successful-block event.
 
 Version 0.0.41 completes the first engine-event feedback stage:
 
@@ -100,18 +101,17 @@ Version 0.0.42 binds the melee downstroke itself:
 - emit the stronger pulse even on a miss, while retaining collision feedback
   as an independent overlapping event.
 
-Version 0.0.45 binds defensive contact and magic launch to accepted engine
+Version 0.0.46 binds defensive contact and offensive magic launch to accepted engine
 events:
 
-- identify a successful player parry through the `0x1C789` and `0x1C7E4`
-  defended-contact return callsites of the shared `0x1D2F0` impact helper;
-- accept either collision-pair actor ordering for the live player, while
-  requiring LT to remain held at the actual impact callsite;
-- require the retail defended-contact path to complete, so LT alone never
+- identify a successful player block at `0x834F0`, after the collision code
+  has verified an already active retail block state and selected impact
+  animation `0x61`;
+- filter the impacted actor against the live player, so LT alone never
   produces the heavier successful-block pulse;
-- hook the accepted spell-state transition at `0x83440`, resolve the player
-  through its controller wrapper, and reject wrappers already executing the
-  active-cast callback;
+- hook the offensive-spell projectile factory at `0x1D210`, accept only
+  player-owned non-null projectiles for spell IDs 15 through 21, and exclude
+  healing/utility actions;
 - queue confirmed block and spell requests until the XInput owner consumes
   them, so their full independently configurable envelopes remain composable
   with melee, hit, damage and death feedback even after a slow frame.

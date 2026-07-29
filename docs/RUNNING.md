@@ -137,7 +137,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.45`
+The render log must begin with the `Deathtrap native render overlay 0.0.46`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -174,13 +174,13 @@ Synthetic native-render phases never poll or repeat controller input.
 
 Version 0.0.39 also loads `XInputSetState` from that runtime. Version 0.0.40
 tuned the first action profile for the game's low input-poll frequency.
-Version 0.0.45 retains the removal of the raw RT pulse: attack rumble begins
-only on the engine-confirmed melee downstroke. LT retains a distinct 90 ms
-light block-action pulse at 100% master strength. Version 0.0.41 adds
+Version 0.0.46 retains the removal of the raw RT pulse: attack rumble begins
+only on the engine-confirmed melee downstroke. LT retains only a subtle 45 ms
+block-action acknowledgement at 100% master strength. Version 0.0.41 adds
 engine-confirmed hit, player-damage and
 death envelopes. Version 0.0.42 adds a stronger engine-timed melee downstroke
-envelope that also occurs on a miss. Version 0.0.45 queues successful-block
-and spell-launch events until the real XInput owner consumes them, then starts
+envelope that also occurs on a miss. Version 0.0.46 queues successful-block
+and offensive-spell-launch events until the real XInput owner consumes them, then starts
 their full duration at the first submitted motor sample. Configure or disable
 them with:
 
@@ -189,7 +189,7 @@ them with:
 VibrationEnabled=1
 VibrationStrengthPercent=100
 MeleeSwingVibrationMs=170
-BlockVibrationMs=90
+BlockVibrationMs=45
 SuccessfulBlockVibrationMs=210
 SpellCastVibrationMs=260
 HitVibrationMs=150
@@ -207,12 +207,12 @@ the current player object. With diagnostic logging enabled, the corresponding
 records are `game_event confirmed_hit` and `game_event player_damage`.
 The melee animation marker appears as `game_event melee_downstroke`, including
 the observed animation frame, descriptor window and active weapon ID.
-Successful parries appear as `game_event successful_block` only after either
-retail defended-contact branch accepts the collision while the player's live
-parry bit is set; simply pressing LT is insufficient.
-An accepted launch appears as `game_event spell_cast`, including the selected
-spell ID. Repeated RB input while the actor is already in the cast callback
-does not start another launch envelope.
+Successful blocks appear as `game_event successful_block` only after the
+retail collision code strikes the live player in an already active block state
+and selects block-impact animation `0x61`; simply pressing LT is insufficient.
+An accepted attack spell appears as `game_event offensive_spell_launch`,
+including its selected spell ID and non-null projectile. Healing and utility
+actions do not use this event.
 
 The default gameplay layout is left-stick forward/backward and tank turning,
 A jump/climb, X operate, RT primary attack, LT parry/block, RB cast spell and
