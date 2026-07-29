@@ -100,8 +100,12 @@ remains downstream.
 
 Right-stick input is sequenced on real source ticks. Multiple synthetic 50 Hz
 render phases can reuse the resulting orbit endpoint but cannot integrate the
-stick twice. Leaving mode 3, opening a menu or selector, entering first person,
-losing focus or disconnecting the controller immediately releases orbit state.
+stick twice. Version `0.0.54` adds a real-time exponential response filter and
+extends pitch below the initial retail elevation. Opening a menu or selector
+and entering first person now suspend the rig without discarding yaw, pitch or
+radius, so the same view resumes when ordinary mode-3 gameplay returns.
+Controller loss, an invalid controller and a large player teleport still reset
+the state defensively.
 
 ## Diagnostic run protocol
 

@@ -187,6 +187,14 @@ tick. This phase intentionally keeps tank movement and uses the retail camera
 distance as its initial spring-arm length; camera-relative movement and custom
 obstruction release remain later phases.
 
+Version `0.0.54` keeps that verified native insertion point and refines the
+input rig. Right-stick samples now pass through a time-based exponential
+response filter before yaw and pitch integration, the vertical range extends
+below the initial retail elevation, and temporary ownership by the selector,
+menus or first-person view suspends rather than destroys the orbit state.
+Returning from first person therefore resumes the same yaw, pitch and radius
+instead of snapping back to the room camera.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

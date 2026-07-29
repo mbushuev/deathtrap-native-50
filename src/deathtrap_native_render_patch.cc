@@ -387,6 +387,7 @@ double g_third_person_orbit_min_pitch_radians = 0.0;
 double g_third_person_orbit_max_pitch_radians = 0.0;
 double g_third_person_orbit_min_radius = 650.0;
 double g_third_person_orbit_max_radius = 1800.0;
+double g_third_person_orbit_response_seconds = 0.09;
 std::atomic<int32_t> g_third_person_orbit_input_x{0};
 std::atomic<int32_t> g_third_person_orbit_input_y{0};
 std::atomic<bool> g_third_person_orbit_input_active{false};
@@ -398,9 +399,13 @@ struct ThirdPersonOrbitState {
   double yaw = 0.0;
   double pitch = 0.0;
   double radius = 0.0;
+  double filtered_input_x = 0.0;
+  double filtered_input_y = 0.0;
   std::array<int32_t, 3> previous_player{};
   uint64_t last_input_sequence = 0;
+  uint64_t last_input_time_ms = 0;
   uint64_t applications = 0;
+  bool suspended = false;
 };
 
 ThirdPersonOrbitState g_third_person_orbit_state;
@@ -1232,6 +1237,8 @@ bool InitializeThirdPersonOrbit(void* controller, int32_t native_x,
   // effect immediately instead of waiting for another native source tick.
   g_third_person_orbit_state.last_input_sequence =
       input_sequence ? input_sequence - 1u : 0u;
+  g_third_person_orbit_state.last_input_time_ms =
+      GetTickCount64() - kOriginalPeriodMilliseconds;
   AppendNativeLog(
       "camera_orbit engage native=%d/%d/%d player=%d/%d/%d "
       "yaw=%.2f pitch=%.2f radius=%.1f",
@@ -1266,10 +1273,23 @@ bool BuildThirdPersonOrbitPosition(void* controller,
   const bool input_active =
       g_third_person_orbit_input_active.load(std::memory_order_acquire);
   if (!g_third_person_orbit_enabled || !mode_valid ||
-      mode != kCameraModeThirdPerson || !input_active) {
+      mode != kCameraModeThirdPerson) {
     ResetThirdPersonOrbit(!mode_valid ? "invalid_controller" :
                           mode != kCameraModeThirdPerson ? "native_mode" :
-                          !input_active ? "input_context" : "disabled");
+                          "disabled");
+    return false;
+  }
+  // Menus, the radial selector and the retail first-person camera temporarily
+  // own the right stick. Keep the orbit rig suspended instead of destroying
+  // it, so returning to third person resumes the exact previous view.
+  if (!input_active) {
+    if (g_third_person_orbit_state.engaged &&
+        !g_third_person_orbit_state.suspended) {
+      g_third_person_orbit_state.suspended = true;
+      g_third_person_orbit_state.filtered_input_x = 0.0;
+      g_third_person_orbit_state.filtered_input_y = 0.0;
+      AppendNativeLog("camera_orbit suspend reason=input_context");
+    }
     return false;
   }
 
@@ -1316,16 +1336,42 @@ bool BuildThirdPersonOrbitPosition(void* controller,
     }
   }
 
+  if (g_third_person_orbit_state.suspended) {
+    g_third_person_orbit_state.suspended = false;
+    g_third_person_orbit_state.last_input_time_ms = GetTickCount64();
+    g_third_person_orbit_state.last_input_sequence = input_sequence;
+    AppendNativeLog("camera_orbit resume yaw=%.2f pitch=%.2f radius=%.1f",
+                    g_third_person_orbit_state.yaw * 180.0 / kOrbitPi,
+                    g_third_person_orbit_state.pitch * 180.0 / kOrbitPi,
+                    g_third_person_orbit_state.radius);
+  }
+
   if (input_sequence != g_third_person_orbit_state.last_input_sequence) {
+    const uint64_t now_ms = GetTickCount64();
+    const double elapsed_seconds = std::clamp(
+        static_cast<double>(now_ms -
+                            g_third_person_orbit_state.last_input_time_ms) /
+            1000.0,
+        0.010, 0.100);
+    const double response = 1.0 - std::exp(
+        -elapsed_seconds / g_third_person_orbit_response_seconds);
+    g_third_person_orbit_state.filtered_input_x +=
+        (input_x - g_third_person_orbit_state.filtered_input_x) * response;
+    g_third_person_orbit_state.filtered_input_y +=
+        (input_y - g_third_person_orbit_state.filtered_input_y) * response;
     const double horizontal_sign = g_third_person_orbit_invert_x ? 1.0 : -1.0;
     const double vertical_sign = g_third_person_orbit_invert_y ? 1.0 : -1.0;
     g_third_person_orbit_state.yaw +=
-        input_x * horizontal_sign *
-        g_third_person_orbit_horizontal_radians;
+        g_third_person_orbit_state.filtered_input_x * horizontal_sign *
+        g_third_person_orbit_horizontal_radians *
+        (elapsed_seconds * 1000.0 /
+         static_cast<double>(kOriginalPeriodMilliseconds));
     g_third_person_orbit_state.pitch = std::clamp(
         g_third_person_orbit_state.pitch +
-            input_y * vertical_sign *
-                g_third_person_orbit_vertical_radians,
+            g_third_person_orbit_state.filtered_input_y * vertical_sign *
+                g_third_person_orbit_vertical_radians *
+                (elapsed_seconds * 1000.0 /
+                 static_cast<double>(kOriginalPeriodMilliseconds)),
         g_third_person_orbit_min_pitch_radians,
         g_third_person_orbit_max_pitch_radians);
     if (g_third_person_orbit_state.yaw > kOrbitPi ||
@@ -1334,6 +1380,7 @@ bool BuildThirdPersonOrbitPosition(void* controller,
           g_third_person_orbit_state.yaw, 2.0 * kOrbitPi);
     }
     g_third_person_orbit_state.last_input_sequence = input_sequence;
+    g_third_person_orbit_state.last_input_time_ms = now_ms;
   }
 
   const double horizontal = g_third_person_orbit_state.radius *
@@ -1350,10 +1397,13 @@ bool BuildThirdPersonOrbitPosition(void* controller,
   if (g_debug_log &&
       (g_third_person_orbit_state.applications % 60u) == 1u) {
     AppendNativeLog(
-        "camera_orbit apply input=%.3f/%.3f desired=%d/%d/%d "
+        "camera_orbit apply input=%.3f/%.3f filtered=%.3f/%.3f "
+        "desired=%d/%d/%d "
         "player=%d/%d/%d yaw=%.2f pitch=%.2f radius=%.1f seq=%llu",
-        input_x, input_y, orbit_x, orbit_y, orbit_z, player[0], player[1],
-        player[2], g_third_person_orbit_state.yaw * 180.0 / kOrbitPi,
+        input_x, input_y, g_third_person_orbit_state.filtered_input_x,
+        g_third_person_orbit_state.filtered_input_y,
+        orbit_x, orbit_y, orbit_z, player[0], player[1], player[2],
+        g_third_person_orbit_state.yaw * 180.0 / kOrbitPi,
         g_third_person_orbit_state.pitch * 180.0 / kOrbitPi,
         g_third_person_orbit_state.radius,
         static_cast<unsigned long long>(input_sequence));
@@ -5970,8 +6020,12 @@ void InitializePatchState() {
       static_cast<double>(std::clamp(
           ConfiguredInteger(L"Camera", L"VerticalDegreesPerTick", 5),
           1, 20)) * kOrbitPi / 180.0;
+  g_third_person_orbit_response_seconds =
+      static_cast<double>(std::clamp(
+          ConfiguredInteger(L"Camera", L"ResponseTimeMs", 90), 20, 300)) /
+      1000.0;
   int32_t minimum_pitch_degrees = std::clamp(
-      ConfiguredInteger(L"Camera", L"MinimumPitchDegrees", 10), -30, 70);
+      ConfiguredInteger(L"Camera", L"MinimumPitchDegrees", -35), -50, 70);
   int32_t maximum_pitch_degrees = std::clamp(
       ConfiguredInteger(L"Camera", L"MaximumPitchDegrees", 55), -20, 80);
   if (maximum_pitch_degrees <= minimum_pitch_degrees) {
@@ -6092,7 +6146,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.53 mode3-entry third-person orbit: "
+      "Deathtrap native render overlay 0.0.54 persistent smoothed third-person orbit: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
