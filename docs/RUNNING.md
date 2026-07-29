@@ -236,9 +236,14 @@ Start menu. Hold LB to change only the left-stick horizontal axis to the
 retail side-step actions. R3 retains the game's original first-person action.
 SELECT toggles the overlay's separate head view: the camera eases to eye level
 without changing the native mode-3 state, so the body and ordinary movement
-remain available. SELECT again eases back to the persistent orbit. Both axes
-use the native relative-look path in head view. Set `InvertRightY=1` to invert
-vertical look; `Camera/HeadTransitionMs` controls the transition duration.
+remain available. Version 0.0.56 does not call the retail mode-4 first-person
+routine at all; only the render-camera origin moves, so the body, hands, weapon
+and shadow stay rendered after either transition. SELECT again eases back to
+the persistent orbit. Both axes use the overlay orbit path in head view. Set
+`Camera/InvertY=1` to invert vertical look. `Camera/HeadTransitionMs` controls
+the transition duration; `HeadMinimumPitchDegrees`,
+`HeadMaximumPitchDegrees`, `HeadHeight` and `HeadForwardOffset` tune the full
+vertical range and eye origin independently of the third-person spring arm.
 `RightStickPixelsPerTick=12` and `RightStickResponseCurvePercent=135` provide a
 slower precision response near stick center without adding temporal latency.
 

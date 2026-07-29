@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.55`.
+Current development version: `0.0.56`.
 
 The `modern-third-person-camera` branch contains the first opt-in native orbit
 prototype. It takes ownership at the mode-3 dispatcher before the retail
@@ -115,16 +115,22 @@ D3D11 settings, first-run verification and troubleshooting.
   operates, RT attacks, LT blocks, RB casts, and Start opens the menu. R3 keeps
   the game's original first-person action. SELECT independently moves the
   overlay camera smoothly to an eye-level head view while the game remains in
-  third-person mode, so Lara's body and normal movement remain rendered;
-  SELECT again returns smoothly to the preserved orbit. The right stick looks
-  on both axes in either overlay camera.
-  `XInput/InvertRightY=1` reverses its vertical axis. First-person look uses a
+  third-person mode. Version 0.0.56 never enters the retail first-person
+  callback: it moves only the render camera origin, so Lara, her hands, weapon
+  and shadow remain rendered and cannot stay hidden after returning. SELECT
+  again returns smoothly to the preserved orbit. The right stick looks on both
+  axes in either overlay camera.
+  `Camera/InvertY=1` reverses the overlay camera's vertical axis. Native R3
+  first-person look uses a
   precision curve (`RightStickResponseCurvePercent=135`) and a reduced
   `RightStickPixelsPerTick=12`, giving finer movement near stick center.
 - In ordinary third-person gameplay, moving the right stick engages the
   experimental native orbit camera. Inventory selection, menus and
   first-person view retain priority and suspend orbit input. Configure it in
   `[Camera]`; set `ThirdPersonOrbit=0` for exact retail camera behavior.
+  `HeadMinimumPitchDegrees` and `HeadMaximumPitchDegrees` control the wider
+  SELECT-view pitch range, while `HeadHeight` and `HeadForwardOffset` place its
+  render-only origin relative to the player.
 - XInput vibration is enabled by default. LT produces a light low-frequency
   block-action pulse. RT itself never vibrates: attack feedback begins only
   when the engine accepts the melee downstroke, so pressing attack while the

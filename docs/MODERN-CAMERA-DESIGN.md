@@ -198,10 +198,19 @@ instead of snapping back to the room camera.
 Version `0.0.55` corrects the default XInput axis directions, reduces the
 per-source-tick angular step and synchronizes the separately published camera
 matrix with every synthetic 50 Hz phase. SELECT now toggles an overlay-owned
-head view. It borrows the engine's low-level eye-pose solver while deliberately
-leaving the controller in mode 3, preserving the body, movement and the retail
-R3 first-person action. A timed rigid-transform blend moves between head view
-and the persistent orbit without a one-tick snap.
+head view. Its initial prototype borrowed the entire retail mode-4 callback
+while leaving the controller field in mode 3. Runtime testing proved that this
+callback is not a pose-only solver: it also leaks persistent player-visibility
+state, so the model can remain hidden after SELECT returns to third person.
+
+Version `0.0.56` removes the mode-4 callback completely. SELECT remains in the
+verified mode-3 orbit pipeline, preserves its complete native rotation and
+moves only the captured render-camera origin to a configurable player-relative
+eye point. Player visibility, hands, weapon, shadow, controller mode and game
+state are never modified. The head view has its own `-75..75` degree default
+pitch range, and returning uses the existing phase-synchronized rigid transform
+blend back to the preserved orbit. This also prevents head view from poisoning
+the subsequent third-person distance or room-camera state.
 
 ### Phase C: spring-arm collision
 

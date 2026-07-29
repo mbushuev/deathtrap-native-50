@@ -107,6 +107,19 @@ radius, so the same view resumes when ordinary mode-3 gameplay returns.
 Controller loss, an invalid controller and a large player teleport still reset
 the state defensively.
 
+Version `0.0.55` also tested the retail mode-4 dispatcher callback at
+`Dungeon.dll+0x31190` as a possible eye-pose helper. Runtime testing disproved
+that assumption: even when the controller's visible mode field remains 3, the
+callback mutates persistent body-visibility/controller state and may leave the
+player model hidden after returning. It is therefore not a safe render-only
+camera primitive.
+
+Version `0.0.56` removes that call. The custom head view keeps the verified
+mode-3 orbit rotation and changes only the captured camera-node translation to
+the player origin plus a configurable eye height and small forward offset.
+The same translation is phase-published through the existing synthetic-frame
+camera path, while all player nodes and gameplay state remain untouched.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
