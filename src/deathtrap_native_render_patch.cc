@@ -287,8 +287,10 @@ int32_t g_xinput_mouse_pixels = 18;
 bool g_xinput_invert_right_y = false;
 int32_t g_xinput_selector_radius = 104;
 int32_t g_xinput_selector_center_y = 316;
-double g_xinput_movement_threshold = 0.24;
-double g_xinput_run_threshold = 0.92;
+double g_xinput_movement_threshold = 0.14;
+double g_xinput_run_threshold = 0.58;
+double g_xinput_run_release_threshold = 0.42;
+bool g_xinput_run_active = false;
 uint64_t g_weapon_wheel_switches = 0;
 uint64_t g_weapon_wheel_rejections = 0;
 uint64_t g_suppressed_midpoints = 0;
@@ -787,8 +789,26 @@ bool g_injected_mouse_right = false;
 bool g_xinput_was_connected = false;
 WORD g_previous_xinput_buttons = 0;
 bool g_xinput_first_person_toggled = false;
-bool g_xinput_menu_mode = false;
+std::atomic<bool> g_xinput_menu_mode{true};
 bool g_xinput_previous_native_gameplay = false;
+std::atomic_flag g_xinput_poll_guard = ATOMIC_FLAG_INIT;
+
+class ScopedXInputPoll {
+ public:
+  explicit ScopedXInputPoll(std::atomic_flag& flag) : flag_(flag) {
+    acquired_ = !flag_.test_and_set(std::memory_order_acquire);
+  }
+  ~ScopedXInputPoll() {
+    if (acquired_) {
+      flag_.clear(std::memory_order_release);
+    }
+  }
+  explicit operator bool() const { return acquired_; }
+
+ private:
+  std::atomic_flag& flag_;
+  bool acquired_ = false;
+};
 
 constexpr std::array<WORD, static_cast<size_t>(InjectedKey::kCount)>
     kInjectedVirtualKeys = {L'W', L'S', L'A', L'D', L'J', L'K', VK_LSHIFT,
@@ -872,7 +892,8 @@ void ReleaseInjectedControllerInput() {
   InjectMouseRight(false);
   SubmitDeathtrapXInputMouseState(0, 0, false, false);
   g_xinput_first_person_toggled = false;
-  g_xinput_menu_mode = false;
+  g_xinput_run_active = false;
+  g_xinput_menu_mode.store(true, std::memory_order_release);
   g_xinput_previous_native_gameplay = false;
   g_previous_xinput_buttons = 0;
 }
@@ -1242,8 +1263,13 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     InjectVirtualKey(InjectedKey::kK,
                      strafe_modifier &&
                          left_x > g_xinput_movement_threshold);
-    InjectVirtualKey(InjectedKey::kShift,
-                     std::abs(left_y) > g_xinput_run_threshold);
+    const double forward_magnitude = std::abs(left_y);
+    if (forward_magnitude >= g_xinput_run_threshold) {
+      g_xinput_run_active = true;
+    } else if (forward_magnitude <= g_xinput_run_release_threshold) {
+      g_xinput_run_active = false;
+    }
+    InjectVirtualKey(InjectedKey::kShift, g_xinput_run_active);
     InjectVirtualKey(InjectedKey::kSpace,
                      !selector_captures_controls &&
                          (buttons & XINPUT_GAMEPAD_A));
@@ -1272,6 +1298,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     }
   } else {
     g_xinput_first_person_toggled = false;
+    g_xinput_run_active = false;
     InjectVirtualKey(InjectedKey::kW, false);
     InjectVirtualKey(InjectedKey::kS, false);
     InjectVirtualKey(InjectedKey::kA, false);
@@ -1279,8 +1306,11 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     InjectVirtualKey(InjectedKey::kJ, false);
     InjectVirtualKey(InjectedKey::kK, false);
     InjectVirtualKey(InjectedKey::kShift, false);
+    // A is simultaneously the native mouse click and the keyboard confirm /
+    // movie-skip key. X remains an alternate skip key for the retail screens
+    // that bind Space but don't expose a clickable target.
     InjectVirtualKey(InjectedKey::kSpace,
-                     (buttons & XINPUT_GAMEPAD_X) != 0);
+                     (buttons & (XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_X)) != 0);
     InjectVirtualKey(InjectedKey::kE, false);
     InjectVirtualKey(InjectedKey::kQ, false);
     InjectVirtualKey(InjectedKey::kTab, false);
@@ -1294,7 +1324,8 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
                      left_x < -0.35 || (buttons & XINPUT_GAMEPAD_DPAD_LEFT));
     InjectVirtualKey(InjectedKey::kRight,
                      left_x > 0.35 || (buttons & XINPUT_GAMEPAD_DPAD_RIGHT));
-    InjectVirtualKey(InjectedKey::kEnter, false);
+    InjectVirtualKey(InjectedKey::kEnter,
+                     (buttons & XINPUT_GAMEPAD_A) != 0);
     const int32_t menu_mouse_x = static_cast<int32_t>(std::lround(
         right_x * static_cast<double>(g_xinput_mouse_pixels)));
     const double menu_y_sign = g_xinput_invert_right_y ? 1.0 : -1.0;
@@ -1312,6 +1343,10 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
 
 void UpdateDeathtrapXInput() {
   if (!g_xinput_enabled || !LoadXInputRuntime()) {
+    return;
+  }
+  ScopedXInputPoll poll(g_xinput_poll_guard);
+  if (!poll) {
     return;
   }
   XINPUT_STATE state = {};
@@ -1334,20 +1369,29 @@ void UpdateDeathtrapXInput() {
   const WORD newly_pressed =
       state.Gamepad.wButtons & ~g_previous_xinput_buttons;
   if (!native_gameplay) {
-    g_xinput_menu_mode = true;
+    g_xinput_menu_mode.store(true, std::memory_order_release);
   } else if (!g_xinput_previous_native_gameplay) {
     // Loading/main-menu -> gameplay is an unambiguous automatic transition.
-    g_xinput_menu_mode = false;
+    g_xinput_menu_mode.store(false, std::memory_order_release);
   }
   if (native_gameplay && (newly_pressed & XINPUT_GAMEPAD_START)) {
     // The pause/options menus retain the live player pointer, so the native
     // gameplay test alone cannot identify them. Start is the authoritative
     // transition used by the retail game and by this controller bridge.
-    g_xinput_menu_mode = !g_xinput_menu_mode;
-    AppendNativeLog("xinput menu mode=%u", g_xinput_menu_mode ? 1u : 0u);
+    const bool menu_mode =
+        !g_xinput_menu_mode.load(std::memory_order_acquire);
+    g_xinput_menu_mode.store(menu_mode, std::memory_order_release);
+    AppendNativeLog("xinput menu mode=%u", menu_mode ? 1u : 0u);
   }
   g_xinput_previous_native_gameplay = native_gameplay;
-  const bool gameplay = native_gameplay && !g_xinput_menu_mode;
+  const bool gameplay =
+      native_gameplay && !g_xinput_menu_mode.load(std::memory_order_acquire);
+  // Frontend DirectInput polling owns movies and menus. The scheduler owns
+  // only gameplay so engine actions and the native selector never run from a
+  // foreign input thread.
+  if (!gameplay) {
+    return;
+  }
   UpdateControllerSelector(state.Gamepad, gameplay);
   const bool selector_captures_controls =
       g_controller_selector.direction_down &&
@@ -1355,6 +1399,39 @@ void UpdateDeathtrapXInput() {
        g_controller_selector.category == 4u);
   UpdateControllerBaseBindings(state.Gamepad, gameplay,
                                selector_captures_controls);
+}
+
+void PollFrontendXInputInternal() {
+  if (!g_xinput_enabled || !LoadXInputRuntime()) {
+    return;
+  }
+  ScopedXInputPoll poll(g_xinput_poll_guard);
+  if (!poll) {
+    return;
+  }
+  XINPUT_STATE state = {};
+  const bool connected =
+      g_xinput_get_state(g_xinput_controller_index, &state) == ERROR_SUCCESS;
+  if (!connected || !IsGameForeground()) {
+    SubmitDeathtrapXInputMouseState(0, 0, false, false);
+    return;
+  }
+
+  const bool native_gameplay = DeathtrapGameplayReady(false);
+  bool menu_mode = g_xinput_menu_mode.load(std::memory_order_acquire);
+  if (!native_gameplay) {
+    menu_mode = true;
+    g_xinput_menu_mode.store(true, std::memory_order_release);
+  }
+  if (native_gameplay && !menu_mode) {
+    return;
+  }
+
+  // The frontend consumes the same retail keyboard/mouse actions as a real
+  // user: right stick is the pointer, A is both click/confirm and the movie
+  // skip key, B/Start is Escape, and the left stick/D-pad provide keyboard
+  // navigation for screens that don't expose a mouse target.
+  UpdateControllerBaseBindings(state.Gamepad, false, false);
 }
 
 // The old V26 experiment detoured complete engine functions. Those functions
@@ -4345,11 +4422,18 @@ void InitializePatchState() {
   g_xinput_selector_center_y = std::clamp(
       ConfiguredInteger(L"XInput", L"SelectorCenterY", 316), 192, 400);
   g_xinput_movement_threshold = static_cast<double>(std::clamp(
-      ConfiguredInteger(L"XInput", L"MovementThresholdPercent", 24),
+      ConfiguredInteger(L"XInput", L"MovementThresholdPercent", 14),
       10, 60)) / 100.0;
   g_xinput_run_threshold = static_cast<double>(std::clamp(
-      ConfiguredInteger(L"XInput", L"RunThresholdPercent", 92),
-      70, 100)) / 100.0;
+      ConfiguredInteger(L"XInput", L"RunThresholdPercent", 58),
+      40, 95)) / 100.0;
+  g_xinput_run_release_threshold = static_cast<double>(std::clamp(
+      ConfiguredInteger(L"XInput", L"RunReleaseThresholdPercent", 42),
+      20, 80)) / 100.0;
+  if (g_xinput_run_release_threshold >= g_xinput_run_threshold) {
+    g_xinput_run_release_threshold =
+        std::max(0.20, g_xinput_run_threshold - 0.12);
+  }
   const uint32_t subframes = ConfiguredSubframes();
   g_subframes.store(subframes, std::memory_order_relaxed);
   if (!subframes) {
@@ -4378,7 +4462,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.28 centered radial and menu input "
+      "Deathtrap native render overlay 0.0.29 startup controller and stable run "
       "integer x3 presentation "
       "session: "
       "unchanged v31 "
@@ -4448,6 +4532,10 @@ void QueueDeathtrapWeaponWheelDelta(int32_t delta) {
   }
   g_last_weapon_wheel_event_ms.store(GetTickCount64(),
                                      std::memory_order_relaxed);
+}
+
+void PollDeathtrapFrontendXInput() {
+  PollFrontendXInputInternal();
 }
 
 DeathtrapNativePresentationStage GetDeathtrapNativePresentationStage() {

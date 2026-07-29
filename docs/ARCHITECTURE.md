@@ -101,8 +101,10 @@ Synthetic render phases do not poll or consume input.
 
 ## XInput category bridge
 
-Version 0.0.28 loads XInput dynamically and polls it once at the same real
-`Dungeon.dll+0x80600` boundary. D-pad holds write only the retail selector mode
+Version 0.0.29 splits XInput polling by ownership. Gameplay is polled once at
+the real `Dungeon.dll+0x80600` boundary, while a lightweight frontend poll is
+active from process startup through movies, loading screens and menus. D-pad
+holds write only the retail selector mode
 byte at `+0x1086FC`, whose values 1 through 4 already dispatch the original
 close-combat, ranged, spell, and consumable rows. Direct selection uses the
 retail commit paths at `+0x90610`, `+0x90740`, `+0x7BAF0`, and `+0x7B9C0`.
@@ -126,6 +128,8 @@ action parser remains the sole owner of movement, combat, menus and collision.
 
 Pause menus keep the live gameplay pointers, so Start maintains a small
 controller-only context latch rather than guessing from those pointers. Menu
-pointer deltas and A-button state are merged into the physical mouse result in
-the hooked DirectInput `GetDeviceState`; the pending delta is a replaceable
-single sample, preventing accumulated cursor jumps across loading screens.
+pointer deltas and A-button state are merged into both legacy DirectInput input
+paths: immediate `GetDeviceState` and buffered `GetDeviceData`. The pending
+delta is a replaceable single sample, preventing accumulated cursor jumps
+across loading screens. The frontend poll never calls `Dungeon.dll` inventory
+or gameplay actions; those remain owned by the scheduler thread.

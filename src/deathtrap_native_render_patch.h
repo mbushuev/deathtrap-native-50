@@ -59,6 +59,13 @@ void QueueDeathtrapWeaponWheelDelta(int32_t delta);
 void SubmitDeathtrapXInputMouseState(int32_t delta_x, int32_t delta_y,
                                      bool left_button, bool right_button);
 
+// Polls only the startup/movie/menu controller path. DirectInput calls this
+// immediately before the retail frontend consumes mouse data, so controller
+// input is available before Dungeon.dll's gameplay render scheduler starts.
+// Gameplay and the native inventory selector remain on the engine scheduler
+// thread and are deliberately not executed from this path.
+void PollDeathtrapFrontendXInput();
+
 // Used only while the native midpoint restores the legacy DirectDraw page
 // orientation. The restore Flip must rotate the game's front/back surfaces,
 // but must not become another visible DXGI presentation.

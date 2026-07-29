@@ -5,8 +5,10 @@
 #include <dxgi1_6.h>
 #include <MinHook.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <mutex>
 
 #include "deathtrap_native_render_patch.h"
@@ -35,10 +37,13 @@ using DirectInputCreateDeviceAFn = HRESULT(STDMETHODCALLTYPE*)(
     IDirectInputA*, REFGUID, LPDIRECTINPUTDEVICEA*, LPUNKNOWN);
 using DirectInputDeviceGetStateFn = HRESULT(STDMETHODCALLTYPE*)(
     IDirectInputDeviceA*, DWORD, LPVOID);
+using DirectInputDeviceGetDataFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDirectInputDeviceA*, DWORD, LPDIDEVICEOBJECTDATA, LPDWORD, DWORD);
 
 HMODULE g_system_dinput = nullptr;
 HMODULE g_dxgi = nullptr;
 std::once_flag g_initialize_once;
+std::atomic<bool> g_stop_frontend_input{false};
 CreateDXGIFactoryFn g_create_factory = nullptr;
 CreateDXGIFactoryFn g_create_factory1 = nullptr;
 CreateDXGIFactory2Fn g_create_factory2 = nullptr;
@@ -52,12 +57,18 @@ SwapChainPresentFn g_present = nullptr;
 SwapChainPresent1Fn g_present1 = nullptr;
 DirectInputCreateDeviceAFn g_direct_input_create_device = nullptr;
 DirectInputDeviceGetStateFn g_direct_input_device_get_state = nullptr;
+DirectInputDeviceGetDataFn g_direct_input_device_get_data = nullptr;
 thread_local bool g_inside_present = false;
 thread_local bool g_suppress_page_restore = false;
 std::atomic<uint64_t> g_suppressed_page_restores{0};
 std::atomic<int32_t> g_xinput_mouse_delta_x{0};
 std::atomic<int32_t> g_xinput_mouse_delta_y{0};
 std::atomic<uint8_t> g_xinput_mouse_buttons{0};
+std::atomic<int32_t> g_xinput_buffered_mouse_delta_x{0};
+std::atomic<int32_t> g_xinput_buffered_mouse_delta_y{0};
+std::atomic<uint8_t> g_xinput_buffered_mouse_buttons{0};
+std::atomic<uint8_t> g_xinput_buffered_mouse_buttons_delivered{0};
+std::atomic<uint32_t> g_xinput_buffered_mouse_sequence{1};
 
 extern "C" {
 FARPROC g_target_DirectInputCreateA = nullptr;
@@ -125,6 +136,7 @@ bool PatchVtableSlot(void** vtable, size_t index, void* replacement,
 
 HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     IDirectInputDeviceA* device, DWORD data_size, LPVOID data) {
+  PollDeathtrapFrontendXInput();
   const HRESULT result =
       g_direct_input_device_get_state
           ? g_direct_input_device_get_state(device, data_size, data)
@@ -156,6 +168,70 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
   return result;
 }
 
+HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetData(
+    IDirectInputDeviceA* device, DWORD object_size,
+    LPDIDEVICEOBJECTDATA data, LPDWORD count, DWORD flags) {
+  PollDeathtrapFrontendXInput();
+  const DWORD capacity = count ? *count : 0u;
+  const HRESULT result =
+      g_direct_input_device_get_data
+          ? g_direct_input_device_get_data(device, object_size, data, count,
+                                           flags)
+          : DIERR_GENERIC;
+  if (FAILED(result) || !count || !data || object_size == 0u) {
+    return result;
+  }
+
+  DWORD written = *count;
+  const bool peek = (flags & DIGDD_PEEK) != 0;
+  auto append = [&](DWORD offset, DWORD value) {
+    if (written >= capacity) {
+      return false;
+    }
+    DIDEVICEOBJECTDATA event = {};
+    event.dwOfs = offset;
+    event.dwData = value;
+    event.dwTimeStamp = GetTickCount();
+    event.dwSequence =
+        g_xinput_buffered_mouse_sequence.fetch_add(1,
+                                                    std::memory_order_relaxed);
+    auto* destination = reinterpret_cast<uint8_t*>(data) +
+                        static_cast<size_t>(written) * object_size;
+    std::memset(destination, 0, object_size);
+    std::memcpy(destination, &event,
+                std::min<size_t>(object_size, sizeof(event)));
+    ++written;
+    return true;
+  };
+
+  int32_t delta_x = g_xinput_buffered_mouse_delta_x.load(
+      std::memory_order_acquire);
+  if (delta_x != 0 && append(DIMOFS_X, static_cast<DWORD>(delta_x)) && !peek) {
+    g_xinput_buffered_mouse_delta_x.store(0, std::memory_order_release);
+  }
+  int32_t delta_y = g_xinput_buffered_mouse_delta_y.load(
+      std::memory_order_acquire);
+  if (delta_y != 0 && append(DIMOFS_Y, static_cast<DWORD>(delta_y)) && !peek) {
+    g_xinput_buffered_mouse_delta_y.store(0, std::memory_order_release);
+  }
+  const uint8_t desired_buttons =
+      g_xinput_buffered_mouse_buttons.load(std::memory_order_acquire);
+  const uint8_t delivered_buttons =
+      g_xinput_buffered_mouse_buttons_delivered.load(
+          std::memory_order_acquire);
+  if ((desired_buttons ^ delivered_buttons) & 1u) {
+    if (append(DIMOFS_BUTTON0, (desired_buttons & 1u) ? 0x80u : 0u) &&
+        !peek) {
+      g_xinput_buffered_mouse_buttons_delivered.store(
+          static_cast<uint8_t>((delivered_buttons & ~1u) |
+                               (desired_buttons & 1u)),
+          std::memory_order_release);
+    }
+  }
+  *count = written;
+  return result;
+}
+
 void SubmitDeathtrapXInputMouseStateInternal(int32_t delta_x, int32_t delta_y,
                                              bool left_button,
                                              bool right_button) {
@@ -165,6 +241,12 @@ void SubmitDeathtrapXInputMouseStateInternal(int32_t delta_x, int32_t delta_y,
   g_xinput_mouse_delta_x.store(delta_x, std::memory_order_release);
   g_xinput_mouse_delta_y.store(delta_y, std::memory_order_release);
   g_xinput_mouse_buttons.store(
+      static_cast<uint8_t>((left_button ? 1u : 0u) |
+                           (right_button ? 2u : 0u)),
+      std::memory_order_release);
+  g_xinput_buffered_mouse_delta_x.store(delta_x, std::memory_order_release);
+  g_xinput_buffered_mouse_delta_y.store(delta_y, std::memory_order_release);
+  g_xinput_buffered_mouse_buttons.store(
       static_cast<uint8_t>((left_button ? 1u : 0u) |
                            (right_button ? 2u : 0u)),
       std::memory_order_release);
@@ -184,6 +266,9 @@ HRESULT STDMETHODCALLTYPE HookDirectInputCreateDeviceA(
     PatchVtableSlot(vtable, 9,
                     reinterpret_cast<void*>(&HookDirectInputDeviceGetState),
                     &g_direct_input_device_get_state);
+    PatchVtableSlot(vtable, 10,
+                    reinterpret_cast<void*>(&HookDirectInputDeviceGetData),
+                    &g_direct_input_device_get_data);
   }
   return result;
 }
@@ -417,12 +502,25 @@ bool InstallDxgiHooks() {
   return installed;
 }
 
+DWORD WINAPI FrontendInputThread(void*) {
+  while (!g_stop_frontend_input.load(std::memory_order_acquire)) {
+    PollDeathtrapFrontendXInput();
+    Sleep(8);
+  }
+  return 0;
+}
+
 DWORD WINAPI InitializeThread(void*) {
   std::call_once(g_initialize_once, [] {
     LoadSystemDinput();
     InitializeDeathtrapNativeRenderPatch();
     InstallDxgiHooks();
     InstallDeathtrapNativeRenderHooks();
+    HANDLE frontend_thread = CreateThread(
+        nullptr, 0, &FrontendInputThread, nullptr, 0, nullptr);
+    if (frontend_thread) {
+      CloseHandle(frontend_thread);
+    }
   });
   return 0;
 }
@@ -451,6 +549,8 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     if (thread) {
       CloseHandle(thread);
     }
+  } else if (reason == DLL_PROCESS_DETACH) {
+    g_stop_frontend_input.store(true, std::memory_order_release);
   }
   return TRUE;
 }

@@ -45,7 +45,7 @@ the overlay deliberately does not take cursor ownership.
 - Keep vertical mouse-look disabled unless a later camera investigation can
   preserve framing and collision visibility.
 
-## Phase 5: XInput (implemented in 0.0.28)
+## Phase 5: XInput (implemented through 0.0.29)
 
 - Dynamically support modern Xbox controllers without redistributing XInput.
 - Drive the original keyboard/mouse actions with configurable deadzones,

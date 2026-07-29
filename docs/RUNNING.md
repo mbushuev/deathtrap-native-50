@@ -131,7 +131,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.28`
+The render log must begin with the `Deathtrap native render overlay 0.0.29`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -160,10 +160,11 @@ down selects the next one).
 
 ## XInput controller layer
 
-Version 0.0.28 dynamically loads the first available Microsoft XInput runtime
-(`xinput1_4`, `xinput1_3`, then `xinput9_1_0`) and polls controller 0 only at a
-real game scheduler boundary. Synthetic native-render phases never poll or
-repeat controller input.
+Version 0.0.29 dynamically loads the first available Microsoft XInput runtime
+(`xinput1_4`, `xinput1_3`, then `xinput9_1_0`). Gameplay is polled only at a
+real game scheduler boundary, while a separate lightweight frontend poll is
+available immediately at process startup for movies, loading and menus.
+Synthetic native-render phases never poll or repeat controller input.
 
 The default gameplay layout is left-stick forward/backward and tank turning,
 A jump/climb, X operate, RT primary attack, LT parry/block, RB cast spell and
@@ -173,13 +174,14 @@ active, both right-stick axes use the game's native relative-mouse path. This
 keeps the normal follow camera predictable and provides two-axis aiming without
 writing camera transforms. Set `InvertRightY=1` to invert vertical look.
 
-In loading screens and menus, right stick moves the existing game pointer, A
-clicks, left stick or D-pad provides arrow-key fallback navigation, B or Start
-goes back, and X sends Space. The controller mouse is merged directly into the
-game's next DirectInput sample because legacy pause menus retain their gameplay
-object and do not reliably consume modern `SendInput` mouse events. Pressing
-Start explicitly switches the bridge between gameplay and pause-menu contexts.
-The layer never draws or captures a second cursor.
+In startup movies, loading screens and menus, right stick moves the existing
+game pointer, A clicks/confirms and sends the native movie-skip key, left stick
+or D-pad provides arrow-key fallback navigation, B or Start goes back, and X
+is an alternate skip key. The controller mouse is merged into both immediate
+and buffered DirectInput mouse reads because different retail frontend screens
+use different legacy polling modes. Pressing Start explicitly switches the
+bridge between gameplay and pause-menu contexts. The layer never draws or
+captures a second cursor.
 
 D-pad maps to the four retail selectors: up close combat, right ranged, down
 spells, and left potions/charms. A short tap cycles the next available item in
@@ -192,9 +194,10 @@ logical coordinate space.
 
 The validated 4:3 center is `SelectorCenterY=316`; the retail UI uses an
 upward-growing Y axis with its origin near the bottom edge, not D3D screen
-coordinates. `MovementThresholdPercent=24` filters stick noise and
-`RunThresholdPercent=92` prevents medium deflection from immediately becoming
-a run.
+coordinates. `MovementThresholdPercent=14` keeps tank turning responsive.
+Running engages at `RunThresholdPercent=58` and disengages only below
+`RunReleaseThresholdPercent=42`; this hysteresis prevents noisy or diagonal
+full-stick samples from interrupting a run with a one-tick walk transition.
 
 The consumable category never activates on release. Keep D-pad left held,
 choose a slot, and press A to use it; B or release cancels. This guard prevents
