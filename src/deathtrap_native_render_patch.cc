@@ -39,6 +39,7 @@ constexpr uintptr_t kUiFrameStampRva = 0x000FB96Cu;
 constexpr uintptr_t kUiRenderStateRva = 0x0022B5B0u;
 constexpr uintptr_t kUiSelectorModeRva = 0x001086FCu;
 constexpr uintptr_t kUiMessageStateRva = 0x001D41C8u;
+constexpr uintptr_t kUiMessageEntriesRva = 0x001D4360u;
 constexpr uintptr_t kUiCountdownStateRva = 0x001D89F0u;
 constexpr uintptr_t kUiOwnerPointerRva = 0x0034F9D0u;
 constexpr uintptr_t kEngineFrameCounterRva = 0x001D24DCu;
@@ -61,6 +62,10 @@ constexpr std::array<uintptr_t, 3> kMovementResolverCallbackRvas = {
 constexpr uintptr_t kMovementVtableCallbackRva = 0x0005778Au;
 constexpr size_t kUiRenderStateSize = 0x40u;
 constexpr size_t kUiMessageStateSize = 0x20u;
+constexpr size_t kUiMessageEntrySize = 0x50u;
+constexpr size_t kUiMessageEntryCount = 3u;
+constexpr size_t kUiMessageEntriesSize =
+    kUiMessageEntrySize * kUiMessageEntryCount;
 constexpr size_t kUiCountdownStateSize = 0x20u;
 constexpr uint32_t kOriginalGameplayRate = 16u;
 constexpr uint32_t kOriginalPeriodMilliseconds = 60u;
@@ -217,11 +222,17 @@ struct PresentationTraceSample {
 struct UiRenderStateSnapshot {
   std::array<uint8_t, kUiRenderStateSize> control{};
   std::array<uint8_t, kUiMessageStateSize> messages{};
+  // Dungeon.dll+0x8F4C0 decrements the lifetime at +0x4C of every active
+  // 0x50-byte message entry whenever the renderer is invoked. Preserve the
+  // complete three-entry queue around synthetic render passes so only the
+  // exact simulation render is allowed to age on-screen text.
+  std::array<uint8_t, kUiMessageEntriesSize> message_entries{};
   std::array<uint8_t, kUiCountdownStateSize> countdowns{};
   int32_t frame_stamp = 0;
   uint8_t selector_mode = 0;
   bool control_valid = false;
   bool messages_valid = false;
+  bool message_entries_valid = false;
   bool countdowns_valid = false;
   bool frame_stamp_valid = false;
   bool selector_mode_valid = false;
@@ -392,6 +403,10 @@ UiRenderStateSnapshot CaptureUiRenderState() {
   snapshot.messages_valid =
       SafeRead(g_dungeon_base + kUiMessageStateRva,
                snapshot.messages.data(), snapshot.messages.size());
+  snapshot.message_entries_valid =
+      SafeRead(g_dungeon_base + kUiMessageEntriesRva,
+               snapshot.message_entries.data(),
+               snapshot.message_entries.size());
   snapshot.countdowns_valid =
       SafeRead(g_dungeon_base + kUiCountdownStateRva,
                snapshot.countdowns.data(), snapshot.countdowns.size());
@@ -411,6 +426,11 @@ bool RestoreUiRenderState(const UiRenderStateSnapshot& snapshot) {
   if (snapshot.messages_valid) {
     restored |= SafeWrite(g_dungeon_base + kUiMessageStateRva,
                           snapshot.messages.data(), snapshot.messages.size());
+  }
+  if (snapshot.message_entries_valid) {
+    restored |= SafeWrite(g_dungeon_base + kUiMessageEntriesRva,
+                          snapshot.message_entries.data(),
+                          snapshot.message_entries.size());
   }
   if (snapshot.countdowns_valid) {
     restored |= SafeWrite(g_dungeon_base + kUiCountdownStateRva,
@@ -435,6 +455,8 @@ bool UiRenderStateChanged(const UiRenderStateSnapshot& before,
           before.control != after.control) ||
          (before.messages_valid && after.messages_valid &&
           before.messages != after.messages) ||
+         (before.message_entries_valid && after.message_entries_valid &&
+          before.message_entries != after.message_entries) ||
          (before.countdowns_valid && after.countdowns_valid &&
           before.countdowns != after.countdowns) ||
          (before.frame_stamp_valid && after.frame_stamp_valid &&
@@ -447,6 +469,8 @@ bool UiTransientLogicChanged(const UiRenderStateSnapshot& before,
                              const UiRenderStateSnapshot& after) {
   return (before.messages_valid && after.messages_valid &&
           before.messages != after.messages) ||
+         (before.message_entries_valid && after.message_entries_valid &&
+          before.message_entries != after.message_entries) ||
          (before.countdowns_valid && after.countdowns_valid &&
           before.countdowns != after.countdowns) ||
          (before.selector_mode_valid && after.selector_mode_valid &&
@@ -4543,7 +4567,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.34 native F2+8 chalk path "
+      "Deathtrap native render overlay 0.0.35 native text-lifetime rollback "
       "and tuned controller response "
       "integer x3 presentation "
       "session: "

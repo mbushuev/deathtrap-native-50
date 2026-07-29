@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.34`.
+Current development version: `0.0.35`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.

@@ -146,3 +146,17 @@ paths: immediate `GetDeviceState` and buffered `GetDeviceData`. The pending
 delta is a replaceable single sample, preventing accumulated cursor jumps
 across loading screens. The frontend poll never calls `Dungeon.dll` inventory
 or gameplay actions; those remain owned by the scheduler thread.
+
+## Original text lifetime at the higher render rate
+
+`Dungeon.dll+0x8F4C0` draws the transient on-screen messages and decrements the
+lifetime stored at offset `+0x4C` in each of the three `0x50`-byte message
+entries. The retail renderer calls it once per simulation endpoint. Calling it
+again for the two synthetic phases would therefore age a message three times
+per source tick and make it disappear roughly three times too quickly.
+
+Version 0.0.35 includes the complete message queue in the synthetic-render
+transaction. Each midpoint may draw the current text, but its mutation of the
+queue is rolled back immediately. Only the exact endpoint is allowed to age
+the message, preserving the retail duration without changing the stored
+50-tick lifetime or slowing any other UI/gameplay timer.
