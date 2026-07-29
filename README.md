@@ -1,6 +1,11 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.48`.
+Current development version: `0.0.49`.
+
+The `modern-third-person-camera` branch currently contains a read-only camera
+owner probe. See [Camera reverse-engineering notes](docs/CAMERA-REVERSE-ENGINEERING.md)
+for the verified cache path, static analysis helper and controlled capture
+procedure. The probe does not change retail camera behavior.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.

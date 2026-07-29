@@ -46,6 +46,8 @@ constexpr uintptr_t kPstMessageLifetimeImmediateRva = 0x000781C8u;
 constexpr uintptr_t kUiCountdownStateRva = 0x001D89F0u;
 constexpr uintptr_t kUiOwnerPointerRva = 0x0034F9D0u;
 constexpr uintptr_t kEngineFrameCounterRva = 0x001D24DCu;
+constexpr uintptr_t kPublishedCameraMatrixRva = 0x001D4110u;
+constexpr uintptr_t kRetailCameraManagerPointerRva = 0x001F11C0u;
 constexpr uintptr_t kActiveCloseCombatWeaponRva = 0x001D8A68u;
 constexpr uintptr_t kActiveSpellRva = 0x001D8A6Cu;
 constexpr uintptr_t kInventoryLookupRva = 0x0007BD30u;
@@ -101,6 +103,10 @@ constexpr size_t kSceneRootOffset = 0x1Cu;
 constexpr size_t kContextCameraOwnerOffset = 0x28u;
 constexpr size_t kContextSceneOwnerOffset = 0x2Cu;
 constexpr size_t kCameraNodeOffset = 0x10u;
+constexpr size_t kCameraOwnerCallbackOffset = 0x18u;
+constexpr size_t kCameraOwnerProbeDwords = 64u;
+constexpr size_t kCameraManagerProbeDwords = 32u;
+constexpr size_t kCameraNodeProbeDwords = 80u;
 constexpr size_t kMaximumSceneNodes = 8192u;
 constexpr size_t kContextPrimaryCallbackOffset = 0x50u;
 constexpr size_t kContextSecondaryCallbackOffset = 0x54u;
@@ -288,6 +294,23 @@ struct TransitionStats {
   const char* reason = "none";
 };
 
+struct CameraProbeSnapshot {
+  uintptr_t context_owner = 0;
+  uintptr_t manager = 0;
+  uintptr_t manager_node = 0;
+  uintptr_t node = 0;
+  uintptr_t callback = 0;
+  std::array<uint32_t, kCameraOwnerProbeDwords> owner_fields{};
+  std::array<uint32_t, kCameraManagerProbeDwords> manager_fields{};
+  std::array<uint32_t, kCameraNodeProbeDwords> node_fields{};
+  Matrix3x4 published_matrix{};
+  bool owner_valid = false;
+  bool manager_valid = false;
+  bool node_valid = false;
+  bool published_valid = false;
+  bool initialized = false;
+};
+
 std::once_flag g_patch_once;
 std::atomic<DeathtrapNativeRenderPatchState> g_state{
     DeathtrapNativeRenderPatchState::kNotAttempted};
@@ -320,6 +343,9 @@ SceneSnapshot g_previous_snapshot;
 SceneSnapshot g_older_snapshot;
 LARGE_INTEGER g_qpc_frequency{};
 bool g_debug_log = false;
+bool g_camera_probe_enabled = false;
+CameraProbeSnapshot g_camera_probe_previous;
+std::string g_camera_probe_log_buffer;
 bool g_weapon_wheel_enabled = false;
 bool g_weapon_wheel_invert = false;
 bool g_xinput_enabled = false;
@@ -3907,6 +3933,197 @@ uintptr_t DungeonRva(uintptr_t address) {
              : address;
 }
 
+template <typename Value, size_t Count>
+uint32_t AppendCameraFieldChanges(
+    const char* name, const std::array<Value, Count>& previous,
+    const std::array<Value, Count>& current, std::string* line) {
+  uint32_t changed = 0;
+  uint32_t printed = 0;
+  char field[96] = {};
+  for (size_t index = 0; index < Count; ++index) {
+    if (previous[index] == current[index]) {
+      continue;
+    }
+    ++changed;
+    if (printed >= 16u) {
+      continue;
+    }
+    const int length = std::snprintf(
+        field, sizeof(field), "%s+%02zX:%08X>%08X,", name,
+        index * sizeof(Value), static_cast<uint32_t>(previous[index]),
+        static_cast<uint32_t>(current[index]));
+    if (length > 0) {
+      line->append(field, static_cast<size_t>(length));
+      ++printed;
+    }
+  }
+  if (changed > printed) {
+    const int length = std::snprintf(field, sizeof(field), "%s_more=%u,", name,
+                                     changed - printed);
+    if (length > 0) {
+      line->append(field, static_cast<size_t>(length));
+    }
+  }
+  return changed;
+}
+
+void FlushCameraProbeLog() {
+  if (g_camera_probe_log_buffer.empty()) {
+    return;
+  }
+  AppendNativeLogBlock(g_camera_probe_log_buffer);
+  g_camera_probe_log_buffer.clear();
+}
+
+void ProbeCameraState(void* context, const SceneSnapshot& scene,
+                      uint64_t source_tick) {
+  if (!g_camera_probe_enabled || !g_debug_log || !g_dungeon_base ||
+      !context) {
+    return;
+  }
+
+  CameraProbeSnapshot current;
+  const uintptr_t context_address = reinterpret_cast<uintptr_t>(context);
+  SafeReadValue(reinterpret_cast<const void*>(
+                    context_address + kContextCameraOwnerOffset),
+                &current.context_owner);
+  SafeReadValue(g_dungeon_base + kRetailCameraManagerPointerRva,
+                &current.manager);
+  if (current.context_owner) {
+    SafeReadValue(reinterpret_cast<const void*>(
+                      current.context_owner + kCameraNodeOffset),
+                  &current.node);
+    SafeReadValue(reinterpret_cast<const void*>(
+                      current.context_owner + kCameraOwnerCallbackOffset),
+                  &current.callback);
+    current.owner_valid = SafeRead(
+        reinterpret_cast<const void*>(current.context_owner),
+        current.owner_fields.data(), sizeof(current.owner_fields));
+  }
+  if (current.manager) {
+    SafeReadValue(reinterpret_cast<const void*>(
+                      current.manager + kCameraNodeOffset),
+                  &current.manager_node);
+    current.manager_valid = SafeRead(
+        reinterpret_cast<const void*>(current.manager),
+        current.manager_fields.data(), sizeof(current.manager_fields));
+  }
+  if (current.node) {
+    current.node_valid = SafeRead(
+        reinterpret_cast<const void*>(current.node), current.node_fields.data(),
+        sizeof(current.node_fields));
+  }
+  current.published_valid = SafeRead(g_dungeon_base + kPublishedCameraMatrixRva,
+                                     &current.published_matrix,
+                                     sizeof(current.published_matrix));
+
+  const bool identity_changed =
+      g_camera_probe_previous.initialized &&
+      (g_camera_probe_previous.context_owner != current.context_owner ||
+       g_camera_probe_previous.manager != current.manager ||
+       g_camera_probe_previous.node != current.node ||
+       g_camera_probe_previous.callback != current.callback);
+  if (!g_camera_probe_previous.initialized || identity_changed) {
+    char baseline[512] = {};
+    const int length = std::snprintf(
+        baseline, sizeof(baseline),
+        "camera_probe baseline tick=%llu context=%08llX owner=%08llX "
+        "manager=%08llX manager_node=%08llX node=%08llX callback_rva=%08llX "
+        "owner_valid=%u manager_valid=%u node_valid=%u published_valid=%u\r\n",
+        static_cast<unsigned long long>(source_tick),
+        static_cast<unsigned long long>(context_address),
+        static_cast<unsigned long long>(current.context_owner),
+        static_cast<unsigned long long>(current.manager),
+        static_cast<unsigned long long>(current.manager_node),
+        static_cast<unsigned long long>(current.node),
+        static_cast<unsigned long long>(DungeonRva(current.callback)),
+        current.owner_valid ? 1u : 0u, current.manager_valid ? 1u : 0u,
+        current.node_valid ? 1u : 0u, current.published_valid ? 1u : 0u);
+    if (length > 0) {
+      g_camera_probe_log_buffer.append(baseline,
+                                       static_cast<size_t>(length));
+    }
+    current.initialized = true;
+    g_camera_probe_previous = current;
+    FlushCameraProbeLog();
+    return;
+  }
+
+  std::string fields;
+  fields.reserve(2048);
+  uint32_t owner_changes = 0;
+  uint32_t manager_changes = 0;
+  uint32_t node_changes = 0;
+  uint32_t published_changes = 0;
+  if (current.owner_valid && g_camera_probe_previous.owner_valid) {
+    owner_changes = AppendCameraFieldChanges(
+        "o", g_camera_probe_previous.owner_fields, current.owner_fields,
+        &fields);
+  }
+  if (current.manager_valid && g_camera_probe_previous.manager_valid) {
+    manager_changes = AppendCameraFieldChanges(
+        "m", g_camera_probe_previous.manager_fields, current.manager_fields,
+        &fields);
+  }
+  if (current.node_valid && g_camera_probe_previous.node_valid) {
+    node_changes = AppendCameraFieldChanges(
+        "n", g_camera_probe_previous.node_fields, current.node_fields,
+        &fields);
+  }
+  if (current.published_valid && g_camera_probe_previous.published_valid) {
+    published_changes = AppendCameraFieldChanges(
+        "p", g_camera_probe_previous.published_matrix.values,
+        current.published_matrix.values, &fields);
+  }
+
+  SHORT right_x = 0;
+  SHORT right_y = 0;
+  if (g_xinput_get_state) {
+    XINPUT_STATE state = {};
+    if (g_xinput_get_state(g_xinput_controller_index, &state) ==
+        ERROR_SUCCESS) {
+      right_x = state.Gamepad.sThumbRX;
+      right_y = state.Gamepad.sThumbRY;
+    }
+  }
+
+  std::array<int32_t, 3> camera_translation{};
+  std::array<int32_t, 3> player_translation{};
+  const auto camera = scene.nodes.find(scene.camera);
+  if (camera != scene.nodes.end()) {
+    std::copy_n(camera->second.world.values.begin() + 9, 3,
+                camera_translation.begin());
+  }
+  const auto player = scene.nodes.find(scene.player);
+  if (player != scene.nodes.end()) {
+    std::copy_n(player->second.world.values.begin() + 9, 3,
+                player_translation.begin());
+  }
+
+  char header[1024] = {};
+  const int length = std::snprintf(
+      header, sizeof(header),
+      "camera_probe tick=%llu first_person=%u rs=%d/%d changes=%u/%u/%u/%u "
+      "camera_t=%d/%d/%d player_t=%d/%d/%d fields=[",
+      static_cast<unsigned long long>(source_tick),
+      g_xinput_first_person_toggled ? 1u : 0u, static_cast<int>(right_x),
+      static_cast<int>(right_y), owner_changes, manager_changes, node_changes,
+      published_changes, camera_translation[0], camera_translation[1],
+      camera_translation[2], player_translation[0], player_translation[1],
+      player_translation[2]);
+  if (length > 0) {
+    g_camera_probe_log_buffer.append(header, static_cast<size_t>(length));
+  }
+  g_camera_probe_log_buffer.append(fields);
+  g_camera_probe_log_buffer.append("]\r\n");
+  current.initialized = true;
+  g_camera_probe_previous = current;
+  if ((source_tick & 15u) == 0u ||
+      g_camera_probe_log_buffer.size() >= 24u * 1024u) {
+    FlushCameraProbeLog();
+  }
+}
+
 InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
                                            const SceneSnapshot& previous,
                                            SceneSnapshot& current,
@@ -5059,6 +5276,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   ObservePlayerLanding(current);
   const uint64_t source_tick =
       g_source_ticks.fetch_add(1, std::memory_order_relaxed) + 1;
+  ProbeCameraState(context, current, source_tick);
   SampleUiEligibility();
   if (current.nodes.empty() || g_previous_snapshot.nodes.empty() ||
       current.root == 0 || current.root != g_previous_snapshot.root) {
@@ -5345,6 +5563,8 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
 
 void InitializePatchState() {
   g_debug_log = ConfiguredDebugLog();
+  g_camera_probe_enabled =
+      ConfiguredInteger(L"Diagnostics", L"CameraProbe", 0) != 0;
   g_weapon_wheel_enabled = ConfiguredWeaponWheelEnabled();
   g_weapon_wheel_invert = ConfiguredWeaponWheelInvert();
   g_xinput_enabled =
@@ -5478,7 +5698,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.48 full event XInput haptics: "
+      "Deathtrap native render overlay 0.0.49 camera-owner diagnostics: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
@@ -5514,7 +5734,7 @@ void InitializePatchState() {
       "base_bindings=%u hold_ms=%u deadzones=%d/%d radial=%d center_y=%d "
       "vibration=%u/%u%% action=%u/%u/%u/%ums event=%u/%u/%u/%u/%u/"
       "%u/%ums heavy=%uhp/%ums "
-      "available=%u "
+      "available=%u camera_probe=%u "
       "message_lifetime=%u%% ui=%u_ticks/%u pst=%u_ticks/%u",
       g_weapon_wheel_enabled ? 1u : 0u,
       g_weapon_wheel_invert ? 1u : 0u,
@@ -5541,6 +5761,7 @@ void InitializePatchState() {
       g_xinput_heavy_damage_threshold_hp,
       g_xinput_heavy_damage_vibration_ms,
       g_xinput_set_state ? 1u : 0u,
+      g_camera_probe_enabled ? 1u : 0u,
       g_ui_message_lifetime_percent,
       g_ui_message_lifetime_ticks,
       g_ui_message_lifetime_patched ? 1u : 0u,
