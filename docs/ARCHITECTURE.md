@@ -163,6 +163,8 @@ ownership, the radial selector captures controls, focus is lost, the gamepad
 disconnects, or injected controller state is released. This first stage is
 action acknowledgement rather than hit detection. Damage and confirmed-impact
 rumble must later originate from a proven simulation event.
+Version 0.0.40 strengthens and lengthens the two envelopes after hardware
+testing showed the initial conservative profile was barely perceptible.
 
 ## Original text lifetime at the higher render rate
 

@@ -137,7 +137,7 @@ deathtrap_native_render.log
 deathtrap_native_present.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.39`
+The render log must begin with the `Deathtrap native render overlay 0.0.40`
 session line and later contain periodic `tick=` interpolation telemetry. The
 present log must contain `native-only D3D11 swapchain attached`, confirming
 that the required D3D11 path was observed. Return `DebugLog` to `0` after
@@ -172,16 +172,17 @@ real game scheduler boundary, while a separate lightweight frontend poll is
 available immediately at process startup for movies, loading and menus.
 Synthetic native-render phases never poll or repeat controller input.
 
-Version 0.0.39 also loads `XInputSetState` from that runtime. RT starts an
-85 ms attack-action pulse and LT a distinct 55 ms block-action pulse at the
-default 70% master strength. Configure or disable them with:
+Version 0.0.39 also loads `XInputSetState` from that runtime. Version 0.0.40
+tunes the default profile for the game's low input-poll frequency: RT starts a
+120 ms attack-action pulse and LT a distinct 90 ms block-action pulse at 100%
+master strength. Configure or disable them with:
 
 ```ini
 [XInput]
 VibrationEnabled=1
-VibrationStrengthPercent=70
-AttackVibrationMs=85
-BlockVibrationMs=55
+VibrationStrengthPercent=100
+AttackVibrationMs=120
+BlockVibrationMs=90
 ```
 
 The motors are forced to zero outside active gameplay, while the radial

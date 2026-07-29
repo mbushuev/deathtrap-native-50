@@ -78,6 +78,9 @@ the overlay deliberately does not take cursor ownership.
 
 Health-loss and confirmed-impact feedback remains future work because it must
 be connected to a proven simulation event, not inferred from screen effects.
+Version 0.0.40 raises the tested action profile to 100% master strength with
+120/90 ms attack/block envelopes so pulses survive the game's coarse input
+poll cadence and remain clearly distinguishable.
 
 ### Selected layout rationale
 

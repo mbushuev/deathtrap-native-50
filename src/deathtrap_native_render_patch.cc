@@ -887,9 +887,9 @@ bool g_xinput_first_person_toggled = false;
 std::atomic<bool> g_xinput_menu_mode{true};
 bool g_xinput_previous_native_gameplay = false;
 bool g_xinput_vibration_enabled = true;
-uint32_t g_xinput_vibration_strength_percent = 70u;
-uint32_t g_xinput_attack_vibration_ms = 85u;
-uint32_t g_xinput_block_vibration_ms = 55u;
+uint32_t g_xinput_vibration_strength_percent = 100u;
+uint32_t g_xinput_attack_vibration_ms = 120u;
+uint32_t g_xinput_block_vibration_ms = 90u;
 BYTE g_previous_xinput_left_trigger = 0;
 BYTE g_previous_xinput_right_trigger = 0;
 WORD g_applied_vibration_left = 0;
@@ -1049,9 +1049,15 @@ void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
       g_previous_xinput_left_trigger < g_xinput_trigger_threshold;
   if (attack_pressed) {
     g_attack_vibration_until_ms = now + g_xinput_attack_vibration_ms;
+    AppendNativeLog("xinput vibration attack strength=%u duration_ms=%u",
+                    g_xinput_vibration_strength_percent,
+                    g_xinput_attack_vibration_ms);
   }
   if (block_pressed) {
     g_block_vibration_until_ms = now + g_xinput_block_vibration_ms;
+    AppendNativeLog("xinput vibration block strength=%u duration_ms=%u",
+                    g_xinput_vibration_strength_percent,
+                    g_xinput_block_vibration_ms);
   }
   g_previous_xinput_left_trigger = pad.bLeftTrigger;
   g_previous_xinput_right_trigger = pad.bRightTrigger;
@@ -1062,18 +1068,18 @@ void UpdateControllerVibration(const XINPUT_GAMEPAD& pad, bool gameplay,
     // A short high-frequency pulse confirms the native attack action without
     // pretending to know whether the weapon hit an enemy.
     left_motor = VibrationMotorValue(g_xinput_vibration_strength_percent,
-                                     0.32);
+                                     0.65);
     right_motor = VibrationMotorValue(g_xinput_vibration_strength_percent,
-                                      0.82);
+                                      1.00);
   }
   if (now < g_block_vibration_until_ms) {
     // Blocking is deliberately lower-frequency and lighter than attacking.
     left_motor = std::max(
         left_motor,
-        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.50));
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.85));
     right_motor = std::max(
         right_motor,
-        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.14));
+        VibrationMotorValue(g_xinput_vibration_strength_percent, 0.30));
   }
   ApplyControllerVibration(left_motor, right_motor);
 }
@@ -4686,12 +4692,12 @@ void InitializePatchState() {
   g_xinput_vibration_enabled =
       ConfiguredInteger(L"XInput", L"VibrationEnabled", 1) != 0;
   g_xinput_vibration_strength_percent = static_cast<uint32_t>(std::clamp(
-      ConfiguredInteger(L"XInput", L"VibrationStrengthPercent", 70),
+      ConfiguredInteger(L"XInput", L"VibrationStrengthPercent", 100),
       0, 100));
   g_xinput_attack_vibration_ms = static_cast<uint32_t>(std::clamp(
-      ConfiguredInteger(L"XInput", L"AttackVibrationMs", 85), 20, 250));
+      ConfiguredInteger(L"XInput", L"AttackVibrationMs", 120), 20, 250));
   g_xinput_block_vibration_ms = static_cast<uint32_t>(std::clamp(
-      ConfiguredInteger(L"XInput", L"BlockVibrationMs", 55), 20, 250));
+      ConfiguredInteger(L"XInput", L"BlockVibrationMs", 90), 20, 250));
   g_ui_message_lifetime_percent = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"Text", L"MessageLifetimePercent", 300),
       100, 1000));
@@ -4755,7 +4761,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.39 XInput vibration, "
+      "Deathtrap native render overlay 0.0.40 stronger XInput vibration, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
       "session: "

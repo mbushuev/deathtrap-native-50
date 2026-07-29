@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.39`.
+Current development version: `0.0.40`.
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.
@@ -139,7 +139,7 @@ D3D11 settings, first-run verification and troubleshooting.
   controller buttons untouched.
 - `Diagnostics/DebugLog=1`: write `deathtrap_native_render.log` and
   `deathtrap_native_present.log`. Logging is normally off, but remains enabled
-  in the 0.0.39 test config.
+  in the 0.0.40 test config.
 
 ## Building
 
