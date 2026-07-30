@@ -2808,37 +2808,26 @@ bool CommitImmediateSpringArmContraction(
   }
 
   const uintptr_t base = reinterpret_cast<uintptr_t>(controller);
-  std::array<int32_t, 3> configured_desired{};
   std::array<int32_t, 3> configured_resolved{};
   if (!SafeRead(reinterpret_cast<const void*>(
-                    base + kCameraControllerDesiredPositionOffset),
-                configured_desired.data(), sizeof(configured_desired)) ||
-      !SafeRead(reinterpret_cast<const void*>(
                     base + kCameraControllerResolvedPositionOffset),
                 configured_resolved.data(), sizeof(configured_resolved))) {
     return false;
   }
 
   const double submitted_radius = CameraPositionDistance(focus, submitted);
-  const double desired_radius =
-      CameraPositionDistance(focus, configured_desired);
   const double resolved_radius =
       CameraPositionDistance(focus, configured_resolved);
-  constexpr double kResolverLagTolerance = 24.0;
-  constexpr double kConfiguredTargetTolerance = 48.0;
-  if (!std::isfinite(submitted_radius) || !std::isfinite(desired_radius) ||
-      !std::isfinite(resolved_radius) ||
-      resolved_radius <= submitted_radius + kResolverLagTolerance) {
+  if (!std::isfinite(submitted_radius) || !std::isfinite(resolved_radius)) {
     return false;
   }
 
-  // 0x2F380 may apply a small retail vertical/aim correction to the endpoint
-  // we submitted. Preserve it whenever it remains within the clipped arm;
-  // otherwise use the exact swept-sphere endpoint.
-  const std::array<int32_t, 3>& target =
-      desired_radius <= submitted_radius + kConfiguredTargetTolerance
-          ? configured_desired
-          : submitted;
+  // The endpoint from the swept sphere is safe on the exact pivot-to-camera
+  // segment that was tested. Never substitute controller+0x1F4 here merely
+  // because its radial distance is shorter: 0x2F380 may shift that point
+  // vertically and laterally, off the tested segment and back inside a prop.
+  // The v0.0.77 trace captured precisely that failure on resource 12708.
+  const std::array<int32_t, 3>& target = submitted;
 
   bool written = SafeWrite(
       reinterpret_cast<void*>(base +
@@ -2919,9 +2908,9 @@ bool CommitImmediateSpringArmContraction(
   if (g_debug_log) {
     AppendNativeLog(
         "camera_collision_commit result=%s resolved_radius=%.1f "
-        "safe_radius=%.1f target_radius=%.1f target=%d/%d/%d node=%08llX",
+        "safe_radius=%.1f target=%d/%d/%d node=%08llX",
         written ? "OK" : "PARTIAL", resolved_radius, submitted_radius,
-        CameraPositionDistance(focus, target), target[0], target[1], target[2],
+        target[0], target[1], target[2],
         static_cast<unsigned long long>(camera_node));
   }
   return written;
@@ -8044,9 +8033,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.77 same-tick camera collision "
-      "commit "
-      "(diagnostic-backed lever-block fix): "
+      "Deathtrap native render overlay 0.0.78 exact swept-endpoint camera "
+      "commit (resource-12708 off-ray fix): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "

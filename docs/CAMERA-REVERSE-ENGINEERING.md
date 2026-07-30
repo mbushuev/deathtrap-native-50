@@ -289,13 +289,21 @@ samples begin at `+0x218`. This old history, rather than collision discovery,
 was the source of the one-frame penetration and the following correction
 jolt.
 
-Version `0.0.77` therefore performs a narrowly gated same-tick contraction.
-Only when an obstruction is positively detected and the retail resolved
-radius is still more than 24 units outside the clipped arm, it atomically
-updates the resolved/desired positions, the four-sample history, the live
-camera-node translation and the already-published matrix. It preserves the
-small vertical/aim correction produced by `0x2F380`. Unobstructed tracking,
-release smoothing and authored camera reveals never enter this path.
+Version `0.0.77` tested a narrowly gated same-tick contraction, but its first
+runtime trace disproved the assumption that the shorter endpoint returned by
+`0x2F380` remained safe. For resource `12708`, the swept endpoint was
+`-11151/-1414/16481`; the controller changed it to
+`-11221/-1290/16646`. The latter is only about 174 units from the object's
+`-11113/-1427/16648` bounding-sphere centre (radius 180), so the engine had
+moved the camera off the tested segment and back inside the lever housing.
+
+Version `0.0.78` commits the exact swept-sphere endpoint on every positively
+detected contact. It atomically updates the resolved/desired positions, the
+four-sample history, the live camera-node translation and the already-
+published matrix. It deliberately rejects the post-`0x2F380` positional
+shift while retaining the orientation that function calculated. Unobstructed
+tracking, spring-arm release and authored camera reveals never enter this
+path.
 
 ## Diagnostic run protocol
 
