@@ -233,11 +233,9 @@ until the game later creates an actual projectile.
 The default gameplay layout is left-stick forward/backward and tank turning,
 A jump/climb, X operate, RT primary attack, LT parry/block, RB cast spell and
 Start menu. Hold LB to change only the left-stick horizontal axis to the
-retail side-step actions. R3 retains the game's original first-person action.
-SELECT switches between modern third-person and the untouched retail camera.
-The experimental head view is disabled because moving the origin inside the
-legacy player model can trigger culling and black frames. In modern mode the
-right stick and physical mouse rotate the camera on both axes. Set
+retail side-step actions. As of `0.0.61`, R3 and SELECT no longer switch
+gameplay camera modes: one persistent modern third-person rig owns gameplay.
+The right stick and physical mouse rotate that rig on both axes. Set
 `Camera/InvertY=1` to reverse vertical look; mouse X/Y sensitivity uses
 `MouseHorizontalMilliDegreesPerPixel` and
 `MouseVerticalMilliDegreesPerPixel`.
@@ -291,11 +289,9 @@ release cancels. This prevents accidental ranged changes, chalk marks or
 consumption. Set `XInput/Enabled=0` to disable the whole layer, or
 `XInput/BaseBindings=0` to test only the D-pad selector.
 
-The layout follows two established conventions: a community controller setup
-uses the right stick as a mouse for menus and first-person view, while hold,
-select and release matches the standard radial-menu interaction. It deliberately
-does not force right-stick turning into normal third-person play because the
-retail game has a follow camera rather than a modern free camera.
+The layout follows two established conventions: the right stick acts as a
+pointer in menus and as camera look in gameplay, while hold, select and release
+matches the standard radial-menu interaction.
 
 ## 7. Common failures
 

@@ -156,6 +156,14 @@ Physical mouse X/Y is intercepted in both DirectInput delivery models
 orbit camera and removed from the events returned to the original gameplay
 bindings. Mouse buttons, wheel, menus and selectors remain native.
 
+Version `0.0.61` retires runtime camera arbitration for the single-camera
+prototype. The retail callback remains only to produce a valid room and
+collision candidate before the persistent third-person endpoint is submitted.
+Mouse ownership is derived from native gameplay validity rather than from the
+presence of an XInput controller. Native collision contraction remains in use,
+but outward spring-arm probing is disabled at rest to eliminate resolver
+sawtooth jitter.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.60`.
+Current development version: `0.0.61`.
 
 The `modern-third-person-camera` branch contains the first opt-in native orbit
 prototype. It takes ownership at the mode-3 dispatcher before the retail
@@ -103,9 +103,9 @@ D3D11 settings, first-run verification and troubleshooting.
   runtime input hook observes wheel deltas after the system DirectInput call.
 - In modern third-person mode, physical relative mouse motion rotates the
   camera on both axes and is not forwarded to the old tank-turn actions.
-  Menus, the radial selector, retail camera mode and retail first person keep
-  the original mouse stream. Sensitivity is independently configurable per
-  axis under `[Camera]`.
+  Menus and the radial selector keep the original mouse stream. Mouse camera
+  ownership no longer depends on an XInput controller being connected.
+  Sensitivity is independently configurable per axis under `[Camera]`.
 - Left click uses the retail primary attack and right click uses parry.
 - Mouse wheel selects the previous or next available close-combat weapon. The
   proxy only observes relative wheel input; `Dungeon.dll` performs the actual
@@ -115,21 +115,17 @@ D3D11 settings, first-run verification and troubleshooting.
 - XInput controller 0 is enabled in the test config. The left stick drives the
   original forward/backward and tank-turn actions; hold LB to change its
   horizontal axis to the game's native side-step actions. A jumps/climbs, X
-  operates, RT attacks, LT blocks, RB casts, and Start opens the menu. R3 keeps
-  the game's original first-person action. SELECT switches between modern
-  third-person and the untouched retail camera. The experimental head view is
-  disabled because the legacy renderer can cull the player and publish black
-  frames when the camera origin enters the model.
-  `Camera/InvertY=1` reverses the overlay camera's vertical axis. Native R3
-  first-person look uses a
-  precision curve (`RightStickResponseCurvePercent=135`) and a reduced
-  `RightStickPixelsPerTick=12`, giving finer movement near stick center.
-- In ordinary third-person gameplay, moving the right stick engages the
-  experimental native orbit camera. Inventory selection, menus and
-  first-person view retain priority and suspend orbit input. Retail scripted
-  cameras used by levers and reveal shots also take priority automatically.
+  operates, RT attacks, LT blocks, RB casts, and Start opens the menu. Gameplay
+  uses one persistent modern third-person camera; R3 and SELECT no longer
+  switch to separate retail/head camera state machines.
+  `Camera/InvertY=1` reverses the overlay camera's vertical axis.
+- The native orbit camera engages as soon as gameplay becomes valid, whether
+  input comes from a mouse, controller, or no controller at all. Inventory
+  selection suppresses look input without replacing or resetting the rig.
   The native collision resolver supplies spring-arm contraction; obstruction
-  pulls the camera in immediately and clear space releases it gradually.
+  pulls the camera in immediately and clear space releases it gradually only
+  while the player or camera is moving. At rest the collision radius is held,
+  preventing the old extend/contract tremor.
   Configure it in
   `[Camera]`; set `ThirdPersonOrbit=0` for exact retail camera behavior.
   Mode-3 input and spring-arm state advance exactly once per unique engine

@@ -4,7 +4,7 @@
 
 Add a player-controlled third-person orbit camera to the supported Windows
 build of Deathtrap Dungeon without changing simulation timing, collision,
-animation, the native 50 Hz renderer, menus, cinematics or first-person mode.
+animation, the native 50 Hz renderer or frontend menus.
 
 This is not a fixed chase camera. The right stick and mouse own an independent
 camera pivot that can orbit around the player. The left stick is interpreted in
@@ -102,10 +102,9 @@ where the player placed it.
 
 Recenter is suspended while stationary, blocked against geometry, selecting an
 item, attacking with a committed animation, or transitioning camera state.
-R3 remains assigned to the retail first-person action. SELECT switches between
-the overlay's modern third-person camera and the untouched retail camera, so it
-does not overload the game's existing binding. The experimental eye-level mode
-is disabled until the legacy model-culling and black-frame behavior is solved.
+Runtime `0.0.61` deliberately exposes one gameplay camera. R3 and SELECT no
+longer enter independent retail or head-camera state machines; the right stick
+and physical mouse always address the same persistent third-person rig.
 
 ## Camera-relative movement
 
@@ -251,6 +250,15 @@ Only an explicitly armed interaction-driven reveal may temporarily yield to
 the retail camera. The DirectInput proxy also filters physical X/Y from the
 buffered `GetDeviceData` path, completing the separation between mouse camera
 look and character movement.
+
+Version `0.0.61` removes runtime view cycling and scripted-camera arbitration
+from gameplay. Camera ownership no longer depends on receiving XInput state,
+so a physical mouse activates orbit correctly on a mouse-only system and is
+released again when the native gameplay context disappears. Collision recovery
+is motion-gated: obstruction contracts the spring arm through the native
+resolver, while outward probing occurs only after clean samples and real
+player/orbit motion. A stationary camera therefore cannot enter the former
+extend/contract sawtooth.
 
 ### Phase C: spring-arm collision
 

@@ -136,12 +136,9 @@ longer paints its old debug squares.
 
 Base controller bindings are emitted as ordinary foreground keyboard/mouse
 transitions. Dedicated J/K bindings call the retail side-step actions without
-the Ctrl+W diagonal collision. The right stick reaches the relative-mouse path
-only in menus or while the retail first-person mode is toggled. Menu-pointer
-speed is independent from first-person sensitivity; first-person look uses a
-static precision curve rather than temporal filtering, avoiding extra input
-latency. The retail action parser remains the sole owner of movement, combat,
-menus and collision.
+the Ctrl+W diagonal collision. The right stick controls the persistent modern
+camera in gameplay and the relative-mouse pointer in menus. The retail action
+parser remains the sole owner of movement, combat, menus and collision.
 
 Pause menus keep the live gameplay pointers, so Start maintains a small
 controller-only context latch rather than guessing from those pointers. Menu

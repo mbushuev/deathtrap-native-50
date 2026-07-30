@@ -417,6 +417,8 @@ struct ThirdPersonOrbitState {
   std::array<int32_t, 3> requested_position{};
   bool requested_position_valid = false;
   uint32_t collision_confirmation_ticks = 0;
+  uint32_t collision_clear_ticks = 0;
+  bool motion_active_this_tick = false;
   uint64_t last_input_sequence = 0;
   uint64_t last_input_time_ms = 0;
   uint64_t applications = 0;
@@ -488,7 +490,10 @@ bool CustomHeadViewSelected() {
 }
 
 bool CustomCameraOwnsMode3() {
-  return CurrentCustomCameraViewMode() != CustomCameraViewMode::kRetail;
+  // Runtime 0.0.61 deliberately exposes one gameplay camera only.  Keeping a
+  // single persistent owner avoids retail/head transitions resetting the
+  // orbit state, mouse routing and collision spring independently.
+  return true;
 }
 
 struct CustomCameraTransitionState {
@@ -1108,6 +1113,7 @@ std::array<bool, static_cast<size_t>(InjectedKey::kCount)>
 bool g_injected_mouse_left = false;
 bool g_injected_mouse_right = false;
 bool g_xinput_was_connected = false;
+std::atomic<bool> g_xinput_controller_present{false};
 WORD g_previous_xinput_buttons = 0;
 bool g_xinput_first_person_toggled = false;
 std::atomic<bool> g_xinput_menu_mode{true};
@@ -1468,6 +1474,8 @@ bool InitializeThirdPersonOrbit(void* controller, int32_t native_x,
       g_third_person_orbit_max_radius);
   g_third_person_orbit_state.collision_radius =
       g_third_person_orbit_state.radius;
+  g_third_person_orbit_state.collision_clear_ticks = 0;
+  g_third_person_orbit_state.motion_active_this_tick = false;
   g_third_person_orbit_state.previous_player = player;
   // Consume the current sample below so the first stick movement takes
   // effect immediately instead of waiting for another native source tick.
@@ -1501,20 +1509,8 @@ bool BuildThirdPersonOrbitPosition(void* controller,
   if (!controller || !orbit) {
     return false;
   }
-  const bool controller_input_active =
-      g_third_person_orbit_input_active.load(std::memory_order_acquire);
-  const bool mouse_input_active = DeathtrapModernCameraConsumesMouse();
-  const bool input_active = controller_input_active || mouse_input_active;
   if (!g_third_person_orbit_enabled) {
     ResetThirdPersonOrbit("disabled");
-    return false;
-  }
-  if (!CustomCameraOwnsMode3()) {
-    if (g_third_person_orbit_state.engaged) {
-      g_third_person_orbit_state.suspended = true;
-      g_third_person_orbit_state.filtered_input_x = 0.0;
-      g_third_person_orbit_state.filtered_input_y = 0.0;
-    }
     return false;
   }
   // This function is reached only from the verified mode-3 dispatcher hook.
@@ -1522,19 +1518,10 @@ bool BuildThirdPersonOrbitPosition(void* controller,
   // branches rewrite that byte to 0/1 even though execution is still inside
   // the mode-3 camera path.  The old post-callback test made orbit disappear
   // in most rooms and resume only when the byte happened to return to 3.
-  // Menus, the radial selector and the retail first-person camera temporarily
-  // own the right stick. Keep the orbit rig suspended instead of destroying
-  // it, so returning to third person resumes the exact previous view.
-  if (!input_active) {
-    if (g_third_person_orbit_state.engaged &&
-        !g_third_person_orbit_state.suspended) {
-      g_third_person_orbit_state.suspended = true;
-      g_third_person_orbit_state.filtered_input_x = 0.0;
-      g_third_person_orbit_state.filtered_input_y = 0.0;
-      AppendNativeLog("camera_orbit suspend reason=input_context");
-    }
-    return false;
-  }
+  // Input ownership and camera ownership are intentionally separate.  A
+  // radial selector may suppress the right stick, and a machine may have no
+  // XInput controller at all, but neither condition may hand the camera back
+  // to a different retail rig.  They merely contribute zero orbit input.
 
   std::array<int32_t, 3> player{};
   if (!ReadCameraPlayerPosition(controller, &player)) {
@@ -1560,15 +1547,13 @@ bool BuildThirdPersonOrbitPosition(void* controller,
   const bool stick_moved = std::abs(input_x) > 0.0001 ||
                            std::abs(input_y) > 0.0001;
   const bool mouse_moved = mouse_delta_x != 0 || mouse_delta_y != 0;
-  const bool custom_head_view = CustomHeadViewSelected();
 
   if (!g_third_person_orbit_state.engaged ||
       g_third_person_orbit_state.controller != controller) {
-    // SELECT may enter the overlay-owned head view before the player has ever
-    // touched the right stick. Seed the same persistent orbit from the live
-    // mode-3 endpoint in that case; no retail mode-4 state is entered.
-    if ((!stick_moved && !mouse_moved && !custom_head_view) ||
-        !InitializeThirdPersonOrbit(controller, native[0], native[1], native[2],
+    // Seed the persistent third-person rig immediately.  Requiring a stick or
+    // mouse event made the initial camera remain retail until a controller was
+    // connected or moved.
+    if (!InitializeThirdPersonOrbit(controller, native[0], native[1], native[2],
                                     player, input_sequence)) {
       return false;
     }
@@ -1627,19 +1612,14 @@ bool BuildThirdPersonOrbitPosition(void* controller,
         g_third_person_orbit_horizontal_radians *
         (elapsed_seconds * 1000.0 /
          static_cast<double>(kOriginalPeriodMilliseconds));
-    const double minimum_pitch = custom_head_view
-                                     ? g_custom_head_min_pitch_radians
-                                     : g_third_person_orbit_min_pitch_radians;
-    const double maximum_pitch = custom_head_view
-                                     ? g_custom_head_max_pitch_radians
-                                     : g_third_person_orbit_max_pitch_radians;
     g_third_person_orbit_state.pitch = std::clamp(
         g_third_person_orbit_state.pitch +
             g_third_person_orbit_state.filtered_input_y * vertical_sign *
                 g_third_person_orbit_vertical_radians *
                 (elapsed_seconds * 1000.0 /
                  static_cast<double>(kOriginalPeriodMilliseconds)),
-        minimum_pitch, maximum_pitch);
+        g_third_person_orbit_min_pitch_radians,
+        g_third_person_orbit_max_pitch_radians);
     if (g_third_person_orbit_state.yaw > kOrbitPi ||
         g_third_person_orbit_state.yaw < -kOrbitPi) {
       g_third_person_orbit_state.yaw = std::remainder(
@@ -1671,12 +1651,20 @@ bool BuildThirdPersonOrbitPosition(void* controller,
     }
   }
 
-  // Probe outward again gradually after an obstruction, but use the last
-  // native-resolved distance immediately when the camera was pulled in. This
-  // is the classic spring-arm asymmetry: fast contraction, damped release.
-  g_third_person_orbit_state.collision_radius = std::min(
-      g_third_person_orbit_state.radius,
-      g_third_person_orbit_state.collision_radius + 42.0);
+  const double player_motion = CameraPositionDistance(
+      player, g_third_person_orbit_state.previous_player);
+  g_third_person_orbit_state.motion_active_this_tick =
+      player_motion > 8.0 || stick_moved || mouse_moved;
+  // Probe outward only while the player or orbit is actually moving and only
+  // after several unobstructed native samples.  The old unconditional +42
+  // probe fought the resolver even when standing still, producing a permanent
+  // contract/release sawtooth and visible camera tremor.
+  if (g_third_person_orbit_state.motion_active_this_tick &&
+      g_third_person_orbit_state.collision_clear_ticks >= 3u) {
+    g_third_person_orbit_state.collision_radius = std::min(
+        g_third_person_orbit_state.radius,
+        g_third_person_orbit_state.collision_radius + 24.0);
+  }
   const double active_radius = std::max(
       180.0, g_third_person_orbit_state.collision_radius);
   const double horizontal = active_radius *
@@ -1714,9 +1702,7 @@ bool BuildThirdPersonOrbitPosition(void* controller,
 void UpdateThirdPersonCollisionRadius(void* controller) {
   if (!controller || !g_third_person_orbit_state.engaged ||
       g_third_person_orbit_state.controller != controller ||
-      !g_third_person_orbit_state.requested_position_valid ||
-      CurrentCustomCameraViewMode() !=
-          CustomCameraViewMode::kModernThirdPerson) {
+      !g_third_person_orbit_state.requested_position_valid) {
     return;
   }
   std::array<int32_t, 3> player{};
@@ -1742,6 +1728,7 @@ void UpdateThirdPersonCollisionRadius(void* controller) {
       !std::isfinite(resolved_distance) || requested_distance < 160.0 ||
       resolved_distance < 160.0 || resolved_distance > 5000.0) {
     g_third_person_orbit_state.collision_confirmation_ticks = 0;
+    g_third_person_orbit_state.collision_clear_ticks = 0;
     return;
   }
 
@@ -1756,8 +1743,14 @@ void UpdateThirdPersonCollisionRadius(void* controller) {
           g_third_person_orbit_state.collision_radius;
   if (!aligned_contraction) {
     g_third_person_orbit_state.collision_confirmation_ticks = 0;
+    if (g_third_person_orbit_state.motion_active_this_tick) {
+      g_third_person_orbit_state.collision_clear_ticks =
+          std::min(g_third_person_orbit_state.collision_clear_ticks + 1u,
+                   120u);
+    }
     return;
   }
+  g_third_person_orbit_state.collision_clear_ticks = 0;
 
   const uint32_t confirmations =
       ++g_third_person_orbit_state.collision_confirmation_ticks;
@@ -1803,38 +1796,11 @@ void __cdecl HookMode3Camera(void* controller) {
   }
 
   const uintptr_t base = reinterpret_cast<uintptr_t>(controller);
-  std::array<int32_t, 3> before_original{};
-  const bool before_original_valid = SafeRead(
-      reinterpret_cast<const uint8_t*>(controller) +
-          kCameraControllerResolvedPositionOffset,
-      before_original.data(), sizeof(before_original));
-  uintptr_t retail_owner = 0;
-  ReadRetailCameraOwner(controller, &retail_owner);
-  // Always obtain the untouched retail candidate once per source tick. This
-  // is both the collision/script oracle and the fallback for modes we do not
-  // own. The custom camera may overwrite it only after arbitration.
+  // Obtain the native candidate once because it supplies the initial room and
+  // collision context.  Runtime camera arbitration is intentionally disabled:
+  // gameplay always returns to this one persistent third-person rig.
   g_original_mode3_camera(controller);
-  const bool scripted =
-      CustomCameraOwnsMode3() && before_original_valid &&
-      EvaluateRetailCameraTakeover(controller, retail_owner,
-                                   before_original);
-  g_scripted_camera_override_active.store(scripted,
-                                           std::memory_order_release);
-  if (scripted) {
-    if (g_third_person_orbit_state.engaged &&
-        !g_third_person_orbit_state.suspended) {
-      g_third_person_orbit_state.suspended = true;
-      g_third_person_orbit_state.filtered_input_x = 0.0;
-      g_third_person_orbit_state.filtered_input_y = 0.0;
-      AppendNativeLog("camera_orbit suspend reason=retail_script_owner");
-    }
-    return;
-  }
-
-  if (!CustomCameraOwnsMode3()) {
-    ClearRetailCameraTakeover("manual_retail_mode", false);
-    return;
-  }
+  g_scripted_camera_override_active.store(false, std::memory_order_release);
 
   std::array<int32_t, 3> native{};
   if (!SafeRead(reinterpret_cast<const void*>(
@@ -2950,31 +2916,11 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     // Chalk is dispatched only by the radial selector through the exact
     // retail F2+8 routine. Never synthesize the unrelated C binding here.
     InjectVirtualKey(InjectedKey::kC, false);
-    // R3 stays exactly on the retail Tab-driven first-person toggle. SELECT
-    // switches only between the modern orbit and untouched retail camera.
-    // The experimental head view is intentionally excluded until its native
-    // culling/black-frame behavior is solved at the renderer level.
-    if (!selector_captures_controls &&
-        (pressed & XINPUT_GAMEPAD_RIGHT_THUMB)) {
-      g_xinput_first_person_toggled = !g_xinput_first_person_toggled;
-    }
-    if (!selector_captures_controls &&
-        (pressed & XINPUT_GAMEPAD_BACK)) {
-      const CustomCameraViewMode previous = CurrentCustomCameraViewMode();
-      const CustomCameraViewMode next =
-          previous == CustomCameraViewMode::kModernThirdPerson
-              ? CustomCameraViewMode::kRetail
-              : CustomCameraViewMode::kModernThirdPerson;
-      g_custom_camera_view_mode.store(static_cast<uint32_t>(next),
-                                      std::memory_order_release);
-      g_xinput_first_person_toggled = false;
-      AppendNativeLog("camera_view cycle=%s->%s",
-                      CustomCameraViewModeName(previous),
-                      CustomCameraViewModeName(next));
-    }
-    InjectVirtualKey(InjectedKey::kTab,
-                     !selector_captures_controls &&
-                         g_xinput_first_person_toggled);
+    // There is one gameplay camera owner.  R3 and SELECT no longer enter the
+    // retail/head camera state machines; those transitions left stale mouse
+    // capture and camera endpoints after returning to gameplay.
+    g_xinput_first_person_toggled = false;
+    InjectVirtualKey(InjectedKey::kTab, false);
     InjectMouseLeft(!selector_captures_controls &&
                     pad.bRightTrigger >= g_xinput_trigger_threshold);
     InjectMouseRight(!selector_captures_controls &&
@@ -2986,16 +2932,9 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     InjectVirtualKey(InjectedKey::kRight, false);
     InjectVirtualKey(InjectedKey::kEnter, false);
 
-    if (!selector_captures_controls && g_xinput_first_person_toggled) {
-      InjectRelativeMouseMove(
-          CurvedStick(right_x, g_xinput_right_stick_curve),
-          CurvedStick(right_y, g_xinput_right_stick_curve),
-          g_xinput_first_person_pixels);
-    }
     PublishThirdPersonOrbitInput(
         right_x, right_y,
-        !selector_captures_controls && !g_xinput_first_person_toggled &&
-            CustomCameraOwnsMode3());
+        !selector_captures_controls && CustomCameraOwnsMode3());
   } else {
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
     g_xinput_first_person_toggled = false;
@@ -3055,6 +2994,7 @@ void UpdateDeathtrapXInput() {
   XINPUT_STATE state = {};
   const bool connected =
       g_xinput_get_state(g_xinput_controller_index, &state) == ERROR_SUCCESS;
+  g_xinput_controller_present.store(connected, std::memory_order_release);
   if (!connected || !IsGameForeground()) {
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
     if (g_xinput_was_connected) {
@@ -3118,6 +3058,7 @@ void PollFrontendXInputInternal() {
   XINPUT_STATE state = {};
   const bool connected =
       g_xinput_get_state(g_xinput_controller_index, &state) == ERROR_SUCCESS;
+  g_xinput_controller_present.store(connected, std::memory_order_release);
   if (!connected || !IsGameForeground()) {
     SubmitDeathtrapXInputMouseState(0, 0, false, false);
     return;
@@ -6769,7 +6710,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.60 camera ownership fix: "
+      "Deathtrap native render overlay 0.0.61 single-camera stabilization: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
@@ -6907,16 +6848,29 @@ void SubmitDeathtrapPhysicalMouseDelta(int32_t delta_x, int32_t delta_y) {
 
 bool DeathtrapModernCameraConsumesMouse() {
   if (!g_third_person_orbit_enabled ||
-      CurrentCustomCameraViewMode() !=
-          CustomCameraViewMode::kModernThirdPerson ||
-      g_scripted_camera_override_active.load(std::memory_order_acquire) ||
-      g_xinput_first_person_toggled ||
-      g_xinput_menu_mode.load(std::memory_order_acquire) ||
       (g_controller_selector_overlay.load(std::memory_order_acquire) & 1u) !=
           0u) {
     return false;
   }
-  return DeathtrapGameplayReady(false);
+  if (!DeathtrapGameplayReady(false)) {
+    return false;
+  }
+  CURSORINFO cursor = {};
+  cursor.cbSize = sizeof(cursor);
+  if (GetCursorInfo(&cursor) && (cursor.flags & CURSOR_SHOWING) != 0u) {
+    // Pause/options screens may retain every gameplay pointer used by
+    // DeathtrapGameplayReady.  Their visible native cursor is the reliable
+    // frontend ownership signal, including mouse-only runs where no XInput
+    // Start transition exists.
+    return false;
+  }
+  // menu_mode is a pause/frontend override maintained by the XInput bridge.
+  // Without a connected controller it used to remain true forever, so a real
+  // mouse controlled Lara until plugging a pad happened to clear the flag.
+  // Ignore that controller-owned override when no controller is present; the
+  // native gameplay test still releases the mouse in movies and main menus.
+  return !g_xinput_controller_present.load(std::memory_order_acquire) ||
+         !g_xinput_menu_mode.load(std::memory_order_acquire);
 }
 
 DeathtrapNativePresentationStage GetDeathtrapNativePresentationStage() {
