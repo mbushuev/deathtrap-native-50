@@ -435,6 +435,14 @@ radius, the exact submitted point is now committed to the controller history,
 camera node and published matrix after `0x2F380`. At full radius, the retail
 path remains untouched.
 
+Version `0.0.82` replaces that publication model with native ownership. The
+orbit layer supplies only yaw, pitch and a desired endpoint. The original
+mode-3 dispatcher owns visibility, safe fallback placement, history and final
+publication. This removes the competing mesh/sphere collision model from the
+active camera path and preserves the safety gap already demonstrated by the
+stock camera around the lever block. Authored interaction reveals retain the
+existing arbitration path.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

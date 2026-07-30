@@ -341,6 +341,22 @@ commit did not run. Version `0.0.81` keeps publishing the validated radial
 endpoint for the complete contracted/releasing lifetime. Normal full-radius
 tracking and authored camera reveals still use the retail path unchanged.
 
+Version `0.0.82` corrects the central reverse-engineering error behind the
+custom collision experiments. `Dungeon.dll+0x30910` is a traversability
+predicate: non-zero means that at least one of its centre/six offset traces
+reaches the focus sector, while zero means that the candidate is occluded.
+The earlier wrapper interpreted the result in the opposite direction, which
+is why even the degenerate `focus -> focus` query was logged as
+`pivot_not_clear`.
+
+The modern orbit now writes its candidate to controller `+0x1F4`, resolves
+and writes its sector at `+0x200`, and invokes the complete retail mode-3
+dispatcher. Retail `0x2F6D0` accepts a visible candidate through `0x2DEF0`;
+an occluded candidate enters `0x2F750`, which calculates and publishes the
+same alternate camera used by the stock game. The active path no longer
+parses render meshes, runs a second spring arm, or forcibly overwrites the
+controller history, live node and published matrix.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
