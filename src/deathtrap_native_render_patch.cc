@@ -1874,9 +1874,15 @@ bool BuildThirdPersonOrbitPosition(void* controller,
         orbit_direction[2] * contact_direction[2];
     const double contact_player_motion = CameraPositionDistance(
         player, g_third_person_orbit_state.collision_contact_player);
+    // Direction changes are not proof that the obstruction has ended. At a
+    // prop corner the active triangle or even the owning draw node may change
+    // for one or two captures. Releasing immediately on contact_dot made the
+    // arm grow toward the far side before the neighbouring face took over.
+    // Require the same short clear-window confirmation for both rotation and
+    // player translation; a new hit still contracts immediately below.
     contact_manifold_changed =
-        contact_dot < 0.9975 ||
-        (!retained_render_mesh_contact && contact_player_motion > 48.0);
+        !retained_render_mesh_contact &&
+        (contact_dot < 0.9975 || contact_player_motion > 48.0);
   }
   if (g_third_person_orbit_state.collision_radius + 0.5 <
           g_third_person_orbit_state.radius &&
@@ -2604,7 +2610,8 @@ void __cdecl HookCameraCollisionResolve(
   if (!std::isfinite(requested_distance) ||
        !std::isfinite(resolved_distance) ||
        requested_distance < kThirdPersonMinimumCameraDistance ||
-       resolved_distance < 80.0 || resolved_distance > 5000.0) {
+       resolved_distance < kThirdPersonMinimumCameraDistance * 0.5 ||
+       resolved_distance > 5000.0) {
     return;
   }
 
@@ -2639,6 +2646,11 @@ void __cdecl HookCameraCollisionResolve(
   capture.authoritative = resolved;
   capture.authoritative_valid = true;
   capture.immediate_pull_in = true;
+  if (g_debug_log) {
+    AppendNativeLog(
+        "camera_collision immediate resolved=%.1f requested=%.1f",
+        resolved_distance, requested_distance);
+  }
 }
 
 void UpdateThirdPersonCollisionRadius(void* controller) {
@@ -2863,6 +2875,60 @@ void __cdecl HookMode3Camera(void* controller) {
   g_configure_camera(controller, collision_target[0], collision_target[1],
                      collision_target[2],
                      room_or_sector, 1);
+
+  if (render_mesh_contact) {
+    // 0x2F380 normally publishes the exact target after the pre-damping hook
+    // above. Keep a final invariant at the controller boundary as well: an
+    // endpoint farther along the same spring-arm ray than the exact render-
+    // mesh hit is necessarily on or beyond the obstructing surface. This also
+    // covers near-pivot contacts that older validation rejected below 80
+    // units. A native endpoint that is closer or displaced by room/BSP
+    // collision remains untouched.
+    std::array<int32_t, 3> published{};
+    if (SafeRead(reinterpret_cast<const uint8_t*>(controller) +
+                     kCameraControllerResolvedPositionOffset,
+                 published.data(), sizeof(published))) {
+      const double target_x = static_cast<double>(
+          collision_target[0] - camera_player[0]);
+      const double target_y = static_cast<double>(
+          collision_target[1] - camera_player[1]);
+      const double target_z = static_cast<double>(
+          collision_target[2] - camera_player[2]);
+      const double published_x = static_cast<double>(
+          published[0] - camera_player[0]);
+      const double published_y = static_cast<double>(
+          published[1] - camera_player[1]);
+      const double published_z = static_cast<double>(
+          published[2] - camera_player[2]);
+      const double target_distance = std::hypot(
+          std::hypot(target_x, target_z), target_y);
+      const double published_distance = std::hypot(
+          std::hypot(published_x, published_z), published_y);
+      const double direction_dot =
+          (target_x * published_x + target_y * published_y +
+           target_z * published_z) /
+          std::max(1.0, target_distance * published_distance);
+      if (std::isfinite(target_distance) &&
+          std::isfinite(published_distance) && direction_dot > 0.90 &&
+          published_distance > target_distance + 8.0) {
+        const bool desired_written = SafeWrite(
+            reinterpret_cast<uint8_t*>(controller) +
+                kCameraControllerDesiredPositionOffset,
+            collision_target.data(), sizeof(collision_target));
+        const bool resolved_written = SafeWrite(
+            reinterpret_cast<uint8_t*>(controller) +
+                kCameraControllerResolvedPositionOffset,
+            collision_target.data(), sizeof(collision_target));
+        if (g_debug_log) {
+          AppendNativeLog(
+              "camera_collision post_clamp published=%.1f target=%.1f "
+              "dot=%.3f write=%u/%u",
+              published_distance, target_distance, direction_dot,
+              desired_written ? 1u : 0u, resolved_written ? 1u : 0u);
+        }
+      }
+    }
+  }
   g_raw_camera_collision_capture.armed = false;
   UpdateThirdPersonCollisionRadius(controller);
 
@@ -7797,7 +7863,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.73 overlap-safe spring arm: "
+      "Deathtrap native render overlay 0.0.74 strict endpoint spring arm: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
