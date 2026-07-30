@@ -179,6 +179,17 @@ confirmed ray, with a small inward safety margin. Logs also showed that the
 script owner may appear after a pre-reveal pause; an interaction now arms that
 delayed owner and the retail camera is retained until its verified release.
 
+Runtime `0.0.65` traces exposed the remaining pull-in staircase: the resolved
+distance progressed through sequences such as `1400 -> 1169 -> 944 -> 746 ->
+553 -> 363 -> 180`. Static analysis located the cause below `0x2DEF0`.
+`0x2E800` produces the collision-resolved endpoint, after which `0x2E950`
+limits movement relative to `controller+0x1F4` to `0x6E` world units per
+source tick. Version `0.0.66` captures the endpoint on return from `0x2E800`
+and bypasses that final limiter only when the endpoint is a finite, aligned
+inward contraction of the custom spring-arm ray. It does not replace the
+native collision query, and the existing contact manifold still governs
+outward release.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

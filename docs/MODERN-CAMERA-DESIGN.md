@@ -305,6 +305,17 @@ actually transition after that press. Merely pressing E can no longer hand
 the camera to an unrelated room camera, and one interaction cannot retrigger
 after its reveal completes.
 
+Version `0.0.66` moves inward collision ownership to the verified pre-damping
+endpoint produced by `Dungeon.dll+0x2E800`. The retail finalizer at `0x2E950`
+normally applies a `0x6E`-unit-per-tick movement limit after the native
+history and collision passes; that final limiter caused the camera to enter
+stairs and props, then walk outward in visible steps. During the custom orbit request only, an
+aligned inward collision makes the native resolved endpoint the finalizer's
+baseline immediately. Free orbit, outward recovery, scripted reveals and all
+non-camera calls retain the original damping. The v0.0.65 contact manifold is
+kept unchanged after the pull-in, so a resolved contact remains stable instead
+of cycling back into the object.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
