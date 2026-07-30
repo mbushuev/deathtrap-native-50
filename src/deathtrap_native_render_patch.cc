@@ -174,6 +174,15 @@ constexpr double kMaximumNodeRotationDegrees = 100.0;
 constexpr double kMaximumScaleRatio = 1.25;
 constexpr double kMaximumBasisDot = 0.025;
 constexpr double kCameraCollisionSphereRadius = 96.0;
+// The centre sphere protects the spring-arm ray, but the renderer's camera
+// basis is not necessarily aimed exactly back at that ray.  At the 4:3 game
+// viewport a side of the near-plane footprint can therefore enter a prop
+// while the centre remains more than 96 units from every polygon.  Sample a
+// conservative oriented footprint using the actually published camera basis.
+constexpr double kCameraFootprintHalfWidth = 128.0;
+constexpr double kCameraFootprintHalfHeight = 96.0;
+constexpr double kCameraFootprintSampleRadius = 16.0;
+constexpr double kCameraFootprintBroadPhaseRadius = 176.0;
 constexpr double kCameraCollisionMinimumObjectRadius = 24.0;
 constexpr double kCameraCollisionMaximumObjectRadius = 6000.0;
 constexpr double kCameraCollisionBoundsMotionTolerance = 16.0;
@@ -236,6 +245,12 @@ struct Vec3 {
   double z = 0.0;
 };
 
+struct CameraFootprintBasis {
+  Vec3 right{};
+  Vec3 up{};
+  bool valid = false;
+};
+
 struct CameraMeshTriangle {
   std::array<int32_t, 3> a{};
   std::array<int32_t, 3> b{};
@@ -264,6 +279,9 @@ struct CameraMeshHitDiagnostic {
   Matrix3x4 world{};
   std::array<int32_t, 3> bounds_center{};
   int32_t bounds_radius = 0;
+  double footprint_right = 0.0;
+  double footprint_up = 0.0;
+  bool footprint = false;
   bool valid = false;
 };
 
@@ -2240,6 +2258,41 @@ Vec3 CameraVectorScale(const Vec3& value, double scale) {
   return {value.x * scale, value.y * scale, value.z * scale};
 }
 
+bool NormalizeCameraVector(const Vec3& value, Vec3* normalized) {
+  if (!normalized) {
+    return false;
+  }
+  const double length_squared = CameraVectorDot(value, value);
+  if (!std::isfinite(length_squared) || length_squared < 0.25 ||
+      length_squared > 4.0) {
+    return false;
+  }
+  *normalized = CameraVectorScale(value, 1.0 / std::sqrt(length_squared));
+  return true;
+}
+
+bool DecodeCameraFootprintBasis(const Matrix3x4& matrix,
+                                CameraFootprintBasis* basis) {
+  if (!basis) {
+    return false;
+  }
+  CameraFootprintBasis decoded;
+  constexpr double scale = 1.0 / kMatrixFixedScale;
+  const Vec3 right{matrix.values[0] * scale, matrix.values[1] * scale,
+                   matrix.values[2] * scale};
+  const Vec3 up{matrix.values[3] * scale, matrix.values[4] * scale,
+                matrix.values[5] * scale};
+  if (!NormalizeCameraVector(right, &decoded.right) ||
+      !NormalizeCameraVector(up, &decoded.up) ||
+      std::abs(CameraVectorDot(decoded.right, decoded.up)) > 0.1) {
+    *basis = {};
+    return false;
+  }
+  decoded.valid = true;
+  *basis = decoded;
+  return true;
+}
+
 Vec3 CameraVectorCross(const Vec3& a, const Vec3& b) {
   return {a.y * b.z - a.z * b.y,
           a.z * b.x - a.x * b.z,
@@ -2536,6 +2589,85 @@ bool CameraMeshSweepDistance(const CameraCollisionMesh& mesh,
   return hit;
 }
 
+bool CameraMeshVolumeSweepDistance(
+    const CameraCollisionMesh& mesh, const Matrix3x4& world,
+    const Vec3& origin, const Vec3& direction,
+    const CameraFootprintBasis* footprint_basis, double minimum_distance,
+    double maximum_distance, double* nearest_distance,
+    bool* initial_overlap = nullptr,
+    CameraMeshHitDiagnostic* diagnostic = nullptr) {
+  bool hit = false;
+  bool any_initial_overlap = false;
+  double nearest = maximum_distance;
+  CameraMeshHitDiagnostic nearest_diagnostic;
+
+  bool centre_overlap = false;
+  CameraMeshHitDiagnostic centre_diagnostic;
+  double centre_distance = nearest;
+  if (CameraMeshSweepDistance(
+          mesh, world, origin, direction, kCameraCollisionSphereRadius,
+          minimum_distance, nearest, &centre_distance, &centre_overlap,
+          &centre_diagnostic)) {
+    hit = true;
+    nearest = centre_distance;
+    any_initial_overlap = centre_overlap;
+    nearest_diagnostic = centre_diagnostic;
+  }
+
+  if (footprint_basis && footprint_basis->valid) {
+    struct FootprintSample {
+      double right;
+      double up;
+    };
+    constexpr std::array<FootprintSample, 8> samples = {{
+        {-kCameraFootprintHalfWidth, 0.0},
+        {kCameraFootprintHalfWidth, 0.0},
+        {0.0, -kCameraFootprintHalfHeight},
+        {0.0, kCameraFootprintHalfHeight},
+        {-kCameraFootprintHalfWidth, -kCameraFootprintHalfHeight},
+        {-kCameraFootprintHalfWidth, kCameraFootprintHalfHeight},
+        {kCameraFootprintHalfWidth, -kCameraFootprintHalfHeight},
+        {kCameraFootprintHalfWidth, kCameraFootprintHalfHeight},
+    }};
+    for (const FootprintSample& sample : samples) {
+      const Vec3 sample_origin = CameraVectorAdd(
+          origin,
+          CameraVectorAdd(
+              CameraVectorScale(footprint_basis->right, sample.right),
+              CameraVectorScale(footprint_basis->up, sample.up)));
+      double sample_distance = nearest;
+      bool sample_overlap = false;
+      CameraMeshHitDiagnostic sample_diagnostic;
+      if (!CameraMeshSweepDistance(
+              mesh, world, sample_origin, direction,
+              kCameraFootprintSampleRadius, minimum_distance, nearest,
+              &sample_distance, &sample_overlap, &sample_diagnostic)) {
+        continue;
+      }
+      if (!hit || sample_distance <= nearest) {
+        nearest = sample_distance;
+        nearest_diagnostic = sample_diagnostic;
+        nearest_diagnostic.footprint = true;
+        nearest_diagnostic.footprint_right = sample.right;
+        nearest_diagnostic.footprint_up = sample.up;
+      }
+      hit = true;
+      any_initial_overlap = any_initial_overlap || sample_overlap;
+    }
+  }
+
+  if (hit && nearest_distance) {
+    *nearest_distance = nearest;
+  }
+  if (initial_overlap) {
+    *initial_overlap = any_initial_overlap;
+  }
+  if (hit && diagnostic) {
+    *diagnostic = nearest_diagnostic;
+  }
+  return hit;
+}
+
 // Source camera endpoints are collision-resolved independently, but the 50 Hz
 // presentation path used to connect them with a straight Cartesian chord. An
 // orbit turning around a prop corner can have two valid endpoints while that
@@ -2657,7 +2789,8 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     const std::array<int32_t, 3>& focus,
     const std::array<int32_t, 3>& requested,
     std::array<int32_t, 3>* clipped,
-    CameraMeshHitDiagnostic* hit_diagnostic = nullptr) {
+    CameraMeshHitDiagnostic* hit_diagnostic = nullptr,
+    const CameraFootprintBasis* footprint_basis = nullptr) {
   if (!clipped || g_previous_snapshot.nodes.empty() ||
       g_older_snapshot.nodes.empty() ||
       !g_previous_snapshot.player ||
@@ -2693,7 +2826,10 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   // swept endpoint is now committed in the same tick, so the native resolver
   // cannot shift the enlarged volume back through the tested surface.
   constexpr double kContactBackoff = 8.0;
-  constexpr double kBroadPhaseInflation = kCameraCollisionSphereRadius;
+  const double kBroadPhaseInflation =
+      footprint_basis && footprint_basis->valid
+          ? kCameraFootprintBroadPhaseRadius
+          : kCameraCollisionSphereRadius;
   constexpr double kSweepStartDistance = 0.0;
 
   double nearest_distance = requested_distance;
@@ -2785,10 +2921,9 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     double surface_distance = nearest_surface_distance;
     bool mesh_initial_overlap = false;
     CameraMeshHitDiagnostic candidate_diagnostic;
-    if (!CameraMeshSweepDistance(
-            *mesh, current.world, origin, ray_direction,
-            kCameraCollisionSphereRadius, kSweepStartDistance,
-            nearest_surface_distance, &surface_distance,
+    if (!CameraMeshVolumeSweepDistance(
+            *mesh, current.world, origin, ray_direction, footprint_basis,
+            kSweepStartDistance, nearest_surface_distance, &surface_distance,
             &mesh_initial_overlap, &candidate_diagnostic)) {
       continue;
     }
@@ -2829,13 +2964,16 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     AppendNativeLog(
         "camera_mesh_sweep node=%08llX resource=%llu triangles=%llu "
         "object_radius=%.1f contact=%.1f sphere=%.1f camera_radius=%.1f "
-        "requested=%.1f overlap=%u",
+        "requested=%.1f overlap=%u footprint=%u offset=%.1f/%.1f",
         static_cast<unsigned long long>(nearest_node),
         static_cast<unsigned long long>(nearest_resource),
         static_cast<unsigned long long>(nearest_triangle_count),
         nearest_object_radius, nearest_surface_distance,
         kCameraCollisionSphereRadius, nearest_distance, requested_distance,
-        nearest_initial_overlap ? 1u : 0u);
+        nearest_initial_overlap ? 1u : 0u,
+        nearest_diagnostic.footprint ? 1u : 0u,
+        nearest_diagnostic.footprint_right,
+        nearest_diagnostic.footprint_up);
     if (nearest_diagnostic.valid) {
       AppendNativeLog(
           "camera_mesh_hit node=%08llX resource=%llu tri=%llu "
@@ -3165,14 +3303,23 @@ void __cdecl HookMode3Camera(void* controller) {
   const bool native_world_contact =
       ClipThirdPersonOrbitAgainstNativeWorld(
           controller, camera_focus, orbit, &collision_target);
+  Matrix3x4 preliminary_published{};
+  CameraFootprintBasis preliminary_footprint_basis;
+  const bool preliminary_footprint_valid =
+      g_dungeon_base &&
+      SafeRead(g_dungeon_base + kPublishedCameraMatrixRva,
+               &preliminary_published, sizeof(preliminary_published)) &&
+      DecodeCameraFootprintBasis(preliminary_published,
+                                 &preliminary_footprint_basis);
   std::array<int32_t, 3> mesh_target = collision_target;
   CameraMeshHitDiagnostic mesh_hit_diagnostic;
-  const bool render_mesh_contact = ClipThirdPersonOrbitAgainstSceneObjects(
-      camera_focus, collision_target, &mesh_target, &mesh_hit_diagnostic);
+  bool render_mesh_contact = ClipThirdPersonOrbitAgainstSceneObjects(
+      camera_focus, collision_target, &mesh_target, &mesh_hit_diagnostic,
+      preliminary_footprint_valid ? &preliminary_footprint_basis : nullptr);
   if (render_mesh_contact) {
     collision_target = mesh_target;
   }
-  const bool spring_arm_contact =
+  bool spring_arm_contact =
       native_world_contact || render_mesh_contact;
   g_raw_camera_collision_capture.render_mesh_contact = spring_arm_contact;
   if (spring_arm_contact) {
@@ -3193,6 +3340,56 @@ void __cdecl HookMode3Camera(void* controller) {
   g_configure_camera(controller, submitted_target[0], submitted_target[1],
                      submitted_target[2],
                      room_or_sector, 1);
+  // The retail configure call may rotate the camera after the preliminary
+  // collision test. Re-read that final basis and validate the submitted
+  // endpoint once more. This closes the exact failure captured on resource
+  // 12708: the centre ray remained clear while a side of the true view
+  // footprint crossed the lever housing and exposed its black back face.
+  Matrix3x4 configured_published{};
+  CameraFootprintBasis configured_footprint_basis;
+  const bool configured_footprint_valid =
+      g_dungeon_base &&
+      SafeRead(g_dungeon_base + kPublishedCameraMatrixRva,
+               &configured_published, sizeof(configured_published)) &&
+      DecodeCameraFootprintBasis(configured_published,
+                                 &configured_footprint_basis);
+  if (configured_footprint_valid) {
+    std::array<int32_t, 3> post_config_target = submitted_target;
+    CameraMeshHitDiagnostic post_config_diagnostic;
+    const bool post_config_contact =
+        ClipThirdPersonOrbitAgainstSceneObjects(
+            camera_focus, submitted_target, &post_config_target,
+            &post_config_diagnostic, &configured_footprint_basis);
+    const double before_post_radius =
+        CameraPositionDistance(camera_focus, submitted_target);
+    const double after_post_radius =
+        CameraPositionDistance(camera_focus, post_config_target);
+    if (post_config_contact && std::isfinite(before_post_radius) &&
+        std::isfinite(after_post_radius) &&
+        after_post_radius + 0.5 < before_post_radius) {
+      submitted_target = post_config_target;
+      collision_target = post_config_target;
+      mesh_hit_diagnostic = post_config_diagnostic;
+      render_mesh_contact = true;
+      spring_arm_contact = true;
+      g_third_person_orbit_state.collision_radius = after_post_radius;
+      g_third_person_orbit_state.collision_clear_ticks = 0;
+      g_raw_camera_collision_capture.render_mesh_contact = true;
+      g_raw_camera_collision_capture.render_mesh_radius = after_post_radius;
+      if (g_debug_log) {
+        AppendNativeLog(
+            "camera_footprint_post_config retract=%.1f->%.1f "
+            "offset=%.1f/%.1f node=%08llX resource=%llu tri=%llu",
+            before_post_radius, after_post_radius,
+            post_config_diagnostic.footprint_right,
+            post_config_diagnostic.footprint_up,
+            static_cast<unsigned long long>(post_config_diagnostic.node),
+            static_cast<unsigned long long>(post_config_diagnostic.resource),
+            static_cast<unsigned long long>(
+                post_config_diagnostic.triangle_index));
+      }
+    }
+  }
   // g_configure_camera runs the retail position-history resolver after it
   // accepts our endpoint. During spring-arm release that resolver may move
   // controller+0x1DC laterally and vertically away from the exact radial
@@ -8232,7 +8429,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.81 exact contracted spring arm "
+      "Deathtrap native render overlay 0.0.82 oriented camera footprint "
       "(96-unit exact/synthetic sweeps plus post-resolver publication): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "

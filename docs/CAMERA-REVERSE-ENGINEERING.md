@@ -341,6 +341,22 @@ commit did not run. Version `0.0.81` keeps publishing the validated radial
 endpoint for the complete contracted/releasing lifetime. Normal full-radius
 tracking and authored camera reveals still use the retail path unchanged.
 
+The final `0.0.81` capture ruled out the earlier synthetic-frame failure. The
+bad frame was exact (`FG OVR Off`), and the camera stayed at the same published
+translation for many source ticks. Its centre was outside the 96-unit swept
+sphere, but the published orientation was not radial: the camera forward axis
+differed from the pivot-to-camera ray by approximately 37 degrees. In camera
+space, resource `12708` sat near the side of the view footprint even though it
+was clear of the centre ray.
+
+Version `0.0.82` decodes the final published right/up basis and sweeps an
+oriented 4:3 camera footprint (eight side/corner samples plus the existing
+centre sphere) against stable render triangles. A pre-configure pass feeds the
+spring-arm state, while a post-configure pass catches orientation changes made
+inside `0x2F380` and commits any additional contraction immediately. Logs now
+identify `footprint=1`, its right/up sample offset, and any
+`camera_footprint_post_config` retraction.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
