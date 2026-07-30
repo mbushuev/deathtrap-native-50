@@ -260,6 +260,16 @@ resolver, while outward probing occurs only after clean samples and real
 player/orbit motion. A stationary camera therefore cannot enter the former
 extend/contract sawtooth.
 
+Version `0.0.62` keeps the single modern gameplay camera but restores a
+strictly interaction-gated retail reveal path. Only a recent controller or
+physical-keyboard operate command followed by independently travelling native
+camera output may suspend the orbit, so ordinary fixed-camera rooms cannot
+steal ownership. The default mouse and stick axes use conventional directions,
+and the unobstructed spring arm starts at configurable `PreferredRadius`
+instead of inheriting the retail camera's very short distance. A recent mode-3
+callback watchdog releases physical mouse motion to pause/front-end screens
+even when their stale player pointers still look like gameplay.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

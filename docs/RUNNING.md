@@ -235,18 +235,21 @@ A jump/climb, X operate, RT primary attack, LT parry/block, RB cast spell and
 Start menu. Hold LB to change only the left-stick horizontal axis to the
 retail side-step actions. As of `0.0.61`, R3 and SELECT no longer switch
 gameplay camera modes: one persistent modern third-person rig owns gameplay.
-The right stick and physical mouse rotate that rig on both axes. Set
-`Camera/InvertY=1` to reverse vertical look; mouse X/Y sensitivity uses
+The right stick and physical mouse rotate that rig on both axes. Version
+`0.0.62` uses conventional directions by default; set `Camera/InvertX=1` or
+`Camera/InvertY=1` only to reverse an axis. `Camera/PreferredRadius=1400`
+sets the unobstructed spring-arm distance. Mouse X/Y sensitivity uses
 `MouseHorizontalMilliDegreesPerPixel` and
 `MouseVerticalMilliDegreesPerPixel`.
 `RightStickPixelsPerTick=12` and `RightStickResponseCurvePercent=135` provide a
 slower precision response near stick center without adding temporal latency.
 
-Lever, door and reveal cameras retain priority by comparing the untouched
-native mode-3 candidate with player motion after an interaction. This is more
-reliable than the retail owner flag, which is shared by ordinary fixed-camera
-zones and is absent from some reveals. The modern camera resumes its preserved
-yaw and pitch when the native shot settles or gameplay resumes. For walls, the original `0x2DEF0`
+Lever, door and reveal cameras receive temporary priority only after an
+explicit X/operate input (including a physical `E`) and independently moving
+native camera output while the player is stationary. This is more reliable
+than the retail owner flag, which is shared by ordinary fixed-camera zones and
+is absent from some reveals. The modern camera resumes its preserved yaw and
+pitch when the native shot settles or gameplay resumes. For walls, the original `0x2DEF0`
 collision resolver remains authoritative: its resolved distance contracts the
 spring arm immediately, while the arm probes outward gradually after the path
 clears.

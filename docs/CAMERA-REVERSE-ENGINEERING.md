@@ -164,6 +164,14 @@ presence of an XInput controller. Native collision contraction remains in use,
 but outward spring-arm probing is disabled at rest to eliminate resolver
 sawtooth jitter.
 
+Version `0.0.62` restores only a bounded authored-reveal exception. An
+operate input from XInput or the physical DirectInput keyboard opens a short
+arming window; native camera travel is accumulated only inside that window
+and only while the player is stationary. This prevents ordinary fixed-camera
+motion observed before the interaction from causing a false takeover. The
+modern orbit remains the sole normal gameplay owner and resumes its preserved
+orientation after the reveal.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

@@ -69,6 +69,7 @@ std::atomic<int32_t> g_xinput_buffered_mouse_delta_y{0};
 std::atomic<uint8_t> g_xinput_buffered_mouse_buttons{0};
 std::atomic<uint8_t> g_xinput_buffered_mouse_buttons_delivered{0};
 std::atomic<uint32_t> g_xinput_buffered_mouse_sequence{1};
+std::atomic<bool> g_physical_operate_key_down{false};
 
 extern "C" {
 FARPROC g_target_DirectInputCreateA = nullptr;
@@ -141,6 +142,15 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
       g_direct_input_device_get_state
           ? g_direct_input_device_get_state(device, data_size, data)
           : DIERR_GENERIC;
+  if (SUCCEEDED(result) && data && data_size == 256u) {
+    const auto* keyboard = static_cast<const uint8_t*>(data);
+    const bool operate_down = (keyboard[DIK_E] & 0x80u) != 0u;
+    const bool was_down = g_physical_operate_key_down.exchange(
+        operate_down, std::memory_order_acq_rel);
+    if (operate_down && !was_down) {
+      NotifyDeathtrapOperateInput();
+    }
+  }
   // Deathtrap uses the standard relative mouse state. Preserve the physical
   // mouse, then merge the bounded controller pointer state used by menus.
   // Exact-size checks also exclude keyboard and joystick devices if the

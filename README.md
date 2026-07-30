@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.61`.
+Current development version: `0.0.62`.
 
 The `modern-third-person-camera` branch contains the first opt-in native orbit
 prototype. It takes ownership at the mode-3 dispatcher before the retail
@@ -118,7 +118,9 @@ D3D11 settings, first-run verification and troubleshooting.
   operates, RT attacks, LT blocks, RB casts, and Start opens the menu. Gameplay
   uses one persistent modern third-person camera; R3 and SELECT no longer
   switch to separate retail/head camera state machines.
-  `Camera/InvertY=1` reverses the overlay camera's vertical axis.
+  `Camera/InvertX=1` and `Camera/InvertY=1` reverse the conventional default
+  camera axes. `Camera/PreferredRadius=1400` controls the unobstructed camera
+  distance; the native collision resolver may pull it closer near geometry.
 - The native orbit camera engages as soon as gameplay becomes valid, whether
   input comes from a mouse, controller, or no controller at all. Inventory
   selection suppresses look input without replacing or resetting the rig.

@@ -66,6 +66,11 @@ void SubmitDeathtrapXInputMouseState(int32_t delta_x, int32_t delta_y,
 void SubmitDeathtrapPhysicalMouseDelta(int32_t delta_x, int32_t delta_y);
 bool DeathtrapModernCameraConsumesMouse();
 
+// Marks an explicit operate/use input from either the controller bridge or
+// the physical DirectInput keyboard. The camera uses this narrow signal to
+// allow only authored lever/switch reveal shots through the retail rig.
+void NotifyDeathtrapOperateInput();
+
 // Polls only the startup/movie/menu controller path. DirectInput calls this
 // immediately before the retail frontend consumes mouse data, so controller
 // input is available before Dungeon.dll's gameplay render scheduler starts.
