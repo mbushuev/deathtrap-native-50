@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.58`.
+Current development version: `0.0.59`.
 
 The `modern-third-person-camera` branch contains the first opt-in native orbit
 prototype. It takes ownership at the mode-3 dispatcher before the retail
@@ -101,8 +101,11 @@ D3D11 settings, first-run verification and troubleshooting.
 - The installer adds native mouse bindings to `ASYLUM/keys.cfg` once, before
   the game starts. The DLL never writes the game's action table; its only
   runtime input hook observes wheel deltas after the system DirectInput call.
-- Horizontal mouse movement uses normal turn actions. While Shift is held for
-  running, it activates the retail fast-turn actions automatically.
+- In modern third-person mode, physical relative mouse motion rotates the
+  camera on both axes and is not forwarded to the old tank-turn actions.
+  Menus, the radial selector, retail camera mode and retail first person keep
+  the original mouse stream. Sensitivity is independently configurable per
+  axis under `[Camera]`.
 - Left click uses the retail primary attack and right click uses parry.
 - Mouse wheel selects the previous or next available close-combat weapon. The
   proxy only observes relative wheel input; `Dungeon.dll` performs the actual
@@ -113,13 +116,10 @@ D3D11 settings, first-run verification and troubleshooting.
   original forward/backward and tank-turn actions; hold LB to change its
   horizontal axis to the game's native side-step actions. A jumps/climbs, X
   operates, RT attacks, LT blocks, RB casts, and Start opens the menu. R3 keeps
-  the game's original first-person action. SELECT cycles modern third-person,
-  the body-safe custom head view and the untouched retail camera. The head
-  view never enters the retail first-person callback: it changes only the
-  captured render-camera origin, so Lara, her weapon and shadow remain owned
-  by normal gameplay. Camera-mode changes use a safe cut instead of moving the
-  camera through Lara's model. The right stick looks on both axes in either
-  overlay-owned camera.
+  the game's original first-person action. SELECT switches between modern
+  third-person and the untouched retail camera. The experimental head view is
+  disabled because the legacy renderer can cull the player and publish black
+  frames when the camera origin enters the model.
   `Camera/InvertY=1` reverses the overlay camera's vertical axis. Native R3
   first-person look uses a
   precision curve (`RightStickResponseCurvePercent=135`) and a reduced
@@ -132,9 +132,9 @@ D3D11 settings, first-run verification and troubleshooting.
   pulls the camera in immediately and clear space releases it gradually.
   Configure it in
   `[Camera]`; set `ThirdPersonOrbit=0` for exact retail camera behavior.
-  `HeadMinimumPitchDegrees` and `HeadMaximumPitchDegrees` control the wider
-  SELECT-view pitch range, while `HeadHeight` and `HeadForwardOffset` place its
-  render-only origin relative to the player.
+  Mode-3 input and spring-arm state advance exactly once per unique engine
+  frame; repeated cache refreshes and synthetic 50 Hz phases reuse that
+  endpoint instead of reintegrating it.
 - XInput vibration is enabled by default. LT produces a light low-frequency
   block-action pulse. RT itself never vibrates: attack feedback begins only
   when the engine accepts the melee downstroke, so pressing attack while the

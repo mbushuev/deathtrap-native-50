@@ -149,6 +149,13 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
       (data_size == sizeof(DIMOUSESTATE) ||
        data_size == sizeof(DIMOUSESTATE2))) {
     auto* mouse = static_cast<DIMOUSESTATE*>(data);
+    if (DeathtrapModernCameraConsumesMouse()) {
+      SubmitDeathtrapPhysicalMouseDelta(mouse->lX, mouse->lY);
+      // Camera-look owns only the physical axes during gameplay. Buttons and
+      // wheel remain native, while frontend/menu samples bypass this branch.
+      mouse->lX = 0;
+      mouse->lY = 0;
+    }
     mouse->lX += g_xinput_mouse_delta_x.exchange(0,
                                                  std::memory_order_acq_rel);
     mouse->lY += g_xinput_mouse_delta_y.exchange(0,

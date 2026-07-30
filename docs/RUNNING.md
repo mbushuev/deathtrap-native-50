@@ -234,22 +234,21 @@ The default gameplay layout is left-stick forward/backward and tank turning,
 A jump/climb, X operate, RT primary attack, LT parry/block, RB cast spell and
 Start menu. Hold LB to change only the left-stick horizontal axis to the
 retail side-step actions. R3 retains the game's original first-person action.
-SELECT cycles three camera policies: modern third-person, the overlay's
-body-safe head view, and the untouched retail camera. The custom head view
-does not call the retail mode-4 routine; only the captured render-camera origin
-moves, so the body, weapon and shadow stay under normal gameplay ownership.
-Mode changes use a safe cut rather than a positional blend through the player
-model. Both axes use the overlay orbit path in head view, with conventional
-stick-up/look-up behavior. Set `Camera/InvertY=1` to reverse it.
-`HeadMinimumPitchDegrees`,
-`HeadMaximumPitchDegrees`, `HeadHeight` and `HeadForwardOffset` tune the full
-vertical range and eye origin independently of the third-person spring arm.
+SELECT switches between modern third-person and the untouched retail camera.
+The experimental head view is disabled because moving the origin inside the
+legacy player model can trigger culling and black frames. In modern mode the
+right stick and physical mouse rotate the camera on both axes. Set
+`Camera/InvertY=1` to reverse vertical look; mouse X/Y sensitivity uses
+`MouseHorizontalMilliDegreesPerPixel` and
+`MouseVerticalMilliDegreesPerPixel`.
 `RightStickPixelsPerTick=12` and `RightStickResponseCurvePercent=135` provide a
 slower precision response near stick center without adding temporal latency.
 
-Lever, door and reveal cameras retain priority through the retail mode-3
-script-owner flag. The modern camera resumes its preserved yaw and pitch when
-the scripted shot releases ownership. For walls, the original `0x2DEF0`
+Lever, door and reveal cameras retain priority by comparing the untouched
+native mode-3 candidate with player motion after an interaction. This is more
+reliable than the retail owner flag, which is shared by ordinary fixed-camera
+zones and is absent from some reveals. The modern camera resumes its preserved
+yaw and pitch when the native shot settles or gameplay resumes. For walls, the original `0x2DEF0`
 collision resolver remains authoritative: its resolved distance contracts the
 spring arm immediately, while the arm probes outward gradually after the path
 clears.

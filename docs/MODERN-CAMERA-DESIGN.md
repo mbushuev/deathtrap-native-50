@@ -102,9 +102,10 @@ where the player placed it.
 
 Recenter is suspended while stationary, blocked against geometry, selecting an
 item, attacking with a committed animation, or transitioning camera state.
-R3 remains assigned to the retail first-person action. SELECT cycles the
-overlay's modern third-person and independent eye-level policies plus the
-untouched retail camera, so it does not overload the game's existing binding.
+R3 remains assigned to the retail first-person action. SELECT switches between
+the overlay's modern third-person camera and the untouched retail camera, so it
+does not overload the game's existing binding. The experimental eye-level mode
+is disabled until the legacy model-culling and black-frame behavior is solved.
 
 ## Camera-relative movement
 
@@ -221,6 +222,25 @@ native resolver's output at `controller+0x1DC..+0x1E4` is also fed back as the
 collision-limited arm length: pull-in is immediate, while release is damped.
 This is the first Phase C step and retains native room/world collision as the
 sole authority.
+
+Version `0.0.59` corrects the integration layer after runtime logs proved that
+the mode-3 dispatcher is called repeatedly by camera-cache refreshes and by
+synthetic presentation phases. Input integration, cinematic arbitration,
+spring-arm release and collision feedback now advance only on the first call
+for a unique `Dungeon.dll+0x1D24DC` engine-frame stamp. Later calls are
+read-only and retain the already accepted endpoint. This removes the idle
+radius oscillation that previously appeared as camera shake.
+
+The same version always samples the untouched native mode-3 candidate once per
+source tick before applying the custom endpoint. A recent interaction plus
+native-camera motion while the player is stationary gives the retail reveal
+shot priority even when the ambiguous owner bit is absent; ordinary fixed
+camera zones remain under the modern rig. Physical DirectInput mouse deltas are
+intercepted by the existing proxy only during modern gameplay, accumulated
+without temporal filtering, and consumed once by this source-tick camera
+state. Menus, selectors, retail first person and retail camera mode receive the
+original mouse stream unchanged. The accepted source endpoints continue to be
+rigidly interpolated by the native 50 Hz presentation layer.
 
 ### Phase C: spring-arm collision
 

@@ -59,6 +59,13 @@ void QueueDeathtrapWeaponWheelDelta(int32_t delta);
 void SubmitDeathtrapXInputMouseState(int32_t delta_x, int32_t delta_y,
                                      bool left_button, bool right_button);
 
+// Routes physical relative DirectInput mouse motion to the modern third-
+// person camera. The proxy calls this only when the render patch explicitly
+// owns mouse-look, so menus and the retail first-person mode still receive the
+// original mouse stream unchanged.
+void SubmitDeathtrapPhysicalMouseDelta(int32_t delta_x, int32_t delta_y);
+bool DeathtrapModernCameraConsumesMouse();
+
 // Polls only the startup/movie/menu controller path. DirectInput calls this
 // immediately before the retail frontend consumes mouse data, so controller
 // input is available before Dungeon.dll's gameplay render scheduler starts.

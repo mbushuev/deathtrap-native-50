@@ -74,9 +74,13 @@ native sources named `MOUSE_HORIZ_LEFT`, `MOUSE_HORIZ_RIGHT` and
 `MOUSE_LBUTTON`. The retail binding file uses these sources for menus only.
 
 The installer adds those sources to the retail actions in `ASYLUM/keys.cfg`
-before launch. Normal horizontal motion maps to `ACTION_TURN_LEFT/RIGHT`;
-Shift plus horizontal motion maps to `ACTION_TURN_FAST_LEFT/RIGHT`. Left and
-right buttons map to `ACTION_ATTACK_1` and `ACTION_PARRY`.
+before launch. In untouched retail camera mode, normal horizontal motion maps
+to `ACTION_TURN_LEFT/RIGHT`; Shift plus horizontal motion maps to
+`ACTION_TURN_FAST_LEFT/RIGHT`. In modern third-person mode the DirectInput
+proxy instead consumes only the physical X/Y deltas for camera orbit, while
+buttons and wheel remain on their native paths. Menus, the selector and retail
+first person always retain the original mouse stream. Left and right buttons
+map to `ACTION_ATTACK_1` and `ACTION_PARRY`.
 
 The DLL deliberately contains no runtime action-table hook. Earlier experiments
 that rewrote the live action table were stable during gameplay but could
