@@ -2923,9 +2923,9 @@ bool ResolveThirdPersonSpringArm(
 
 bool CommitImmediateSpringArmContraction(
     void* controller, const std::array<int32_t, 3>& focus,
-    const std::array<int32_t, 3>& submitted, bool obstruction_present,
+    const std::array<int32_t, 3>& submitted, bool endpoint_constrained,
     std::array<int32_t, 3>* committed_position) {
-  if (!controller || !obstruction_present) {
+  if (!controller || !endpoint_constrained) {
     return false;
   }
 
@@ -3193,9 +3193,26 @@ void __cdecl HookMode3Camera(void* controller) {
   g_configure_camera(controller, submitted_target[0], submitted_target[1],
                      submitted_target[2],
                      room_or_sector, 1);
+  // g_configure_camera runs the retail position-history resolver after it
+  // accepts our endpoint. During spring-arm release that resolver may move
+  // controller+0x1DC laterally and vertically away from the exact radial
+  // segment that our swept-volume test validated. The v0.0.80 trace caught
+  // this directly on resource 12708: submit=-11015/-1376/16390 became
+  // resolved=-11160/-1361/16235 after the call. Commit the submitted point for
+  // the whole contracted lifetime, not just on the first contact tick. Once
+  // the arm reaches its requested radius, retail ownership is untouched.
+  const double requested_radius = CameraPositionDistance(camera_focus, orbit);
+  const double submitted_radius =
+      CameraPositionDistance(camera_focus, submitted_target);
+  constexpr double kSpringArmCommitTolerance = 1.0;
+  const bool spring_arm_endpoint_constrained =
+      spring_arm_contact ||
+      (std::isfinite(requested_radius) && std::isfinite(submitted_radius) &&
+       submitted_radius + kSpringArmCommitTolerance < requested_radius);
   std::array<int32_t, 3> committed_target{};
   const bool immediate_contraction = CommitImmediateSpringArmContraction(
-      controller, camera_focus, submitted_target, spring_arm_contact,
+      controller, camera_focus, submitted_target,
+      spring_arm_endpoint_constrained,
       &committed_target);
   if (g_debug_log) {
     std::array<int32_t, 3> configured_desired{};
@@ -8215,8 +8232,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.80 temporal camera chord guard "
-      "(96-unit exact and synthetic render-mesh sweeps): "
+      "Deathtrap native render overlay 0.0.81 exact contracted spring arm "
+      "(96-unit exact/synthetic sweeps plus post-resolver publication): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "

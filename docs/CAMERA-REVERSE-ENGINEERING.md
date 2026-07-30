@@ -332,6 +332,15 @@ state, source endpoints, spring-arm release or game simulation. Diagnostics use
 `camera_temporal_chord_guard`, which is intentionally separate from the
 source-tick `camera_mesh_sweep` records.
 
+The `0.0.80` runtime then exposed a second post-validation mutation during
+outward recovery. With resource `12708` nearby, the validated endpoint
+`-11015/-1376/16390` was submitted to `0x2F380`, but controller `+0x1DC` and
+the published camera became `-11160/-1361/16235`. This happened on a clear
+tick while the spring arm was still contracted, so the contact-only exact
+commit did not run. Version `0.0.81` keeps publishing the validated radial
+endpoint for the complete contracted/releasing lifetime. Normal full-radius
+tracking and authored camera reveals still use the retail path unchanged.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

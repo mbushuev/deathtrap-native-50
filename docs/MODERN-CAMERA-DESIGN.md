@@ -425,6 +425,16 @@ unobstructed camera motion retain the existing 50 Hz presentation path. The
 diagnostic log records `camera_temporal_chord_guard` with the exact resource,
 triangle, phase and selected endpoint.
 
+Version `0.0.81` closes the corresponding source-tick publication gap during
+spring-arm recovery. `0x2F380` owns a retail position-history resolver and may
+move a submitted short-arm endpoint laterally or vertically after the render-
+mesh sweep has accepted it. The trace captured this as a validated
+`-11015/-1376/16390` submission becoming `-11160/-1361/16235` in the live and
+published camera. While the modern spring arm is shorter than its requested
+radius, the exact submitted point is now committed to the controller history,
+camera node and published matrix after `0x2F380`. At full radius, the retail
+path remains untouched.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
