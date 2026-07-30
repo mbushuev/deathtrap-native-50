@@ -443,6 +443,21 @@ active camera path and preserves the safety gap already demonstrated by the
 stock camera around the lever block. Authored interaction reveals retain the
 existing arbitration path.
 
+Version `0.0.83` adds hysteresis above that native authority. A blocked modern
+ray is still resolved first by retail mode 3, but its first native-safe
+alternate offset is retained instead of asking the randomized `0x2F750`
+search to choose a new side every source tick. The offset translates with the
+focus, advances toward the requested orbit only through clear `0x30910`
+queries, and retracts through the same query when a protrusion blocks the next
+step. This is a safe-path glide rather than post-render smoothing: no endpoint
+is submitted unless the retail visibility volume accepts it.
+
+The diagnostic retail sample used for authored-shot arbitration is now
+transactional. If it does not take camera ownership, controller resolver and
+position-history state are restored before the orbit pass. This prevents two
+history integrations per source tick and removes periodic running jolts without
+weakening interaction-camera detection.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

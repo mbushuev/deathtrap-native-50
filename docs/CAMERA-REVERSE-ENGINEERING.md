@@ -357,6 +357,30 @@ same alternate camera used by the stock game. The active path no longer
 parses render meshes, runs a second spring arm, or forcibly overwrites the
 controller history, live node and published matrix.
 
+The final `0.0.82` trace identified why a collision-safe camera could still
+shake at the lever-block corner. For an unchanged blocked orbit, retail
+`0x2F750` selected a different valid alternate position on almost every source
+tick. The trace cycled between endpoint sectors `1BDCDF7C` and `1BDCDE14`, and
+the desired position jumped by hundreds of world units even though both focus
+and requested orbit were constant. This is intentional randomized fallback
+selection in the fixed-camera game, not a failure of `0x30910`.
+
+Version `0.0.83` retains the first fallback endpoint that the native dispatcher
+has generated and independently verifies it with `0x30910`. It stores the
+endpoint relative to the camera focus, so the safe path follows the player
+without becoming a stale world-space anchor. On later blocked ticks it takes
+short visibility-verified steps toward the requested orbit; if a step is
+blocked it retracts the retained arm in a verified short step. This gives the
+camera a stable glide around protrusions instead of repeatedly invoking the
+random alternate search. The cache is discarded immediately if its translated
+path ceases to pass the native query.
+
+The same version snapshots the mode-3 resolver/history block before the
+untouched-retail arbitration probe. When that probe does not select an authored
+interaction reveal, its state changes are rolled back before the real orbit
+pass. The final camera therefore advances native history once per source tick,
+while lever/switch reveals still receive the complete untouched retail result.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
