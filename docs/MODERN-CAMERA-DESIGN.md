@@ -280,6 +280,17 @@ mouse and right-stick menu cursor input use last-active-device arbitration,
 while the mode-3 callback watchdog automatically transfers controller
 ownership between gameplay and frontend screens.
 
+Version `0.0.64` makes spring-arm feedback stateful rather than treating every
+shortened native camera point as an obstruction. A collision candidate must
+remain at a stable distance for three source ticks before it may contract the
+persistent arm; the changing distances produced by native angular damping are
+discarded. Mouse samples are protected by a short asynchronous settle window,
+confirmed contacts retain a larger player-side margin, and a contracted arm
+now restores its preferred radius after the last confirmed contact even when
+the player is stationary. This prevents both false penetration feedback while
+rotating and the permanent minimum-radius state that pinned the camera to the
+character's back.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
