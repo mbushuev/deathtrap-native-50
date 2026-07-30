@@ -316,6 +316,18 @@ non-camera calls retain the original damping. The v0.0.65 contact manifold is
 kept unchanged after the pull-in, so a resolved contact remains stable instead
 of cycling back into the object.
 
+Version `0.0.67` closes a separate hole in the game's data: some visible
+switch housings, stairs and props are render objects but are absent from the
+room collision BSP queried by the retail camera. The scene-cache pass at
+`0x3AC00` publishes an own-object world bounding sphere at node offsets
+`0x80..0x8C`. The custom spring arm performs a read-only segment sweep through
+stable drawable spheres before submitting its target to the native resolver.
+Player and room ancestors, animated bounds, tiny effects and oversized room
+bounds are excluded. A hit is submitted as the native target while the full
+orbit point remains the requested endpoint, so the verified v0.0.66
+pre-damping path still owns immediate pull-in and the existing contact
+manifold still owns release.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

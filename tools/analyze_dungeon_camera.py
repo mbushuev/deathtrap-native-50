@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 from pathlib import Path
+import struct
 import sys
 
 try:
@@ -97,6 +98,18 @@ def find_references(image, target_rva: int) -> None:
     for instruction in disassembler().disasm(code, base + start):
         if references_target(instruction, target):
             print_instruction(instruction, base)
+
+    # Capstone's linear sweep stops at embedded data or undecodable bytes in
+    # some old MSVC functions.  Direct x86 calls are unambiguous enough to
+    # recover independently, so scan E8 rel32 sites as a second pass.  This is
+    # intentionally read-only and may print the same call already found above.
+    for offset in range(0, max(0, len(code) - 4)):
+        if code[offset] != 0xE8:
+            continue
+        displacement = struct.unpack_from("<i", code, offset + 1)[0]
+        call_rva = start + offset
+        if call_rva + 5 + displacement == target_rva:
+            print(f"{call_rva:08X}  call      0x{base + target_rva:08x}")
 
 
 def references_displacement(instruction, displacement: int) -> bool:

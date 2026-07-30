@@ -131,6 +131,8 @@ constexpr size_t kMatrixOffset = 0x9Cu;
 constexpr size_t kParentOffset = 0x2Cu;
 constexpr size_t kChildOffset = 0x30u;
 constexpr size_t kSiblingOffset = 0x34u;
+constexpr size_t kRenderResourceHandleOffset = 0x3Cu;
+constexpr size_t kWorldBoundsOffset = 0x80u;
 constexpr size_t kLocalMatrixOffset = 0xD0u;
 constexpr size_t kSceneRootOffset = 0x1Cu;
 constexpr size_t kContextCameraOwnerOffset = 0x28u;
@@ -161,6 +163,10 @@ struct NodeTransform {
   Matrix3x4 world;
   Matrix3x4 local;
   uintptr_t parent = 0;
+  uintptr_t render_resource_handle = 0;
+  std::array<int32_t, 3> bounds_center{};
+  int32_t bounds_radius = 0;
+  bool bounds_valid = false;
 };
 
 struct SceneSnapshot {
@@ -1860,6 +1866,168 @@ bool BuildThirdPersonOrbitPosition(void* controller,
   return true;
 }
 
+bool SceneNodeDescendsFrom(const SceneSnapshot& scene, uintptr_t node,
+                           uintptr_t ancestor) {
+  if (!node || !ancestor) {
+    return false;
+  }
+  for (uint32_t depth = 0; node && depth < 128u; ++depth) {
+    if (node == ancestor) {
+      return true;
+    }
+    const auto entry = scene.nodes.find(node);
+    if (entry == scene.nodes.end() || entry->second.parent == node) {
+      return false;
+    }
+    node = entry->second.parent;
+  }
+  return false;
+}
+
+bool ClipThirdPersonOrbitAgainstSceneObjects(
+    const std::array<int32_t, 3>& player,
+    const std::array<int32_t, 3>& requested,
+    std::array<int32_t, 3>* clipped) {
+  if (!clipped || g_previous_snapshot.nodes.empty() ||
+      g_older_snapshot.nodes.empty() ||
+      !g_previous_snapshot.player ||
+      g_previous_snapshot.root != g_older_snapshot.root) {
+    return false;
+  }
+
+  const double ray_x = static_cast<double>(requested[0] - player[0]);
+  const double ray_y = static_cast<double>(requested[1] - player[1]);
+  const double ray_z = static_cast<double>(requested[2] - player[2]);
+  const double requested_distance =
+      std::hypot(std::hypot(ray_x, ray_z), ray_y);
+  if (!std::isfinite(requested_distance) || requested_distance < 240.0 ||
+      requested_distance > 5000.0) {
+    return false;
+  }
+  const std::array<double, 3> direction = {
+      ray_x / requested_distance, ray_y / requested_distance,
+      ray_z / requested_distance};
+
+  // Dungeon's room BSP does not contain every visible prop. However, the
+  // scene-cache pass at 0x3AC00 publishes an own-object world bounding sphere
+  // at node+0x80 for every node with a render resource. Sweep the camera
+  // centre through stable drawable spheres so switches, stairs and other
+  // static props can shorten the spring arm before the native damping stage.
+  // Parent/room aggregate spheres, animated actors and the player hierarchy
+  // are deliberately excluded.
+  constexpr double kMinimumObjectRadius = 48.0;
+  constexpr double kMaximumObjectRadius = 900.0;
+  // The shared collision-radius update below already keeps a 96-unit
+  // player-side margin. Inflate only enough to keep the first authoritative
+  // sample off the visual surface; using the full margin here as well would
+  // shorten the persistent arm twice.
+  constexpr double kCameraInflation = 24.0;
+  constexpr double kBoundsMotionTolerance = 16.0;
+  constexpr double kRadiusMotionTolerance = 8.0;
+  constexpr double kMinimumCameraDistance = 180.0;
+
+  double nearest_distance = requested_distance;
+  uintptr_t nearest_node = 0;
+  double nearest_object_radius = 0.0;
+  for (const auto& entry : g_previous_snapshot.nodes) {
+    const uintptr_t node = entry.first;
+    const NodeTransform& current = entry.second;
+    if (!node || node == g_previous_snapshot.root ||
+        node == g_previous_snapshot.camera ||
+        !current.render_resource_handle || !current.bounds_valid ||
+        current.bounds_radius < kMinimumObjectRadius ||
+        current.bounds_radius > kMaximumObjectRadius) {
+      continue;
+    }
+
+    // Ignore Lara and all of her mesh/bone nodes. Also ignore drawable room
+    // ancestors that contain Lara; their aggregate geometry is already owned
+    // by the native room collision and a sphere would seal doorways.
+    if (SceneNodeDescendsFrom(g_previous_snapshot, node,
+                             g_previous_snapshot.player) ||
+        SceneNodeDescendsFrom(g_previous_snapshot,
+                             g_previous_snapshot.player, node)) {
+      continue;
+    }
+
+    const auto older = g_older_snapshot.nodes.find(node);
+    if (older == g_older_snapshot.nodes.end() ||
+        !older->second.bounds_valid ||
+        older->second.render_resource_handle !=
+            current.render_resource_handle) {
+      continue;
+    }
+    const double bounds_motion = CameraPositionDistance(
+        current.bounds_center, older->second.bounds_center);
+    if (!std::isfinite(bounds_motion) ||
+        bounds_motion > kBoundsMotionTolerance ||
+        std::abs(static_cast<double>(current.bounds_radius) -
+                 static_cast<double>(older->second.bounds_radius)) >
+            kRadiusMotionTolerance) {
+      continue;
+    }
+
+    const double center_x =
+        static_cast<double>(current.bounds_center[0] - player[0]);
+    const double center_y =
+        static_cast<double>(current.bounds_center[1] - player[1]);
+    const double center_z =
+        static_cast<double>(current.bounds_center[2] - player[2]);
+    const double inflated_radius =
+        static_cast<double>(current.bounds_radius) + kCameraInflation;
+    const double center_distance_squared =
+        center_x * center_x + center_y * center_y + center_z * center_z;
+    if (!std::isfinite(center_distance_squared) ||
+        center_distance_squared <= inflated_radius * inflated_radius) {
+      // Spheres containing the player are room containers or bounds too
+      // coarse to provide a meaningful entry surface.
+      continue;
+    }
+    const double projection = center_x * direction[0] +
+                              center_y * direction[1] +
+                              center_z * direction[2];
+    if (projection <= kMinimumCameraDistance ||
+        projection - inflated_radius >= nearest_distance) {
+      continue;
+    }
+    const double perpendicular_squared = std::max(
+        0.0, center_distance_squared - projection * projection);
+    const double radius_squared = inflated_radius * inflated_radius;
+    if (perpendicular_squared >= radius_squared) {
+      continue;
+    }
+    const double entry_distance =
+        projection - std::sqrt(radius_squared - perpendicular_squared);
+    if (!std::isfinite(entry_distance) ||
+        entry_distance < kMinimumCameraDistance ||
+        entry_distance >= nearest_distance) {
+      continue;
+    }
+    nearest_distance = entry_distance;
+    nearest_node = node;
+    nearest_object_radius = static_cast<double>(current.bounds_radius);
+  }
+
+  if (!nearest_node || nearest_distance + 1.0 >= requested_distance) {
+    return false;
+  }
+  *clipped = {
+      player[0] + static_cast<int32_t>(
+                      std::lround(direction[0] * nearest_distance)),
+      player[1] + static_cast<int32_t>(
+                      std::lround(direction[1] * nearest_distance)),
+      player[2] + static_cast<int32_t>(
+                      std::lround(direction[2] * nearest_distance))};
+  if (g_debug_log) {
+    AppendNativeLog(
+        "camera_object_sweep node=%08llX object_radius=%.1f "
+        "camera_radius=%.1f requested=%.1f",
+        static_cast<unsigned long long>(nearest_node), nearest_object_radius,
+        nearest_distance, requested_distance);
+  }
+  return true;
+}
+
 void __cdecl HookCameraCollisionResolve(
     void* controller, const int32_t* averaged_position,
     const int32_t* camera_basis, int32_t* resolved_position) {
@@ -2161,7 +2329,11 @@ void __cdecl HookMode3Camera(void* controller) {
   g_raw_camera_collision_capture.player =
       g_third_person_orbit_state.previous_player;
   g_raw_camera_collision_capture.requested = orbit;
-  g_configure_camera(controller, orbit[0], orbit[1], orbit[2],
+  std::array<int32_t, 3> collision_target = orbit;
+  ClipThirdPersonOrbitAgainstSceneObjects(
+      g_raw_camera_collision_capture.player, orbit, &collision_target);
+  g_configure_camera(controller, collision_target[0], collision_target[1],
+                     collision_target[2],
                      room_or_sector, 1);
   g_raw_camera_collision_capture.armed = false;
   UpdateThirdPersonCollisionRadius(controller);
@@ -4872,6 +5044,16 @@ void CaptureNode(uintptr_t node, SceneSnapshot* snapshot,
                        &transform.parent)) {
       return;
     }
+    SafeReadValue(
+        reinterpret_cast<const void*>(node + kRenderResourceHandleOffset),
+        &transform.render_resource_handle);
+    std::array<int32_t, 4> bounds{};
+    if (SafeRead(reinterpret_cast<const void*>(node + kWorldBoundsOffset),
+                 bounds.data(), sizeof(bounds))) {
+      transform.bounds_center = {bounds[0], bounds[1], bounds[2]};
+      transform.bounds_radius = bounds[3];
+      transform.bounds_valid = bounds[3] > 0;
+    }
     snapshot->nodes.emplace(node, transform);
 
     uintptr_t child = 0;
@@ -4935,9 +5117,20 @@ SceneSnapshot CaptureScene(void* context) {
           SafeRead(
               reinterpret_cast<const void*>(camera_node + kLocalMatrixOffset),
               &transform.local, sizeof(transform.local)) &&
-          SafeReadValue(
-              reinterpret_cast<const void*>(camera_node + kParentOffset),
-              &transform.parent)) {
+           SafeReadValue(
+               reinterpret_cast<const void*>(camera_node + kParentOffset),
+               &transform.parent)) {
+        SafeReadValue(reinterpret_cast<const void*>(
+                          camera_node + kRenderResourceHandleOffset),
+                      &transform.render_resource_handle);
+        std::array<int32_t, 4> bounds{};
+        if (SafeRead(reinterpret_cast<const void*>(
+                         camera_node + kWorldBoundsOffset),
+                     bounds.data(), sizeof(bounds))) {
+          transform.bounds_center = {bounds[0], bounds[1], bounds[2]};
+          transform.bounds_radius = bounds[3];
+          transform.bounds_valid = bounds[3] > 0;
+        }
         snapshot.nodes.emplace(camera_node, transform);
       }
     }
@@ -7060,7 +7253,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.66 pre-damping collision spring arm: "
+      "Deathtrap native render overlay 0.0.67 object-aware collision spring arm: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "

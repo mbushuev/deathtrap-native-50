@@ -190,6 +190,16 @@ inward contraction of the custom spring-arm ray. It does not replace the
 native collision query, and the existing contact manifold still governs
 outward release.
 
+The room traversal does not include every visible model. Static analysis of
+the scene-cache update at `0x3AC00` shows that nodes with a render-resource
+handle at `node+0x3C` receive an own-object world bounding sphere at
+`node+0x80..0x8C`; child bounds are merged separately into the aggregate sphere
+at `node+0x70..0x7C`. Version `0.0.67` therefore supplements, rather than
+replaces, the native BSP query with a conservative spring-arm sweep through
+stable own-object spheres. This covers visual props such as lever blocks that
+the native camera query cannot see, without treating room aggregates or
+animated actors as camera walls.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
