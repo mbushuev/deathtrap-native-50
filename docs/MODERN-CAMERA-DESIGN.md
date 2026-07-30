@@ -328,6 +328,19 @@ orbit point remains the requested endpoint, so the verified v0.0.66
 pre-damping path still owns immediate pull-in and the existing contact
 manifold still owns release.
 
+Version `0.0.68` closes two failure modes that cannot be solved by enlarging
+those spheres. First, negative orbit pitch could place the requested camera
+below the player's ground reference; the room portal query could then miss the
+floor crossing and let the camera remain under the level. The desired endpoint
+now has a hard lower bound derived from both the live camera-controller pivot
+and the captured player root. Second, a coarse prop sphere may contain both the
+player and the requested camera, so there is no valid entry point to shorten
+on the current ray. Such an overlap now retains the previous native-resolved,
+object-validated camera endpoint translated with the player instead of
+entering the prop and attempting a delayed push-out. The fallback is updated
+only by endpoints that pass the native room resolver and the supplementary
+object test.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

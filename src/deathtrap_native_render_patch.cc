@@ -433,6 +433,15 @@ struct ThirdPersonOrbitState {
   std::array<int32_t, 3> previous_player{};
   std::array<int32_t, 3> requested_position{};
   bool requested_position_valid = false;
+  // Last camera endpoint that passed both the native room resolver and the
+  // supplementary drawable-object checks.  Some Deathtrap props have no BSP
+  // collision and publish a sphere coarse enough to contain the player.  In
+  // that case there is no meaningful entry point on the current spring-arm
+  // ray, so retaining the previous known-good endpoint is safer than allowing
+  // the camera to cross the prop and trying to push it out afterwards.
+  std::array<int32_t, 3> last_safe_position{};
+  std::array<int32_t, 3> last_safe_player{};
+  bool last_safe_position_valid = false;
   uint32_t collision_confirmation_ticks = 0;
   uint32_t collision_clear_ticks = 0;
   double collision_candidate_radius = 0.0;
@@ -1887,7 +1896,11 @@ bool SceneNodeDescendsFrom(const SceneSnapshot& scene, uintptr_t node,
 bool ClipThirdPersonOrbitAgainstSceneObjects(
     const std::array<int32_t, 3>& player,
     const std::array<int32_t, 3>& requested,
-    std::array<int32_t, 3>* clipped) {
+    std::array<int32_t, 3>* clipped,
+    bool* unresolved_overlap = nullptr) {
+  if (unresolved_overlap) {
+    *unresolved_overlap = false;
+  }
   if (!clipped || g_previous_snapshot.nodes.empty() ||
       g_older_snapshot.nodes.empty() ||
       !g_previous_snapshot.player ||
@@ -1929,6 +1942,8 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   double nearest_distance = requested_distance;
   uintptr_t nearest_node = 0;
   double nearest_object_radius = 0.0;
+  uintptr_t overlap_node = 0;
+  double overlap_radius = 0.0;
   for (const auto& entry : g_previous_snapshot.nodes) {
     const uintptr_t node = entry.first;
     const NodeTransform& current = entry.second;
@@ -1977,10 +1992,37 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
         static_cast<double>(current.bounds_radius) + kCameraInflation;
     const double center_distance_squared =
         center_x * center_x + center_y * center_y + center_z * center_z;
-    if (!std::isfinite(center_distance_squared) ||
-        center_distance_squared <= inflated_radius * inflated_radius) {
-      // Spheres containing the player are room containers or bounds too
-      // coarse to provide a meaningful entry surface.
+    if (!std::isfinite(center_distance_squared)) {
+      continue;
+    }
+    const double requested_center_x =
+        static_cast<double>(requested[0] - current.bounds_center[0]);
+    const double requested_center_y =
+        static_cast<double>(requested[1] - current.bounds_center[1]);
+    const double requested_center_z =
+        static_cast<double>(requested[2] - current.bounds_center[2]);
+    const double requested_center_distance_squared =
+        requested_center_x * requested_center_x +
+        requested_center_y * requested_center_y +
+        requested_center_z * requested_center_z;
+    const bool player_inside =
+        center_distance_squared <= inflated_radius * inflated_radius;
+    const bool requested_inside =
+        requested_center_distance_squared <=
+        inflated_radius * inflated_radius;
+    if (player_inside) {
+      // The player can legitimately stand against or partially within a
+      // coarse prop sphere (lever housings are a common example).  Such a
+      // sphere has no usable segment entry, but allowing the desired camera
+      // endpoint to remain inside it produces the all-black/inside-model
+      // failure.  Mark it unresolved so the caller can retain its previously
+      // verified endpoint. Player/room ancestors were excluded above, so this
+      // does not turn an entire room aggregate into a camera blocker.
+      if (requested_inside &&
+          (!overlap_node || current.bounds_radius < overlap_radius)) {
+        overlap_node = node;
+        overlap_radius = static_cast<double>(current.bounds_radius);
+      }
       continue;
     }
     const double projection = center_x * direction[0] +
@@ -2006,6 +2048,18 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     nearest_distance = entry_distance;
     nearest_node = node;
     nearest_object_radius = static_cast<double>(current.bounds_radius);
+  }
+
+  if (overlap_node) {
+    if (unresolved_overlap) {
+      *unresolved_overlap = true;
+    }
+    if (g_debug_log) {
+      AppendNativeLog(
+          "camera_object_overlap node=%08llX object_radius=%.1f "
+          "reason=player_and_camera_inside",
+          static_cast<unsigned long long>(overlap_node), overlap_radius);
+    }
   }
 
   if (!nearest_node || nearest_distance + 1.0 >= requested_distance) {
@@ -2328,15 +2382,108 @@ void __cdecl HookMode3Camera(void* controller) {
   g_raw_camera_collision_capture.controller = controller;
   g_raw_camera_collision_capture.player =
       g_third_person_orbit_state.previous_player;
+  const auto& camera_player = g_raw_camera_collision_capture.player;
+
+  // The retail controller position is above the actor's ground contact, but
+  // an unrestricted negative orbit pitch can still put the desired camera
+  // below both. The room resolver is a portal/plane query rather than a swept
+  // camera volume and can miss that floor crossing. Keep the camera centre at
+  // least 240 units below the controller pivot (roughly 96 units above the
+  // captured player root in the supported build). This is a hard safety
+  // boundary, not smoothing, so no accepted endpoint can ever drift through
+  // the floor over several frames.
+  constexpr int32_t kMaximumDropBelowControllerPivot = 240;
+  int32_t minimum_camera_y =
+      camera_player[1] - kMaximumDropBelowControllerPivot;
+  const bool captured_player_matches_controller =
+      g_previous_snapshot.player_position_valid &&
+      std::abs(g_previous_snapshot.player_position[0] - camera_player[0]) <=
+          256 &&
+      std::abs(g_previous_snapshot.player_position[1] - camera_player[1]) <=
+          800 &&
+      std::abs(g_previous_snapshot.player_position[2] - camera_player[2]) <=
+          256;
+  if (captured_player_matches_controller) {
+    constexpr int32_t kPlayerRootCameraClearance = 96;
+    minimum_camera_y = std::max(
+        minimum_camera_y,
+        g_previous_snapshot.player_position[1] +
+            kPlayerRootCameraClearance);
+  }
+  if (orbit[1] < minimum_camera_y) {
+    if (g_debug_log) {
+      AppendNativeLog(
+          "camera_floor_guard requested_y=%d safe_y=%d pivot_y=%d",
+          orbit[1], minimum_camera_y, camera_player[1]);
+    }
+    orbit[1] = minimum_camera_y;
+    g_third_person_orbit_state.requested_position = orbit;
+  }
+
   g_raw_camera_collision_capture.requested = orbit;
   std::array<int32_t, 3> collision_target = orbit;
+  bool unresolved_object_overlap = false;
   ClipThirdPersonOrbitAgainstSceneObjects(
-      g_raw_camera_collision_capture.player, orbit, &collision_target);
+      camera_player, orbit, &collision_target, &unresolved_object_overlap);
+
+  if (unresolved_object_overlap &&
+      g_third_person_orbit_state.last_safe_position_valid) {
+    // Follow player translation while preserving the last safe camera offset;
+    // otherwise a moving actor would leave the retained endpoint behind.
+    std::array<int32_t, 3> retained = {
+        g_third_person_orbit_state.last_safe_position[0] +
+            (camera_player[0] -
+             g_third_person_orbit_state.last_safe_player[0]),
+        g_third_person_orbit_state.last_safe_position[1] +
+            (camera_player[1] -
+             g_third_person_orbit_state.last_safe_player[1]),
+        g_third_person_orbit_state.last_safe_position[2] +
+            (camera_player[2] -
+             g_third_person_orbit_state.last_safe_player[2])};
+    retained[1] = std::max(retained[1], minimum_camera_y);
+    collision_target = retained;
+    if (g_debug_log) {
+      AppendNativeLog(
+          "camera_safe_restore target=%d/%d/%d player=%d/%d/%d",
+          retained[0], retained[1], retained[2], camera_player[0],
+          camera_player[1], camera_player[2]);
+    }
+  } else if (unresolved_object_overlap && before_original_valid) {
+    // The first orbit tick may begin beside a prop before a custom endpoint
+    // has been accepted. The camera position published by the preceding
+    // retail tick is the only proven fallback in that narrow bootstrap case.
+    collision_target = before_original;
+    collision_target[1] =
+        std::max(collision_target[1], minimum_camera_y);
+    if (g_debug_log) {
+      AppendNativeLog(
+          "camera_safe_restore target=%d/%d/%d player=%d/%d/%d "
+          "source=retail_bootstrap",
+          collision_target[0], collision_target[1], collision_target[2],
+          camera_player[0], camera_player[1], camera_player[2]);
+    }
+  }
   g_configure_camera(controller, collision_target[0], collision_target[1],
                      collision_target[2],
                      room_or_sector, 1);
   g_raw_camera_collision_capture.armed = false;
   UpdateThirdPersonCollisionRadius(controller);
+
+  // Remember the engine-published endpoint only after a request with no
+  // unresolved coarse-bound overlap. It already includes native room/BSP
+  // collision and the object sweep, and is therefore the strongest safe
+  // fallback available without mutating gameplay collision state.
+  if (!unresolved_object_overlap) {
+    std::array<int32_t, 3> published{};
+    if (SafeRead(reinterpret_cast<const uint8_t*>(controller) +
+                     kCameraControllerResolvedPositionOffset,
+                 published.data(), sizeof(published)) &&
+        published[1] >= minimum_camera_y) {
+      g_third_person_orbit_state.last_safe_position = published;
+      g_third_person_orbit_state.last_safe_player = camera_player;
+      g_third_person_orbit_state.last_safe_position_valid = true;
+    }
+  }
 }
 
 WORD VibrationMotorValue(uint32_t percent, double channel_scale) {
@@ -7253,7 +7400,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.67 object-aware collision spring arm: "
+      "Deathtrap native render overlay 0.0.68 floor-safe collision spring arm: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "

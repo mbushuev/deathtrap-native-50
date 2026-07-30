@@ -200,6 +200,16 @@ stable own-object spheres. This covers visual props such as lever blocks that
 the native camera query cannot see, without treating room aggregates or
 animated actors as camera walls.
 
+Runtime `0.0.68` confirms that render spheres alone are insufficient for a
+modern spring arm. At the supported `-35` degree pitch, a 1400-unit arm can
+place its endpoint below the player root before any sphere is encountered, and
+a lever housing may publish a coarse sphere containing both the actor and the
+camera. The camera now clamps its vertical endpoint above the captured player
+root and retains a translated last-known-safe native endpoint when an
+origin-containing prop has no usable segment entry. Diagnostics expose these
+paths as `camera_floor_guard`, `camera_object_overlap` and
+`camera_safe_restore`.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
