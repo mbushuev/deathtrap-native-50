@@ -393,18 +393,6 @@ exact render-mesh contact survives up to two missing adjacent snapshots before
 outward recovery begins. This removes the measured `96 -> 144 -> 96` release
 cycle without delaying a real release after the spring-arm direction changes.
 
-Version `0.0.74` closes the remaining near-contact damping hole. The verified
-pre-damping path previously rejected native resolved endpoints below 80 world
-units, while the problematic lever-block corner produced valid render-mesh
-contacts between 57 and 78 units. Those contacts now bypass the retail
-`0x6E`-per-tick limiter down to the 16-unit camera-centre minimum. After the
-native configure call, an additional controller-boundary invariant clamps an
-aligned endpoint if it is still farther than the exact render-mesh target;
-closer or laterally displaced native room/BSP results remain authoritative.
-Contact release on either player translation or orbit direction change also
-requires three consecutive mesh-clear captures, preventing adjacent faces or
-draw nodes at a corner from opening and immediately re-closing the arm.
-
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
