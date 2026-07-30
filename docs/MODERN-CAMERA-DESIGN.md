@@ -291,6 +291,20 @@ the player is stationary. This prevents both false penetration feedback while
 rotating and the permanent minimum-radius state that pinned the camera to the
 character's back.
 
+Version `0.0.65` replaces timer-driven spring-arm release with a contact
+manifold tied to the player position and orbit ray. A confirmed prop, stair or
+wall hit pulls the arm directly to its safe radius and remains pinned while
+that manifold is unchanged; rotating or moving away releases it in bounded
+steps and allows a new surface to take ownership. This removes the repeated
+contract/release cycle inside non-wall geometry. Collision candidates remain
+active during orbit input so thin objects can pull in the camera instead of
+being ignored until the mouse stops. Scripted-camera arbitration also assigns
+each operate press a sequence: owner-less reveals require a quiet pre-event
+retail baseline and sustained post-event travel, while a script owner must
+actually transition after that press. Merely pressing E can no longer hand
+the camera to an unrelated room camera, and one interaction cannot retrigger
+after its reveal completes.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

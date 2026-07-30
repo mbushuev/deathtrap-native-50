@@ -402,6 +402,7 @@ std::atomic<uint64_t> g_third_person_orbit_input_sequence{0};
 std::atomic<int32_t> g_third_person_mouse_delta_x{0};
 std::atomic<int32_t> g_third_person_mouse_delta_y{0};
 std::atomic<uint64_t> g_last_controller_interaction_ms{0};
+std::atomic<uint64_t> g_controller_interaction_sequence{0};
 std::atomic<uint64_t> g_last_mode3_source_tick_ms{0};
 double g_third_person_mouse_horizontal_radians = 0.0;
 double g_third_person_mouse_vertical_radians = 0.0;
@@ -424,6 +425,9 @@ struct ThirdPersonOrbitState {
   uint32_t collision_candidate_ticks = 0;
   uint64_t last_confirmed_collision_ms = 0;
   uint64_t last_orbit_activity_ms = 0;
+  std::array<double, 3> collision_contact_direction{};
+  std::array<int32_t, 3> collision_contact_player{};
+  bool collision_contact_valid = false;
   bool motion_active_this_tick = false;
   bool orbit_input_active_this_tick = false;
   uint64_t last_input_sequence = 0;
@@ -456,7 +460,13 @@ struct RetailCameraArbitrationState {
   uint32_t moving_ticks = 0;
   uint32_t settled_ticks = 0;
   uint32_t owner_release_ticks = 0;
+  uint32_t candidate_motion_ticks = 0;
+  uint32_t idle_native_quiet_ticks = 0;
   bool owner_seen_during_takeover = false;
+  bool ownerless_interaction_armed = false;
+  bool interaction_owner_transition_seen = false;
+  bool interaction_consumed = false;
+  uint64_t last_interaction_sequence = 0;
   uint64_t takeover_started_ms = 0;
   uint64_t cooldown_until_ms = 0;
 };
@@ -1367,11 +1377,15 @@ void ClearRetailCameraTakeover(const char* reason, bool begin_cooldown) {
   const uint64_t cooldown = begin_cooldown ? GetTickCount64() + 1200u : 0u;
   g_retail_camera_arbitration = {};
   g_retail_camera_arbitration.cooldown_until_ms = cooldown;
+  g_retail_camera_arbitration.last_interaction_sequence =
+      g_controller_interaction_sequence.load(std::memory_order_acquire);
+  g_retail_camera_arbitration.interaction_consumed = begin_cooldown;
 }
 
 bool EvaluateRetailCameraTakeover(
     void* controller, uintptr_t owner,
     const std::array<int32_t, 3>& before_original) {
+  (void)before_original;
   std::array<int32_t, 3> player{};
   std::array<int32_t, 3> native_candidate{};
   if (!ReadCameraPlayerPosition(controller, &player) ||
@@ -1397,8 +1411,6 @@ bool EvaluateRetailCameraTakeover(
   if (!owner_changed && state.previous_native_candidate_valid) {
     native_motion = CameraPositionDistance(
         native_candidate, state.previous_native_candidate);
-  } else {
-    native_motion = CameraPositionDistance(native_candidate, before_original);
   }
 
   const uint64_t now_ms = GetTickCount64();
@@ -1409,6 +1421,35 @@ bool EvaluateRetailCameraTakeover(
           ? now_ms - last_interaction_ms
           : std::numeric_limits<uint64_t>::max();
   const bool recent_interaction = interaction_age_ms <= 6000u;
+  const uint64_t interaction_sequence =
+      g_controller_interaction_sequence.load(std::memory_order_acquire);
+  if (interaction_sequence != state.last_interaction_sequence) {
+    // Arm an owner-less reveal only from a quiet, already-observed retail
+    // baseline. Comparing the first retail sample with our modern camera made
+    // an arbitrary E press look like a huge native-camera jump. A genuine
+    // script-owner transition is recorded separately and remains immediate.
+    state.ownerless_interaction_armed =
+        state.previous_native_candidate_valid &&
+        state.idle_native_quiet_ticks >= 5u;
+    state.interaction_owner_transition_seen =
+        owner != 0 && owner != state.owner;
+    state.stationary_native_motion = 0.0;
+    state.candidate_motion_ticks = 0;
+    state.last_interaction_sequence = interaction_sequence;
+    state.interaction_consumed = false;
+    if (g_debug_log) {
+      AppendNativeLog(
+          "camera_script arm sequence=%llu ownerless=%d quiet=%u "
+          "owner_transition=%d",
+          static_cast<unsigned long long>(interaction_sequence),
+          state.ownerless_interaction_armed ? 1 : 0,
+          state.idle_native_quiet_ticks,
+          state.interaction_owner_transition_seen ? 1 : 0);
+    }
+  } else if (!state.interaction_consumed && recent_interaction &&
+             owner != 0 && owner != state.owner) {
+    state.interaction_owner_transition_seen = true;
+  }
   if (state.takeover_latched) {
     state.owner_seen_during_takeover =
         state.owner_seen_during_takeover || owner != 0;
@@ -1441,10 +1482,21 @@ bool EvaluateRetailCameraTakeover(
       return false;
     }
   } else {
+    if (!recent_interaction) {
+      state.idle_native_quiet_ticks =
+          native_motion < 8.0
+              ? std::min(state.idle_native_quiet_ticks + 1u, 120u)
+              : 0u;
+    }
     if (!recent_interaction || !player_stationary) {
       state.stationary_native_motion = 0.0;
+      state.candidate_motion_ticks = 0;
     } else if (native_motion >= 20.0) {
       state.stationary_native_motion += native_motion;
+      state.candidate_motion_ticks =
+          std::min(state.candidate_motion_ticks + 1u, 120u);
+    } else if (native_motion < 8.0) {
+      state.candidate_motion_ticks = 0;
     }
 
     // A real reveal is the native candidate moving independently after an
@@ -1455,22 +1507,23 @@ bool EvaluateRetailCameraTakeover(
     // safe immediate signal.  Outside that window it remains ambiguous and
     // cannot steal the modern camera (ordinary room cameras set it too).
     const bool owner_reveal =
-        player_stationary && recent_interaction && owner != 0;
-    const bool snap_reveal =
-        player_stationary && recent_interaction &&
-        interaction_age_ms >= 250u && native_motion >= 96.0;
+        !state.interaction_consumed && player_stationary &&
+        recent_interaction && owner != 0 &&
+        state.interaction_owner_transition_seen;
     const bool travelling_reveal =
-        player_stationary &&
-        recent_interaction && interaction_age_ms >= 250u &&
-        state.stationary_native_motion >= 240.0;
+        !state.interaction_consumed && player_stationary && recent_interaction &&
+        state.ownerless_interaction_armed && interaction_age_ms >= 250u &&
+        state.candidate_motion_ticks >= 3u &&
+        state.stationary_native_motion >= 360.0;
     if (now_ms >= state.cooldown_until_ms &&
-        (owner_reveal || snap_reveal || travelling_reveal)) {
+        (owner_reveal || travelling_reveal)) {
       state.takeover_latched = true;
       state.takeover_started_ms = now_ms;
       state.moving_ticks = 0;
       state.settled_ticks = 0;
       state.owner_release_ticks = 0;
       state.owner_seen_during_takeover = owner != 0;
+      state.interaction_consumed = true;
       AppendNativeLog(
           "camera_script takeover=ON owner=%08llX player_motion=%.1f "
           "native_motion=%.1f accumulated=%.1f",
@@ -1521,6 +1574,7 @@ bool InitializeThirdPersonOrbit(void* controller, int32_t native_x,
   g_third_person_orbit_state.collision_candidate_ticks = 0;
   g_third_person_orbit_state.last_confirmed_collision_ms = 0;
   g_third_person_orbit_state.last_orbit_activity_ms = GetTickCount64();
+  g_third_person_orbit_state.collision_contact_valid = false;
   g_third_person_orbit_state.motion_active_this_tick = false;
   g_third_person_orbit_state.previous_player = player;
   // Consume the current sample below so the first stick movement takes
@@ -1708,27 +1762,43 @@ bool BuildThirdPersonOrbitPosition(void* controller,
     g_third_person_orbit_state.last_orbit_activity_ms = orbit_now_ms;
   }
 
-  // A contracted spring arm must always be able to leave geometry again.
-  // v0.0.63 only expanded it while movement and a separate clear counter were
-  // both present. In practice the resolver's angular damping could collapse
-  // the arm to 180 units, while the orbit input that would move it clear also
-  // reset that counter forever. Hold a real, recently confirmed obstruction,
-  // otherwise restore the preferred radius independently of player movement.
-  const uint64_t since_collision_ms =
-      g_third_person_orbit_state.last_confirmed_collision_ms == 0
-          ? std::numeric_limits<uint64_t>::max()
-          : orbit_now_ms -
-                g_third_person_orbit_state.last_confirmed_collision_ms;
+  // Keep a confirmed contact pinned while the player and spring-arm ray have
+  // not changed. A timer-only release repeatedly pushed the camera back into
+  // stairs and props, then snapped it inward again. Movement away from the
+  // exact contact manifold is the release signal; a new obstruction on the
+  // new ray will establish a new anchor below.
+  const double direction_horizontal =
+      std::cos(g_third_person_orbit_state.pitch);
+  const std::array<double, 3> orbit_direction = {
+      std::sin(g_third_person_orbit_state.yaw) * direction_horizontal,
+      std::sin(g_third_person_orbit_state.pitch),
+      std::cos(g_third_person_orbit_state.yaw) * direction_horizontal};
+  bool contact_manifold_changed =
+      !g_third_person_orbit_state.collision_contact_valid;
+  if (g_third_person_orbit_state.collision_contact_valid) {
+    const auto& contact_direction =
+        g_third_person_orbit_state.collision_contact_direction;
+    const double contact_dot =
+        orbit_direction[0] * contact_direction[0] +
+        orbit_direction[1] * contact_direction[1] +
+        orbit_direction[2] * contact_direction[2];
+    const double contact_player_motion = CameraPositionDistance(
+        player, g_third_person_orbit_state.collision_contact_player);
+    contact_manifold_changed = contact_dot < 0.9975 ||
+                               contact_player_motion > 48.0;
+  }
   if (g_third_person_orbit_state.collision_radius + 0.5 <
           g_third_person_orbit_state.radius &&
-      since_collision_ms >= 240u) {
-    const bool recently_rotating =
-        orbit_now_ms - g_third_person_orbit_state.last_orbit_activity_ms <=
-        180u;
-    const double release_step = recently_rotating ? 72.0 : 36.0;
+      contact_manifold_changed) {
+    const double release_step =
+        g_third_person_orbit_state.orbit_input_active_this_tick ? 48.0 : 30.0;
     g_third_person_orbit_state.collision_radius = std::min(
         g_third_person_orbit_state.radius,
         g_third_person_orbit_state.collision_radius + release_step);
+    if (g_third_person_orbit_state.collision_radius + 0.5 >=
+        g_third_person_orbit_state.radius) {
+      g_third_person_orbit_state.collision_contact_valid = false;
+    }
   }
   const double active_radius = std::max(
       180.0, g_third_person_orbit_state.collision_radius);
@@ -1798,21 +1868,13 @@ void UpdateThirdPersonCollisionRadius(void* controller) {
   }
 
   // The native resolver also damps angular camera travel, and mouse samples
-  // are asynchronous to the 50 Hz engine tick. Treat the whole short angular
-  // settle window as rotation rather than checking only this exact tick.
-  // The native resolved point still protects the current frame; only the
-  // persistent spring-arm feedback is deferred.
+  // are asynchronous to the 50 Hz engine tick. Candidate-distance stability
+  // below distinguishes that changing lag from a real surface; do not disable
+  // collision observation during rotation because thin props and stairs must
+  // be able to pull the camera in while the ray is moving.
   const uint64_t now_ms = GetTickCount64();
   const bool recently_rotating =
       now_ms - g_third_person_orbit_state.last_orbit_activity_ms <= 180u;
-  if (recently_rotating) {
-    g_third_person_orbit_state.collision_confirmation_ticks = 0;
-    g_third_person_orbit_state.collision_candidate_radius = 0.0;
-    g_third_person_orbit_state.collision_candidate_ticks = 0;
-    g_third_person_orbit_state.collision_clear_ticks = std::min(
-        g_third_person_orbit_state.collision_clear_ticks + 1u, 120u);
-    return;
-  }
 
   const double direction_dot =
       (requested_x * resolved_x + requested_y * resolved_y +
@@ -1857,7 +1919,12 @@ void UpdateThirdPersonCollisionRadius(void* controller) {
   const uint32_t confirmations =
       ++g_third_person_orbit_state.collision_candidate_ticks;
   g_third_person_orbit_state.collision_confirmation_ticks = confirmations;
-  if (confirmations < 3u) {
+  const bool deep_obstruction =
+      direction_dot >= 0.97 &&
+      resolved_distance < requested_distance * 0.80;
+  const uint32_t required_confirmations =
+      recently_rotating && deep_obstruction ? 2u : 3u;
+  if (confirmations < required_confirmations) {
     return;
   }
 
@@ -1868,10 +1935,15 @@ void UpdateThirdPersonCollisionRadius(void* controller) {
   // continuously; outward recovery remains damped in the builder above.
   const double previous_radius = g_third_person_orbit_state.collision_radius;
   g_third_person_orbit_state.collision_radius = std::max(
-      180.0, std::max(
-                      g_third_person_orbit_state.collision_candidate_radius,
-                      g_third_person_orbit_state.collision_radius - 180.0));
+      180.0, std::min(g_third_person_orbit_state.collision_radius,
+                      g_third_person_orbit_state.collision_candidate_radius));
   g_third_person_orbit_state.last_confirmed_collision_ms = now_ms;
+  g_third_person_orbit_state.collision_contact_direction = {
+      requested_x / requested_distance,
+      requested_y / requested_distance,
+      requested_z / requested_distance};
+  g_third_person_orbit_state.collision_contact_player = player;
+  g_third_person_orbit_state.collision_contact_valid = true;
   if (g_debug_log && previous_radius -
                          g_third_person_orbit_state.collision_radius > 1.0) {
     AppendNativeLog(
@@ -6855,7 +6927,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.64 stable spring-arm recovery: "
+      "Deathtrap native render overlay 0.0.65 contact-manifold spring arm: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
@@ -6994,9 +7066,14 @@ void SubmitDeathtrapPhysicalMouseDelta(int32_t delta_x, int32_t delta_y) {
 void NotifyDeathtrapOperateInput() {
   const uint64_t now_ms = GetTickCount64();
   g_last_controller_interaction_ms.store(now_ms, std::memory_order_release);
+  const uint64_t sequence =
+      g_controller_interaction_sequence.fetch_add(
+          1u, std::memory_order_acq_rel) +
+      1u;
   if (g_debug_log) {
-    AppendNativeLog("camera_script interaction=operate time=%llu",
-                    static_cast<unsigned long long>(now_ms));
+    AppendNativeLog("camera_script interaction=operate time=%llu sequence=%llu",
+                    static_cast<unsigned long long>(now_ms),
+                    static_cast<unsigned long long>(sequence));
   }
 }
 
