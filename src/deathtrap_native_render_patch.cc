@@ -2563,11 +2563,14 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   // rejected by the old 900-unit cap.
   constexpr double kMinimumObjectRadius = 24.0;
   constexpr double kMaximumObjectRadius = 6000.0;
-  // The camera is a volume, not a point. The radius is large enough to keep
-  // the near plane off prop corners, but small compared with the 1400-unit
-  // arm and the game's narrow corridors. The backoff is deliberately small
-  // because the swept sphere already supplies physical clearance.
-  constexpr double kCameraSphereRadius = 64.0;
+  // The camera is a volume, not a point. Runtime 0.0.78 proved that a 64-unit
+  // sphere could leave the camera centre outside resource 12708 while a
+  // near-plane corner still intersected its triangle edge: the last accepted
+  // centre was only about 66 units from that edge. Restore the 96-unit volume
+  // originally validated in 0.0.70-0.0.73. Unlike those revisions, the exact
+  // swept endpoint is now committed in the same tick, so the native resolver
+  // cannot shift the enlarged volume back through the tested surface.
+  constexpr double kCameraSphereRadius = 96.0;
   constexpr double kContactBackoff = 8.0;
   constexpr double kBroadPhaseInflation = kCameraSphereRadius;
   constexpr double kBoundsMotionTolerance = 16.0;
@@ -8033,8 +8036,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.78 exact swept-endpoint camera "
-      "commit (resource-12708 off-ray fix): "
+      "Deathtrap native render overlay 0.0.79 near-plane-safe exact camera "
+      "volume (96-unit resource-12708 edge clearance): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "

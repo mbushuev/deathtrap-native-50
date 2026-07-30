@@ -276,8 +276,10 @@ Version `0.0.76` added read-only telemetry at every stage of this path. The
 problematic lever housing is conclusively identified as scene node
 `0x060343A8`, render resource `12708` (24 triangles in that run). The swept
 sphere hits triangle 11 and computes a safe endpoint before the camera centre
-crosses its face. This rules out a missing resource, an undersized radius and
-an incorrect broad-phase classification for the reproduced black-corner case.
+crosses its face. This rules out a missing resource and an incorrect
+broad-phase classification. It does not prove that the protected sphere covers
+the full visible near-plane footprint; the later `0.0.78` trace shows that the
+reduced 64-unit radius does not.
 
 The same trace exposed a separate temporal defect in the retail resolver. On
 first contact the hook submitted the safe endpoint `-11144/-1500/16483`, but
@@ -304,6 +306,16 @@ published matrix. It deliberately rejects the post-`0x2F380` positional
 shift while retaining the orientation that function calculated. Unobstructed
 tracking, spring-arm release and authored camera reveals never enter this
 path.
+
+Version `0.0.79` addresses the remaining black sector during outward recovery
+without adding a release delay. In the final `0.0.78` contact with resource
+`12708`, the committed camera centre was only about 66 units from triangle 8's
+lower edge. That is enough for the 64-unit centre sphere to report clear on the
+next samples, but not enough to keep a visible near-plane corner outside the
+mesh. The narrow phase therefore restores the 96-world-unit camera volume
+used by `0.0.70` through `0.0.73`. The exact same-tick endpoint commit from
+`0.0.78` remains in force, so the native post-configure path cannot move this
+larger validated volume back across the surface.
 
 ## Diagnostic run protocol
 

@@ -401,6 +401,16 @@ while outward or tangential motion is allowed to depenetrate instead of being
 trapped by the capsule exit. These state transitions are covered by the
 standalone `camera_spring_arm_test` target.
 
+Version `0.0.79` restores the 96-unit swept camera volume after exact runtime
+telemetry separated centre safety from near-plane safety. With the temporary
+64-unit volume, the final contact against lever resource `12708` left the
+camera centre roughly 66 units from a triangle edge, then declared the desired
+arm clear while the visible near-plane corner was still inside the prop. The
+larger volume is not a release-time heuristic: it keeps the geometric query
+blocked for precisely the interval in which any part of the protected camera
+volume still intersects the mesh. Same-tick exact endpoint publication from
+`0.0.78` remains authoritative.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
