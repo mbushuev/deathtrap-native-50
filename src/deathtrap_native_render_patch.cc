@@ -173,6 +173,11 @@ constexpr double kMaximumNodeTranslation = 8.0;
 constexpr double kMaximumNodeRotationDegrees = 100.0;
 constexpr double kMaximumScaleRatio = 1.25;
 constexpr double kMaximumBasisDot = 0.025;
+constexpr double kCameraCollisionSphereRadius = 96.0;
+constexpr double kCameraCollisionMinimumObjectRadius = 24.0;
+constexpr double kCameraCollisionMaximumObjectRadius = 6000.0;
+constexpr double kCameraCollisionBoundsMotionTolerance = 16.0;
+constexpr double kCameraCollisionRadiusMotionTolerance = 8.0;
 
 constexpr std::array<uint8_t, 16> kRateConsumerSignature = {
     0x8B, 0x83, 0x08, 0x08, 0x00, 0x00, 0x85, 0xC0,
@@ -298,6 +303,7 @@ struct InterpolationStats {
   uint64_t player_contact_manifold_events = 0;
   uint64_t player_contact_normal_flip_rejections = 0;
   uint64_t player_root_coherence_nodes = 0;
+  uint64_t camera_temporal_chord_guard = 0;
   std::array<int32_t, 3> player_root_coherence_offset{};
   double player_contact_manifold_depth = 0.0;
   uint32_t player_bounds_axis_mask = 0;
@@ -516,6 +522,7 @@ std::unordered_map<uintptr_t, CameraCollisionMesh>
 uint64_t g_camera_mesh_cache_hits = 0;
 uint64_t g_camera_mesh_cache_misses = 0;
 uint64_t g_camera_mesh_sweeps = 0;
+uint64_t g_camera_temporal_chord_guards = 0;
 
 enum class CustomCameraViewMode : uint32_t {
   kModernThirdPerson = 0,
@@ -2529,6 +2536,123 @@ bool CameraMeshSweepDistance(const CameraCollisionMesh& mesh,
   return hit;
 }
 
+// Source camera endpoints are collision-resolved independently, but the 50 Hz
+// presentation path used to connect them with a straight Cartesian chord. An
+// orbit turning around a prop corner can have two valid endpoints while that
+// chord still passes through the prop. Test that temporal segment against the
+// same render meshes used by the exact spring-arm resolver so synthetic frames
+// never place the camera behind a one-sided surface.
+bool CameraTemporalChordIntersectsSceneObjects(
+    const SceneSnapshot& scene, const SceneSnapshot& stable_scene,
+    const Vec3& origin, const Vec3& endpoint,
+    CameraMeshHitDiagnostic* hit_diagnostic = nullptr,
+    double* hit_distance = nullptr) {
+  if (scene.nodes.empty() || stable_scene.nodes.empty() || !scene.player ||
+      scene.root != stable_scene.root) {
+    return false;
+  }
+
+  const Vec3 delta = CameraVectorSubtract(endpoint, origin);
+  const double segment_distance =
+      std::sqrt(CameraVectorDot(delta, delta));
+  if (!std::isfinite(segment_distance) || segment_distance < 1.0 ||
+      segment_distance > 5000.0) {
+    return false;
+  }
+  const Vec3 direction = CameraVectorScale(delta, 1.0 / segment_distance);
+
+  double nearest_distance = segment_distance;
+  CameraMeshHitDiagnostic nearest_diagnostic;
+  bool found = false;
+  std::lock_guard<std::mutex> mesh_lock(g_camera_collision_mesh_mutex);
+  for (const auto& entry : scene.nodes) {
+    const uintptr_t node = entry.first;
+    const NodeTransform& current = entry.second;
+    if (!node || node == scene.root || node == scene.camera ||
+        !current.render_resource_handle || !current.bounds_valid ||
+        current.bounds_radius < kCameraCollisionMinimumObjectRadius ||
+        current.bounds_radius > kCameraCollisionMaximumObjectRadius) {
+      continue;
+    }
+    if (SceneNodeDescendsFrom(scene, node, scene.player) ||
+        SceneNodeDescendsFrom(scene, scene.player, node)) {
+      continue;
+    }
+
+    const auto stable = stable_scene.nodes.find(node);
+    if (stable == stable_scene.nodes.end() ||
+        !stable->second.bounds_valid ||
+        stable->second.render_resource_handle !=
+            current.render_resource_handle) {
+      continue;
+    }
+    const double bounds_motion = CameraPositionDistance(
+        current.bounds_center, stable->second.bounds_center);
+    if (!std::isfinite(bounds_motion) ||
+        bounds_motion > kCameraCollisionBoundsMotionTolerance ||
+        std::abs(static_cast<double>(current.bounds_radius) -
+                 static_cast<double>(stable->second.bounds_radius)) >
+            kCameraCollisionRadiusMotionTolerance) {
+      continue;
+    }
+
+    const Vec3 relative_center{
+        static_cast<double>(current.bounds_center[0]) - origin.x,
+        static_cast<double>(current.bounds_center[1]) - origin.y,
+        static_cast<double>(current.bounds_center[2]) - origin.z};
+    const double inflated_radius =
+        static_cast<double>(current.bounds_radius) +
+        kCameraCollisionSphereRadius;
+    const double center_distance_squared =
+        CameraVectorDot(relative_center, relative_center);
+    if (!std::isfinite(center_distance_squared)) {
+      continue;
+    }
+    const double projection = CameraVectorDot(relative_center, direction);
+    if (projection + inflated_radius <= 0.0 ||
+        projection - inflated_radius >= nearest_distance) {
+      continue;
+    }
+    const double perpendicular_squared = std::max(
+        0.0, center_distance_squared - projection * projection);
+    if (perpendicular_squared > inflated_radius * inflated_radius) {
+      continue;
+    }
+
+    const CameraCollisionMesh* mesh =
+        ResolveCameraCollisionMesh(current.render_resource_handle);
+    if (!mesh) {
+      continue;
+    }
+    double candidate_distance = nearest_distance;
+    CameraMeshHitDiagnostic candidate_diagnostic;
+    if (!CameraMeshSweepDistance(
+            *mesh, current.world, origin, direction,
+            kCameraCollisionSphereRadius, 0.0, nearest_distance,
+            &candidate_distance, nullptr, &candidate_diagnostic)) {
+      continue;
+    }
+    nearest_distance = candidate_distance;
+    nearest_diagnostic = candidate_diagnostic;
+    nearest_diagnostic.node = node;
+    nearest_diagnostic.resource = current.render_resource_handle;
+    nearest_diagnostic.bounds_center = current.bounds_center;
+    nearest_diagnostic.bounds_radius = current.bounds_radius;
+    found = true;
+  }
+
+  if (!found) {
+    return false;
+  }
+  if (hit_diagnostic) {
+    *hit_diagnostic = nearest_diagnostic;
+  }
+  if (hit_distance) {
+    *hit_distance = nearest_distance;
+  }
+  return true;
+}
+
 bool ClipThirdPersonOrbitAgainstSceneObjects(
     const std::array<int32_t, 3>& focus,
     const std::array<int32_t, 3>& requested,
@@ -2561,8 +2685,6 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   // node+0x3C. This avoids both classes of sphere failure: a concave sphere
   // containing the player, and a large decorative object whose sphere was
   // rejected by the old 900-unit cap.
-  constexpr double kMinimumObjectRadius = 24.0;
-  constexpr double kMaximumObjectRadius = 6000.0;
   // The camera is a volume, not a point. Runtime 0.0.78 proved that a 64-unit
   // sphere could leave the camera centre outside resource 12708 while a
   // near-plane corner still intersected its triangle edge: the last accepted
@@ -2570,11 +2692,8 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   // originally validated in 0.0.70-0.0.73. Unlike those revisions, the exact
   // swept endpoint is now committed in the same tick, so the native resolver
   // cannot shift the enlarged volume back through the tested surface.
-  constexpr double kCameraSphereRadius = 96.0;
   constexpr double kContactBackoff = 8.0;
-  constexpr double kBroadPhaseInflation = kCameraSphereRadius;
-  constexpr double kBoundsMotionTolerance = 16.0;
-  constexpr double kRadiusMotionTolerance = 8.0;
+  constexpr double kBroadPhaseInflation = kCameraCollisionSphereRadius;
   constexpr double kSweepStartDistance = 0.0;
 
   double nearest_distance = requested_distance;
@@ -2599,8 +2718,8 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     if (!node || node == g_previous_snapshot.root ||
         node == g_previous_snapshot.camera ||
         !current.render_resource_handle || !current.bounds_valid ||
-        current.bounds_radius < kMinimumObjectRadius ||
-        current.bounds_radius > kMaximumObjectRadius) {
+        current.bounds_radius < kCameraCollisionMinimumObjectRadius ||
+        current.bounds_radius > kCameraCollisionMaximumObjectRadius) {
       continue;
     }
 
@@ -2624,10 +2743,10 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     const double bounds_motion = CameraPositionDistance(
         current.bounds_center, older->second.bounds_center);
     if (!std::isfinite(bounds_motion) ||
-        bounds_motion > kBoundsMotionTolerance ||
+        bounds_motion > kCameraCollisionBoundsMotionTolerance ||
         std::abs(static_cast<double>(current.bounds_radius) -
                  static_cast<double>(older->second.bounds_radius)) >
-            kRadiusMotionTolerance) {
+            kCameraCollisionRadiusMotionTolerance) {
       continue;
     }
 
@@ -2668,7 +2787,7 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     CameraMeshHitDiagnostic candidate_diagnostic;
     if (!CameraMeshSweepDistance(
             *mesh, current.world, origin, ray_direction,
-            kCameraSphereRadius, kSweepStartDistance,
+            kCameraCollisionSphereRadius, kSweepStartDistance,
             nearest_surface_distance, &surface_distance,
             &mesh_initial_overlap, &candidate_diagnostic)) {
       continue;
@@ -2715,7 +2834,7 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
         static_cast<unsigned long long>(nearest_resource),
         static_cast<unsigned long long>(nearest_triangle_count),
         nearest_object_radius, nearest_surface_distance,
-        kCameraSphereRadius, nearest_distance, requested_distance,
+        kCameraCollisionSphereRadius, nearest_distance, requested_distance,
         nearest_initial_overlap ? 1u : 0u);
     if (nearest_diagnostic.valid) {
       AppendNativeLog(
@@ -6377,7 +6496,8 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
                                            const SceneSnapshot& previous,
                                            SceneSnapshot& current,
                                            double phase,
-                                           bool update_temporal_state) {
+                                           bool update_temporal_state,
+                                           uint64_t source_tick) {
   struct MidpointNode {
     Matrix3x4 local;
     Matrix3x4 world;
@@ -6766,6 +6886,65 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
 
   for (const auto& entry : current.nodes) {
     build_world(entry.first);
+  }
+
+  // The exact camera positions at the two source ticks were each accepted by
+  // the spring-arm collision resolver. They are not sufficient proof that the
+  // straight interpolation chord between them is safe: while orbiting a prop
+  // corner that chord may cross the prop even though both radial pivot rays are
+  // clear. Validate the complete temporal camera segment against stable render
+  // geometry. On a blocked chord keep the first synthetic sample at the
+  // previous safe endpoint and move the second to the current safe endpoint;
+  // rotation remains smoothly interpolated. This sacrifices translation
+  // smoothing only for the two unsafe samples instead of rendering the camera
+  // behind a one-sided mesh.
+  if (current.camera && previous.camera == current.camera) {
+    const auto previous_camera = previous.nodes.find(current.camera);
+    const auto current_camera = current.nodes.find(current.camera);
+    auto midpoint_camera = midpoint_nodes.find(current.camera);
+    if (previous_camera != previous.nodes.end() &&
+        current_camera != current.nodes.end() &&
+        midpoint_camera != midpoint_nodes.end() &&
+        midpoint_camera->second.world_interpolated) {
+      const Vec3 previous_position{
+          static_cast<double>(previous_camera->second.world.values[9]),
+          static_cast<double>(previous_camera->second.world.values[10]),
+          static_cast<double>(previous_camera->second.world.values[11])};
+      const Vec3 current_position{
+          static_cast<double>(current_camera->second.world.values[9]),
+          static_cast<double>(current_camera->second.world.values[10]),
+          static_cast<double>(current_camera->second.world.values[11])};
+      CameraMeshHitDiagnostic diagnostic;
+      double hit_distance = 0.0;
+      if (CameraTemporalChordIntersectsSceneObjects(
+              current, previous, previous_position, current_position,
+              &diagnostic, &hit_distance)) {
+        const Matrix3x4& safe_endpoint =
+            phase < 0.5 ? previous_camera->second.world
+                        : current_camera->second.world;
+        midpoint_camera->second.world.values[9] = safe_endpoint.values[9];
+        midpoint_camera->second.world.values[10] = safe_endpoint.values[10];
+        midpoint_camera->second.world.values[11] = safe_endpoint.values[11];
+        stats.camera_temporal_chord_guard = 1u;
+        ++g_camera_temporal_chord_guards;
+        if (g_debug_log) {
+          AppendNativeLog(
+              "camera_temporal_chord_guard tick=%llu phase=%.3f "
+              "node=%08llX resource=%llu tri=%llu hit=%.1f "
+              "from=%.0f/%.0f/%.0f to=%.0f/%.0f/%.0f "
+              "selected=%s total=%llu",
+              static_cast<unsigned long long>(source_tick), phase,
+              static_cast<unsigned long long>(diagnostic.node),
+              static_cast<unsigned long long>(diagnostic.resource),
+              static_cast<unsigned long long>(diagnostic.triangle_index),
+              hit_distance, previous_position.x, previous_position.y,
+              previous_position.z, current_position.x, current_position.y,
+              current_position.z, phase < 0.5 ? "previous" : "current",
+              static_cast<unsigned long long>(
+                  g_camera_temporal_chord_guards));
+        }
+      }
+    }
   }
 
   // A player's animated parent chain can contain a model-space pivot that is
@@ -7427,7 +7606,7 @@ InterpolatedPassResult RenderInterpolatedPass(
   InterpolatedPassResult result;
   const UiRenderStateSnapshot ui_before = CaptureUiRenderState();
   result.interpolation = ApplyInterpolatedScene(
-      older, previous, current, phase, update_temporal_state);
+      older, previous, current, phase, update_temporal_state, source_tick);
   // The renderer also consumes Dungeon.dll's separately published camera
   // transform. Keeping only the scene node at the synthetic phase left the
   // view itself at the preceding 16.7 Hz endpoint and made orbit movement
@@ -8036,8 +8215,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.79 near-plane-safe exact camera "
-      "volume (96-unit resource-12708 edge clearance): "
+      "Deathtrap native render overlay 0.0.80 temporal camera chord guard "
+      "(96-unit exact and synthetic render-mesh sweeps): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "

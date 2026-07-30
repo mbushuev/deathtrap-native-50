@@ -317,6 +317,21 @@ used by `0.0.70` through `0.0.73`. The exact same-tick endpoint commit from
 `0.0.78` remains in force, so the native post-configure path cannot move this
 larger validated volume back across the surface.
 
+The `0.0.79` runtime disproved radius as the remaining explanation: exact
+source endpoints continued to pass the mesh sweep while the black corner was
+still visible. The missing path was the presentation interpolator. It linearly
+blended the camera-node translation at 1/3 and 2/3 between independently safe
+source endpoints. During an orbit direction change this chord can cross lever
+resource `12708`, despite both pivot-to-endpoint spring-arm rays being clear.
+
+Version `0.0.80` validates that temporal chord against the same parsed render
+triangles and 96-unit camera volume. If blocked, synthetic translation selects
+one of the two already collision-resolved endpoints (previous at 1/3, current
+at 2/3); its orientation remains interpolated. This does not alter controller
+state, source endpoints, spring-arm release or game simulation. Diagnostics use
+`camera_temporal_chord_guard`, which is intentionally separate from the
+source-tick `camera_mesh_sweep` records.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

@@ -411,6 +411,20 @@ blocked for precisely the interval in which any part of the protected camera
 volume still intersects the mesh. Same-tick exact endpoint publication from
 `0.0.78` remains authoritative.
 
+Version `0.0.80` fixes a different, presentation-only path that the source-tick
+camera telemetry could not observe. Both collision-resolved camera endpoints
+may be valid while the straight Cartesian interpolation chord between them
+crosses the corner of a prop. This is especially visible with two synthetic
+50 Hz samples between the 16.7 Hz source endpoints. Every synthetic camera
+chord is now swept as the same 96-unit volume against stable render meshes. A
+clear chord keeps normal translation and rotation interpolation. A blocked
+chord keeps the 1/3 sample at the previous safe endpoint and the 2/3 sample at
+the current safe endpoint while preserving interpolated orientation. Thus only
+geometrically unsafe camera translation samples lose smoothing; actors and all
+unobstructed camera motion retain the existing 50 Hz presentation path. The
+diagnostic log records `camera_temporal_chord_guard` with the exact resource,
+triangle, phase and selected endpoint.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
