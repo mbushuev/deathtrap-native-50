@@ -120,6 +120,25 @@ the player origin plus a configurable eye height and small forward offset.
 The same translation is phase-published through the existing synthetic-frame
 camera path, while all player nodes and gameplay state remain untouched.
 
+Version `0.0.57` restores the exact top-level scripted-camera ownership check
+from `0x2F6D0`: `controller+0x1B8` points to an owner whose byte at `+0x8`
+uses bit `0x80`. While that bit is active, the hook calls the complete retail
+mode-3 dispatcher and suspends (rather than destroys) the persistent orbit.
+This returns lever/reveal pull-away shots without globally returning to the
+old fixed camera. SELECT now cycles modern third-person, custom head and
+unmodified retail policies. Head mode additionally requires authoritative
+mode byte `controller+0x27C == 3`, live gameplay and no scripted owner.
+
+The old 320 ms positional blend was removed because its straight path from the
+trailing endpoint to the eye endpoint necessarily crossed the character mesh,
+causing intermittent black frames. Camera-policy changes now use a safe cut;
+ordinary phase interpolation resumes at the new valid endpoint. Vertical input
+in head mode uses the head-mounted convention independently of trailing-arm
+pitch. Finally, the resolved position at `controller+0x1DC..+0x1E4`, produced
+by the existing `0x2DEF0` resolver, feeds spring-arm contraction on the next
+source tick. Contraction is immediate and extension is gradual; no framebuffer
+or screen-space collision heuristic is involved.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

@@ -101,10 +101,10 @@ only yaw toward the character's actual movement/facing direction. Pitch remains
 where the player placed it.
 
 Recenter is suspended while stationary, blocked against geometry, selecting an
-item, attacking with a committed animation, or transitioning camera state. A
-R3 remains assigned to the retail first-person action. SELECT owns the
-overlay's independent eye-level camera and therefore does not overload the
-game's existing binding.
+item, attacking with a committed animation, or transitioning camera state.
+R3 remains assigned to the retail first-person action. SELECT cycles the
+overlay's modern third-person and independent eye-level policies plus the
+untouched retail camera, so it does not overload the game's existing binding.
 
 ## Camera-relative movement
 
@@ -211,6 +211,16 @@ state are never modified. The head view has its own `-75..75` degree default
 pitch range, and returning uses the existing phase-synchronized rigid transform
 blend back to the preserved orbit. This also prevents head view from poisoning
 the subsequent third-person distance or room-camera state.
+
+Version `0.0.57` replaces the unsafe through-body transition with a safe camera
+policy cut and makes SELECT cycle modern third-person, custom head and retail
+camera modes. The verified `controller+0x1B8` owner flag at `owner+0x8 & 0x80`
+temporarily returns mode 3 to the original dispatcher for lever and reveal
+shots. The orbit resumes only after that owner releases control. The existing
+native resolver's output at `controller+0x1DC..+0x1E4` is also fed back as the
+collision-limited arm length: pull-in is immediate, while release is damped.
+This is the first Phase C step and retains native room/world collision as the
+sole authority.
 
 ### Phase C: spring-arm collision
 

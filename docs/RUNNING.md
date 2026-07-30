@@ -234,18 +234,25 @@ The default gameplay layout is left-stick forward/backward and tank turning,
 A jump/climb, X operate, RT primary attack, LT parry/block, RB cast spell and
 Start menu. Hold LB to change only the left-stick horizontal axis to the
 retail side-step actions. R3 retains the game's original first-person action.
-SELECT toggles the overlay's separate head view: the camera eases to eye level
-without changing the native mode-3 state, so the body and ordinary movement
-remain available. Version 0.0.56 does not call the retail mode-4 first-person
-routine at all; only the render-camera origin moves, so the body, hands, weapon
-and shadow stay rendered after either transition. SELECT again eases back to
-the persistent orbit. Both axes use the overlay orbit path in head view. Set
-`Camera/InvertY=1` to invert vertical look. `Camera/HeadTransitionMs` controls
-the transition duration; `HeadMinimumPitchDegrees`,
+SELECT cycles three camera policies: modern third-person, the overlay's
+body-safe head view, and the untouched retail camera. The custom head view
+does not call the retail mode-4 routine; only the captured render-camera origin
+moves, so the body, weapon and shadow stay under normal gameplay ownership.
+Mode changes use a safe cut rather than a positional blend through the player
+model. Both axes use the overlay orbit path in head view, with conventional
+stick-up/look-up behavior. Set `Camera/InvertY=1` to reverse it.
+`HeadMinimumPitchDegrees`,
 `HeadMaximumPitchDegrees`, `HeadHeight` and `HeadForwardOffset` tune the full
 vertical range and eye origin independently of the third-person spring arm.
 `RightStickPixelsPerTick=12` and `RightStickResponseCurvePercent=135` provide a
 slower precision response near stick center without adding temporal latency.
+
+Lever, door and reveal cameras retain priority through the retail mode-3
+script-owner flag. The modern camera resumes its preserved yaw and pitch when
+the scripted shot releases ownership. For walls, the original `0x2DEF0`
+collision resolver remains authoritative: its resolved distance contracts the
+spring arm immediately, while the arm probes outward gradually after the path
+clears.
 
 In startup movies, loading screens and menus, right stick moves the existing
 game pointer, A clicks/confirms and sends the native movie-skip key, left stick
