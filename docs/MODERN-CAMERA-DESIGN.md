@@ -270,6 +270,16 @@ instead of inheriting the retail camera's very short distance. A recent mode-3
 callback watchdog releases physical mouse motion to pause/front-end screens
 even when their stale player pointers still look like gameplay.
 
+Version `0.0.63` separates resolver smoothing from obstruction feedback. A
+resolved point observed while the player is actively rotating the orbit is no
+longer allowed to collapse the persistent spring arm; confirmed stationary-ray
+contacts retain a player-side surface margin. Lever reveals are armed by an
+explicit interaction and remain native through the delayed scripted-owner
+phase instead of resuming the modern orbit during the pre-shot pause. Physical
+mouse and right-stick menu cursor input use last-active-device arbitration,
+while the mode-3 callback watchdog automatically transfers controller
+ownership between gameplay and frontend screens.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

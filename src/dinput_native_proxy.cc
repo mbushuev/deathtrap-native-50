@@ -70,6 +70,8 @@ std::atomic<uint8_t> g_xinput_buffered_mouse_buttons{0};
 std::atomic<uint8_t> g_xinput_buffered_mouse_buttons_delivered{0};
 std::atomic<uint32_t> g_xinput_buffered_mouse_sequence{1};
 std::atomic<bool> g_physical_operate_key_down{false};
+std::atomic<uint64_t> g_last_physical_cursor_activity_ms{0};
+std::atomic<uint64_t> g_last_controller_cursor_activity_ms{0};
 
 extern "C" {
 FARPROC g_target_DirectInputCreateA = nullptr;
@@ -107,6 +109,31 @@ bool LoadSystemDinput() {
   RESOLVE(DllUnregisterServer);
 #undef RESOLVE
   return g_target_DirectInputCreateA != nullptr;
+}
+
+void DiscardPendingControllerCursorAxes() {
+  g_xinput_mouse_delta_x.store(0, std::memory_order_release);
+  g_xinput_mouse_delta_y.store(0, std::memory_order_release);
+  g_xinput_buffered_mouse_delta_x.store(0, std::memory_order_release);
+  g_xinput_buffered_mouse_delta_y.store(0, std::memory_order_release);
+}
+
+void NotePhysicalCursorActivity(int32_t delta_x, int32_t delta_y) {
+  if (delta_x == 0 && delta_y == 0) {
+    return;
+  }
+  g_last_physical_cursor_activity_ms.store(GetTickCount64(),
+                                            std::memory_order_release);
+  // A real mouse movement wins this sample even if the frontend poll at the
+  // top of the hook just queued a right-stick delta.
+  DiscardPendingControllerCursorAxes();
+}
+
+bool ControllerCursorAxesOwnInput() {
+  return g_last_controller_cursor_activity_ms.load(
+             std::memory_order_acquire) >
+         g_last_physical_cursor_activity_ms.load(
+             std::memory_order_acquire);
 }
 
 template <typename T>
@@ -159,6 +186,7 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
       (data_size == sizeof(DIMOUSESTATE) ||
        data_size == sizeof(DIMOUSESTATE2))) {
     auto* mouse = static_cast<DIMOUSESTATE*>(data);
+    NotePhysicalCursorActivity(mouse->lX, mouse->lY);
     if (DeathtrapModernCameraConsumesMouse()) {
       SubmitDeathtrapPhysicalMouseDelta(mouse->lX, mouse->lY);
       // Camera-look owns only the physical axes during gameplay. Buttons and
@@ -166,10 +194,15 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
       mouse->lX = 0;
       mouse->lY = 0;
     }
-    mouse->lX += g_xinput_mouse_delta_x.exchange(0,
-                                                 std::memory_order_acq_rel);
-    mouse->lY += g_xinput_mouse_delta_y.exchange(0,
-                                                 std::memory_order_acq_rel);
+    const bool controller_cursor = ControllerCursorAxesOwnInput();
+    const int32_t controller_x = g_xinput_mouse_delta_x.exchange(
+        0, std::memory_order_acq_rel);
+    const int32_t controller_y = g_xinput_mouse_delta_y.exchange(
+        0, std::memory_order_acq_rel);
+    if (controller_cursor) {
+      mouse->lX += controller_x;
+      mouse->lY += controller_y;
+    }
     const uint8_t injected_buttons =
         g_xinput_mouse_buttons.load(std::memory_order_acquire);
     if (injected_buttons & 1u) {
@@ -201,6 +234,28 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetData(
 
   DWORD written = *count;
   const bool peek = (flags & DIGDD_PEEK) != 0;
+  int32_t observed_physical_x = 0;
+  int32_t observed_physical_y = 0;
+  if (object_size >= sizeof(DIDEVICEOBJECTDATA)) {
+    for (DWORD index = 0; index < written; ++index) {
+      const auto* source_bytes = reinterpret_cast<const uint8_t*>(data) +
+                                 static_cast<size_t>(index) * object_size;
+      DIDEVICEOBJECTDATA event = {};
+      std::memcpy(&event, source_bytes, sizeof(event));
+      if (event.dwOfs == DIMOFS_X) {
+        observed_physical_x = std::clamp(
+            observed_physical_x + static_cast<int32_t>(event.dwData),
+            -8192, 8192);
+      } else if (event.dwOfs == DIMOFS_Y) {
+        observed_physical_y = std::clamp(
+            observed_physical_y + static_cast<int32_t>(event.dwData),
+            -8192, 8192);
+      }
+    }
+    if (!peek) {
+      NotePhysicalCursorActivity(observed_physical_x, observed_physical_y);
+    }
+  }
   if (DeathtrapModernCameraConsumesMouse() &&
       object_size >= sizeof(DIDEVICEOBJECTDATA)) {
     // Some Deathtrap input paths use buffered DirectInput rather than
@@ -259,13 +314,16 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetData(
     return true;
   };
 
-  int32_t delta_x = g_xinput_buffered_mouse_delta_x.load(
-      std::memory_order_acquire);
+  const bool controller_cursor = ControllerCursorAxesOwnInput();
+  int32_t delta_x = controller_cursor
+      ? g_xinput_buffered_mouse_delta_x.load(std::memory_order_acquire)
+      : 0;
   if (delta_x != 0 && append(DIMOFS_X, static_cast<DWORD>(delta_x)) && !peek) {
     g_xinput_buffered_mouse_delta_x.store(0, std::memory_order_release);
   }
-  int32_t delta_y = g_xinput_buffered_mouse_delta_y.load(
-      std::memory_order_acquire);
+  int32_t delta_y = controller_cursor
+      ? g_xinput_buffered_mouse_delta_y.load(std::memory_order_acquire)
+      : 0;
   if (delta_y != 0 && append(DIMOFS_Y, static_cast<DWORD>(delta_y)) && !peek) {
     g_xinput_buffered_mouse_delta_y.store(0, std::memory_order_release);
   }
@@ -293,6 +351,10 @@ void SubmitDeathtrapXInputMouseStateInternal(int32_t delta_x, int32_t delta_y,
   // This is a relative state for one sample, not a FIFO. Replacing the pending
   // value avoids a huge cursor jump if a loading screen temporarily stops
   // polling the DirectInput mouse.
+  if (delta_x != 0 || delta_y != 0) {
+    g_last_controller_cursor_activity_ms.store(GetTickCount64(),
+                                                std::memory_order_release);
+  }
   g_xinput_mouse_delta_x.store(delta_x, std::memory_order_release);
   g_xinput_mouse_delta_y.store(delta_y, std::memory_order_release);
   g_xinput_mouse_buttons.store(

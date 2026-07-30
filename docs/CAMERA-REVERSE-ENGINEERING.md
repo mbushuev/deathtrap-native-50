@@ -172,6 +172,13 @@ motion observed before the interaction from causing a false takeover. The
 modern orbit remains the sole normal gameplay owner and resumes its preserved
 orientation after the reveal.
 
+Version `0.0.63` records that `controller+0x1DC..+0x1E4` contains both world
+collision and normal angular damping. Radius feedback is therefore ignored
+while orbit input is changing the ray and accepted only from a stable,
+confirmed ray, with a small inward safety margin. Logs also showed that the
+script owner may appear after a pre-reveal pause; an interaction now arms that
+delayed owner and the retail camera is retained until its verified release.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

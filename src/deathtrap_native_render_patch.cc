@@ -421,6 +421,7 @@ struct ThirdPersonOrbitState {
   uint32_t collision_confirmation_ticks = 0;
   uint32_t collision_clear_ticks = 0;
   bool motion_active_this_tick = false;
+  bool orbit_input_active_this_tick = false;
   uint64_t last_input_sequence = 0;
   uint64_t last_input_time_ms = 0;
   uint64_t applications = 0;
@@ -450,6 +451,8 @@ struct RetailCameraArbitrationState {
   double stationary_native_motion = 0.0;
   uint32_t moving_ticks = 0;
   uint32_t settled_ticks = 0;
+  uint32_t owner_release_ticks = 0;
+  bool owner_seen_during_takeover = false;
   uint64_t takeover_started_ms = 0;
   uint64_t cooldown_until_ms = 0;
 };
@@ -1397,22 +1400,39 @@ bool EvaluateRetailCameraTakeover(
   const uint64_t now_ms = GetTickCount64();
   const uint64_t last_interaction_ms =
       g_last_controller_interaction_ms.load(std::memory_order_acquire);
-  const bool recent_interaction = last_interaction_ms &&
-      now_ms - last_interaction_ms <= 2500u;
+  const uint64_t interaction_age_ms =
+      last_interaction_ms && now_ms >= last_interaction_ms
+          ? now_ms - last_interaction_ms
+          : std::numeric_limits<uint64_t>::max();
+  const bool recent_interaction = interaction_age_ms <= 6000u;
   if (state.takeover_latched) {
+    state.owner_seen_during_takeover =
+        state.owner_seen_during_takeover || owner != 0;
+    state.owner_release_ticks =
+        state.owner_seen_during_takeover && owner == 0
+            ? state.owner_release_ticks + 1u
+            : 0u;
     state.moving_ticks = player_motion > 32.0 ? state.moving_ticks + 1u : 0u;
     state.settled_ticks = native_motion < 8.0 ? state.settled_ticks + 1u : 0u;
     const uint64_t takeover_age_ms = now_ms - state.takeover_started_ms;
-    if (takeover_age_ms >= 1000u &&
-        (player_motion > 120.0 || state.moving_ticks >= 2u)) {
-      ClearRetailCameraTakeover("player_resumed", true);
+    // A lever sequence may pause for one or two seconds before the authored
+    // camera owner is installed.  Runtime 0.0.62 released the native camera
+    // during that pause, then resumed the orbit just as the actual reveal
+    // began.  Once an owner has been observed, its release is authoritative.
+    if (state.owner_seen_during_takeover && takeover_age_ms >= 700u &&
+        state.owner_release_ticks >= 6u) {
+      ClearRetailCameraTakeover("script_owner_released", true);
       return false;
     }
-    if (state.settled_ticks >= 24u && takeover_age_ms > 1400u) {
-      ClearRetailCameraTakeover("native_shot_settled", true);
+    // Owner-less reveals are retained for a bounded quiet tail.  Do not use
+    // player motion as an early-out: several switches restore player control
+    // before their final camera endpoint has been published.
+    if (!state.owner_seen_during_takeover && takeover_age_ms >= 2600u &&
+        state.settled_ticks >= 24u) {
+      ClearRetailCameraTakeover("ownerless_shot_settled", true);
       return false;
     }
-    if (now_ms - state.takeover_started_ms > 10000u) {
+    if (takeover_age_ms > 9000u) {
       ClearRetailCameraTakeover("timeout", true);
       return false;
     }
@@ -1427,16 +1447,26 @@ bool EvaluateRetailCameraTakeover(
     // explicit interaction while Lara is stationary.  The owner bit is not
     // an arbitration signal: runtime 0.0.59 proved that ordinary room/fixed
     // camera zones set it too, causing apparently random camera takeovers.
+    // Inside the explicit interaction window the verified active owner is a
+    // safe immediate signal.  Outside that window it remains ambiguous and
+    // cannot steal the modern camera (ordinary room cameras set it too).
+    const bool owner_reveal =
+        player_stationary && recent_interaction && owner != 0;
     const bool snap_reveal =
-        player_stationary && recent_interaction && native_motion >= 72.0;
+        player_stationary && recent_interaction &&
+        interaction_age_ms >= 250u && native_motion >= 96.0;
     const bool travelling_reveal =
         player_stationary &&
-        recent_interaction && state.stationary_native_motion >= 120.0;
+        recent_interaction && interaction_age_ms >= 250u &&
+        state.stationary_native_motion >= 240.0;
     if (now_ms >= state.cooldown_until_ms &&
-        (snap_reveal || travelling_reveal)) {
+        (owner_reveal || snap_reveal || travelling_reveal)) {
       state.takeover_latched = true;
       state.takeover_started_ms = now_ms;
       state.moving_ticks = 0;
+      state.settled_ticks = 0;
+      state.owner_release_ticks = 0;
+      state.owner_seen_during_takeover = owner != 0;
       AppendNativeLog(
           "camera_script takeover=ON owner=%08llX player_motion=%.1f "
           "native_motion=%.1f accumulated=%.1f",
@@ -1642,7 +1672,7 @@ bool BuildThirdPersonOrbitPosition(void* controller,
   // the native 50 Hz snapshot interpolation provides the visible smoothness.
   if (mouse_moved) {
     const double horizontal_sign = g_third_person_orbit_invert_x ? -1.0 : 1.0;
-    const double vertical_sign = g_third_person_orbit_invert_y ? 1.0 : -1.0;
+    const double vertical_sign = g_third_person_orbit_invert_y ? -1.0 : 1.0;
     g_third_person_orbit_state.yaw +=
         static_cast<double>(mouse_delta_x) * horizontal_sign *
         g_third_person_mouse_horizontal_radians;
@@ -1663,6 +1693,8 @@ bool BuildThirdPersonOrbitPosition(void* controller,
       player, g_third_person_orbit_state.previous_player);
   g_third_person_orbit_state.motion_active_this_tick =
       player_motion > 8.0 || stick_moved || mouse_moved;
+  g_third_person_orbit_state.orbit_input_active_this_tick =
+      stick_moved || mouse_moved;
   // Probe outward only while the player or orbit is actually moving and only
   // after several unobstructed native samples.  The old unconditional +42
   // probe fought the resolver even when standing still, producing a permanent
@@ -1740,6 +1772,17 @@ void UpdateThirdPersonCollisionRadius(void* controller) {
     return;
   }
 
+  // The native resolver also damps angular camera travel.  While the user is
+  // rotating the orbit, its lagging point lies on a similar ray and used to
+  // be misclassified as a wall hit, collapsing the arm from 1400 to 200-400
+  // units.  The resolved point is already used for the current frame, so
+  // defer persistent-radius feedback until the orbit direction is stable.
+  if (g_third_person_orbit_state.orbit_input_active_this_tick) {
+    g_third_person_orbit_state.collision_confirmation_ticks = 0;
+    g_third_person_orbit_state.collision_clear_ticks = 0;
+    return;
+  }
+
   const double direction_dot =
       (requested_x * resolved_x + requested_y * resolved_y +
        requested_z * resolved_z) /
@@ -1774,9 +1817,10 @@ void UpdateThirdPersonCollisionRadius(void* controller) {
   // roughly 1700 to 230 and back while merely rotating. Contract quickly but
   // continuously; outward recovery remains damped in the builder above.
   const double previous_radius = g_third_person_orbit_state.collision_radius;
+  constexpr double kCollisionSurfaceMargin = 72.0;
   g_third_person_orbit_state.collision_radius = std::max(
-      resolved_distance,
-      g_third_person_orbit_state.collision_radius - 180.0);
+      180.0, std::max(resolved_distance - kCollisionSurfaceMargin,
+                      g_third_person_orbit_state.collision_radius - 180.0));
   if (g_debug_log && previous_radius -
                          g_third_person_orbit_state.collision_radius > 1.0) {
     AppendNativeLog(
@@ -3014,6 +3058,28 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
   g_previous_xinput_buttons = buttons;
 }
 
+bool RecentMode3CameraCallback() {
+  const uint64_t last_mode3_ms =
+      g_last_mode3_source_tick_ms.load(std::memory_order_acquire);
+  const uint64_t now_ms = GetTickCount64();
+  return last_mode3_ms && now_ms >= last_mode3_ms &&
+         now_ms - last_mode3_ms <= 200u;
+}
+
+void ReconcileXInputFrontendOwnership(bool native_gameplay) {
+  // Pause/front-end screens retain the live player pointer, so the presence
+  // of a recent mode-3 gameplay camera callback is the authoritative owner.
+  // This also repairs transitions made with a physical mouse: no XInput
+  // Start edge is required to return the right stick to cursor duty.
+  const bool menu_mode = !native_gameplay || !RecentMode3CameraCallback();
+  const bool previous =
+      g_xinput_menu_mode.exchange(menu_mode, std::memory_order_acq_rel);
+  if (previous != menu_mode && g_debug_log) {
+    AppendNativeLog("xinput frontend owner=%s source=camera_watchdog",
+                    menu_mode ? "MENU" : "GAMEPLAY");
+  }
+}
+
 void UpdateDeathtrapXInput() {
   if (!g_xinput_enabled || !LoadXInputRuntime()) {
     return;
@@ -3043,12 +3109,7 @@ void UpdateDeathtrapXInput() {
   const bool native_gameplay = DeathtrapGameplayReady(false);
   const WORD newly_pressed =
       state.Gamepad.wButtons & ~g_previous_xinput_buttons;
-  if (!native_gameplay) {
-    g_xinput_menu_mode.store(true, std::memory_order_release);
-  } else if (!g_xinput_previous_native_gameplay) {
-    // Loading/main-menu -> gameplay is an unambiguous automatic transition.
-    g_xinput_menu_mode.store(false, std::memory_order_release);
-  }
+  ReconcileXInputFrontendOwnership(native_gameplay);
   if (native_gameplay && (newly_pressed & XINPUT_GAMEPAD_START)) {
     // The pause/options menus retain the live player pointer, so the native
     // gameplay test alone cannot identify them. Start is the authoritative
@@ -3096,11 +3157,9 @@ void PollFrontendXInputInternal() {
   }
 
   const bool native_gameplay = DeathtrapGameplayReady(false);
-  bool menu_mode = g_xinput_menu_mode.load(std::memory_order_acquire);
-  if (!native_gameplay) {
-    menu_mode = true;
-    g_xinput_menu_mode.store(true, std::memory_order_release);
-  }
+  ReconcileXInputFrontendOwnership(native_gameplay);
+  const bool menu_mode =
+      g_xinput_menu_mode.load(std::memory_order_acquire);
   if (native_gameplay && !menu_mode) {
     return;
   }
@@ -6745,7 +6804,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.62 camera ownership fixes: "
+      "Deathtrap native render overlay 0.0.63 camera collision and reveal fixes: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
