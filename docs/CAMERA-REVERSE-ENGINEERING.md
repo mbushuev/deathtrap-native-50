@@ -179,16 +179,16 @@ confirmed ray, with a small inward safety margin. Logs also showed that the
 script owner may appear after a pre-reveal pause; an interaction now arms that
 delayed owner and the retail camera is retained until its verified release.
 
-Runtime `0.0.65` traces exposed the remaining pull-in staircase: the resolved
-distance progressed through sequences such as `1400 -> 1169 -> 944 -> 746 ->
-553 -> 363 -> 180`. Static analysis located the cause below `0x2DEF0`.
-`0x2E800` produces the collision-resolved endpoint, after which `0x2E950`
-limits movement relative to `controller+0x1F4` to `0x6E` world units per
-source tick. Version `0.0.66` captures the endpoint on return from `0x2E800`
-and bypasses that final limiter only when the endpoint is a finite, aligned
-inward contraction of the custom spring-arm ray. It does not replace the
-native collision query, and the existing contact manifold still governs
-outward release.
+Runtime `0.0.65` traces exposed a pull-in staircase through the mode-3 shaping
+path. Later static analysis corrected the initial interpretation: `0x2E800`
+is angular/vector offset shaping, not the authoritative collision result, and
+`0x2E950` applies another bounded position-history stage. The actual retail
+camera visibility predicate is `0x2F6D0`: it resolves the sectors of
+`controller+0x1F4` and the live focus at `controller+0x264`, then calls
+`0x30910`. That function sends a centre trace plus six offset traces through
+the room/portal traversal at `0x4E760`. Version `0.0.75` therefore removes the
+`0x2E800` return hook and invokes the verified predicate read-only for the
+complete desired spring arm.
 
 The room traversal does not include every visible model. Static analysis of
 the scene-cache update at `0x3AC00` shows that nodes with a render-resource
@@ -253,6 +253,24 @@ merely because the player translated. Exact mesh contacts still pull in
 immediately. Native-only endpoints no longer bypass the retail limiter on one
 sample: the pre-damping value is retained for analysis and must pass the
 existing multi-tick stable-surface confirmation first.
+
+Version `0.0.75` replaces the accumulated endpoint/anchor heuristics with a
+conventional pivot-to-endpoint spring arm. The pivot is the engine-maintained
+camera focus at `controller+0x264` (previous focus at `+0x258`, delta at
+`+0x270`), not the actor's ground/root coordinate. Every source tick queries
+the full desired arm. Native room geometry is clipped by the verified
+`0x2F6D0`/`0x30910` volume predicate; stable visible props are then clipped by
+the existing swept render-mesh sphere. Pull-in is immediate, while release is
+bounded and begins only after two complete clear samples. No query extends
+past the desired camera endpoint and no historical endpoint owns collision.
+
+The render-mesh sweep also distinguishes penetration from depenetration. If
+its sphere initially overlaps a triangle, a short forward closest-point probe
+blocks only motion deeper into that convex surface. Motion away from or
+tangential to it is allowed, so an edge/capsule exit cannot become a one-way
+trap that pins the camera inside a lever block. The pure spring-arm state and
+this overlap-direction rule have standalone tests in
+`camera_spring_arm_test`.
 
 ## Diagnostic run protocol
 

@@ -305,16 +305,12 @@ actually transition after that press. Merely pressing E can no longer hand
 the camera to an unrelated room camera, and one interaction cannot retrigger
 after its reveal completes.
 
-Version `0.0.66` moves inward collision ownership to the verified pre-damping
-endpoint produced by `Dungeon.dll+0x2E800`. The retail finalizer at `0x2E950`
-normally applies a `0x6E`-unit-per-tick movement limit after the native
-history and collision passes; that final limiter caused the camera to enter
-stairs and props, then walk outward in visible steps. During the custom orbit request only, an
-aligned inward collision makes the native resolved endpoint the finalizer's
-baseline immediately. Free orbit, outward recovery, scripted reveals and all
-non-camera calls retain the original damping. The v0.0.65 contact manifold is
-kept unchanged after the pull-in, so a resolved contact remains stable instead
-of cycling back into the object.
+Version `0.0.66` initially treated `Dungeon.dll+0x2E800` as a pre-damping
+collision endpoint. Subsequent disassembly disproved that interpretation:
+`0x2E800` shapes angular/vector offsets, while the authoritative retail camera
+visibility predicate is the `0x2F6D0` call to the seven-trace volume test at
+`0x30910`. The obsolete return hook is removed in `0.0.75`; non-camera calls
+and all retail shaping remain untouched.
 
 Version `0.0.67` closes a separate hole in the game's data: some visible
 switch housings, stairs and props are render objects but are absent from the
@@ -392,6 +388,18 @@ overlap endpoint is also excluded from the last-safe cache. In addition, an
 exact render-mesh contact survives up to two missing adjacent snapshots before
 outward recovery begins. This removes the measured `96 -> 144 -> 96` release
 cycle without delaying a real release after the spring-arm direction changes.
+
+Version `0.0.75` re-bases collision on the verified engine focus at
+`controller+0x264` and tests the complete desired arm on every unique source
+tick. The native seven-trace room/portal predicate supplies world clipping;
+the render-mesh sweep supplies only missing static prop geometry. The arm
+contracts immediately to the nearest hard result and returns by a bounded
+step after two clear samples. It never pre-extends before a query, never probes
+beyond the desired endpoint, and never reuses a historical world-space camera
+point. Initial render-mesh overlap is direction-aware: inward motion blocks,
+while outward or tangential motion is allowed to depenetrate instead of being
+trapped by the capsule exit. These state transitions are covered by the
+standalone `camera_spring_arm_test` target.
 
 ### Phase C: spring-arm collision
 

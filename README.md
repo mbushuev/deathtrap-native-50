@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.73`.
+Current development version: `0.0.75`.
 
 The `modern-third-person-camera` branch contains the first opt-in native orbit
 prototype. It takes ownership at the mode-3 dispatcher before the retail
@@ -124,12 +124,13 @@ D3D11 settings, first-run verification and troubleshooting.
 - The native orbit camera engages as soon as gameplay becomes valid, whether
   input comes from a mouse, controller, or no controller at all. Inventory
   selection suppresses look input without replacing or resetting the rig.
-  The native collision resolver supplies spring-arm contraction; obstruction
-  pulls the camera in immediately and clear space releases it gradually only
-  while the player or camera is moving. A second read-only sweep uses stable
-  per-object render bounds for props such as lever blocks and stairs that are
-  absent from the room collision BSP. At rest the collision radius is held,
-  preventing the old extend/contract tremor.
+  The verified native seven-trace room query supplies world clipping;
+  obstruction pulls the camera in immediately and two complete clear samples
+  begin a bounded spring return. A second read-only swept-volume query uses
+  stable per-object render meshes for props such as lever blocks and stairs
+  that are absent from the room collision BSP. Every source tick tests the
+  complete pivot-to-desired segment, so a contracted arm is never extended
+  before collision is known.
   Configure it in
   `[Camera]`; set `ThirdPersonOrbit=0` for exact retail camera behavior.
   Mode-3 input and spring-arm state advance exactly once per unique engine

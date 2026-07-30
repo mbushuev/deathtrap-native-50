@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(deathtrap_native50_overlay VERSION 0.0.73 LANGUAGES C CXX)
+project(deathtrap_native50_overlay VERSION 0.0.75 LANGUAGES C CXX)
 
 if(NOT WIN32 OR NOT MSVC)
   message(FATAL_ERROR "Deathtrap Native 50 requires 32-bit Windows and MSVC")
@@ -59,3 +59,10 @@ target_compile_definitions(dinput_proxy_smoke_test PRIVATE
 target_compile_options(dinput_proxy_smoke_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
 target_link_libraries(dinput_proxy_smoke_test PRIVATE dxguid)
+
+add_executable(camera_spring_arm_test
+  tools/camera_spring_arm_test.cc)
+target_compile_features(camera_spring_arm_test PRIVATE cxx_std_17)
+target_include_directories(camera_spring_arm_test PRIVATE src)
+target_compile_options(camera_spring_arm_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
