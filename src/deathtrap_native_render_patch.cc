@@ -2064,52 +2064,252 @@ const CameraCollisionMesh* ResolveCameraCollisionMesh(uintptr_t handle) {
   return inserted.first->second.parsed ? &inserted.first->second : nullptr;
 }
 
-bool CameraRayTriangleDistance(const Vec3& origin, const Vec3& direction,
-                               const Vec3& a, const Vec3& b, const Vec3& c,
-                               double maximum_distance, double* distance) {
-  const Vec3 edge1{b.x - a.x, b.y - a.y, b.z - a.z};
-  const Vec3 edge2{c.x - a.x, c.y - a.y, c.z - a.z};
-  const Vec3 p{direction.y * edge2.z - direction.z * edge2.y,
-               direction.z * edge2.x - direction.x * edge2.z,
-               direction.x * edge2.y - direction.y * edge2.x};
-  const double determinant =
-      edge1.x * p.x + edge1.y * p.y + edge1.z * p.z;
-  if (!std::isfinite(determinant) || std::abs(determinant) < 1.0e-8) {
+double CameraVectorDot(const Vec3& a, const Vec3& b) {
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+Vec3 CameraVectorSubtract(const Vec3& a, const Vec3& b) {
+  return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+
+Vec3 CameraVectorAdd(const Vec3& a, const Vec3& b) {
+  return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
+Vec3 CameraVectorScale(const Vec3& value, double scale) {
+  return {value.x * scale, value.y * scale, value.z * scale};
+}
+
+Vec3 CameraVectorCross(const Vec3& a, const Vec3& b) {
+  return {a.y * b.z - a.z * b.y,
+          a.z * b.x - a.x * b.z,
+          a.x * b.y - a.y * b.x};
+}
+
+double CameraPointTriangleDistanceSquared(const Vec3& point, const Vec3& a,
+                                          const Vec3& b, const Vec3& c) {
+  // Closest-point regions from Real-Time Collision Detection. This catches a
+  // sphere that begins a source tick already touching an edge or vertex, so
+  // it cannot tunnel merely because the face plane lies behind the start.
+  const Vec3 ab = CameraVectorSubtract(b, a);
+  const Vec3 ac = CameraVectorSubtract(c, a);
+  const Vec3 ap = CameraVectorSubtract(point, a);
+  const double d1 = CameraVectorDot(ab, ap);
+  const double d2 = CameraVectorDot(ac, ap);
+  if (d1 <= 0.0 && d2 <= 0.0) {
+    return CameraVectorDot(ap, ap);
+  }
+  const Vec3 bp = CameraVectorSubtract(point, b);
+  const double d3 = CameraVectorDot(ab, bp);
+  const double d4 = CameraVectorDot(ac, bp);
+  if (d3 >= 0.0 && d4 <= d3) {
+    return CameraVectorDot(bp, bp);
+  }
+  const double vc = d1 * d4 - d3 * d2;
+  if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+    const double v = d1 / (d1 - d3);
+    const Vec3 delta = CameraVectorSubtract(
+        point, CameraVectorAdd(a, CameraVectorScale(ab, v)));
+    return CameraVectorDot(delta, delta);
+  }
+  const Vec3 cp = CameraVectorSubtract(point, c);
+  const double d5 = CameraVectorDot(ab, cp);
+  const double d6 = CameraVectorDot(ac, cp);
+  if (d6 >= 0.0 && d5 <= d6) {
+    return CameraVectorDot(cp, cp);
+  }
+  const double vb = d5 * d2 - d1 * d6;
+  if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+    const double w = d2 / (d2 - d6);
+    const Vec3 delta = CameraVectorSubtract(
+        point, CameraVectorAdd(a, CameraVectorScale(ac, w)));
+    return CameraVectorDot(delta, delta);
+  }
+  const double va = d3 * d6 - d5 * d4;
+  if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) {
+    const Vec3 bc = CameraVectorSubtract(c, b);
+    const double w = (d4 - d3) /
+        ((d4 - d3) + (d5 - d6));
+    const Vec3 delta = CameraVectorSubtract(
+        point, CameraVectorAdd(b, CameraVectorScale(bc, w)));
+    return CameraVectorDot(delta, delta);
+  }
+  const double denominator = va + vb + vc;
+  if (std::abs(denominator) < 1.0e-12) {
+    return std::min({CameraVectorDot(ap, ap), CameraVectorDot(bp, bp),
+                     CameraVectorDot(cp, cp)});
+  }
+  const double inverse = 1.0 / denominator;
+  const double v = vb * inverse;
+  const double w = vc * inverse;
+  const Vec3 closest = CameraVectorAdd(
+      a, CameraVectorAdd(CameraVectorScale(ab, v),
+                         CameraVectorScale(ac, w)));
+  const Vec3 delta = CameraVectorSubtract(point, closest);
+  return CameraVectorDot(delta, delta);
+}
+
+bool CameraPointInsideTriangle(const Vec3& point, const Vec3& a,
+                               const Vec3& b, const Vec3& c,
+                               const Vec3& normal) {
+  constexpr double epsilon = 1.0e-5;
+  const Vec3 ab = CameraVectorSubtract(b, a);
+  const Vec3 bc = CameraVectorSubtract(c, b);
+  const Vec3 ca = CameraVectorSubtract(a, c);
+  const double side0 = CameraVectorDot(
+      CameraVectorCross(ab, CameraVectorSubtract(point, a)), normal);
+  const double side1 = CameraVectorDot(
+      CameraVectorCross(bc, CameraVectorSubtract(point, b)), normal);
+  const double side2 = CameraVectorDot(
+      CameraVectorCross(ca, CameraVectorSubtract(point, c)), normal);
+  return (side0 >= -epsilon && side1 >= -epsilon && side2 >= -epsilon) ||
+         (side0 <= epsilon && side1 <= epsilon && side2 <= epsilon);
+}
+
+bool CameraRaySphereDistance(const Vec3& origin, const Vec3& direction,
+                             const Vec3& center, double radius,
+                             double minimum_distance, double maximum_distance,
+                             double* distance) {
+  const Vec3 offset = CameraVectorSubtract(origin, center);
+  const double b = CameraVectorDot(offset, direction);
+  const double c = CameraVectorDot(offset, offset) - radius * radius;
+  const double discriminant = b * b - c;
+  if (discriminant < 0.0) {
     return false;
   }
-  const double inverse_determinant = 1.0 / determinant;
-  const Vec3 from_a{origin.x - a.x, origin.y - a.y, origin.z - a.z};
-  const double u =
-      (from_a.x * p.x + from_a.y * p.y + from_a.z * p.z) *
-      inverse_determinant;
-  if (u < -1.0e-6 || u > 1.0 + 1.0e-6) {
-    return false;
+  const double root = std::sqrt(std::max(0.0, discriminant));
+  double candidate = -b - root;
+  if (candidate < minimum_distance) {
+    candidate = -b + root;
   }
-  const Vec3 q{from_a.y * edge1.z - from_a.z * edge1.y,
-               from_a.z * edge1.x - from_a.x * edge1.z,
-               from_a.x * edge1.y - from_a.y * edge1.x};
-  const double v =
-      (direction.x * q.x + direction.y * q.y + direction.z * q.z) *
-      inverse_determinant;
-  if (v < -1.0e-6 || u + v > 1.0 + 1.0e-6) {
-    return false;
-  }
-  const double hit =
-      (edge2.x * q.x + edge2.y * q.y + edge2.z * q.z) *
-      inverse_determinant;
-  if (!std::isfinite(hit) || hit <= 0.0 || hit >= maximum_distance) {
+  if (!std::isfinite(candidate) || candidate < minimum_distance ||
+      candidate >= maximum_distance) {
     return false;
   }
   if (distance) {
-    *distance = hit;
+    *distance = candidate;
   }
   return true;
 }
 
-bool CameraMeshRayDistance(const CameraCollisionMesh& mesh,
-                           const Matrix3x4& world, const Vec3& origin,
-                           const Vec3& direction, double maximum_distance,
-                           double* nearest_distance) {
+bool CameraRayCapsuleDistance(const Vec3& origin, const Vec3& direction,
+                              const Vec3& a, const Vec3& b, double radius,
+                              double minimum_distance,
+                              double maximum_distance, double* distance) {
+  const Vec3 segment = CameraVectorSubtract(b, a);
+  const Vec3 offset = CameraVectorSubtract(origin, a);
+  const double segment_squared = CameraVectorDot(segment, segment);
+  if (segment_squared < 1.0e-8) {
+    return CameraRaySphereDistance(origin, direction, a, radius,
+                                   minimum_distance, maximum_distance,
+                                   distance);
+  }
+  const double segment_ray = CameraVectorDot(segment, direction);
+  const double segment_offset = CameraVectorDot(segment, offset);
+  const double ray_offset = CameraVectorDot(direction, offset);
+  const double offset_squared = CameraVectorDot(offset, offset);
+  const double qa = segment_squared - segment_ray * segment_ray;
+  const double qb = segment_squared * ray_offset -
+                    segment_offset * segment_ray;
+  const double qc = segment_squared * offset_squared -
+                    segment_offset * segment_offset -
+                    radius * radius * segment_squared;
+  double nearest = maximum_distance;
+  bool hit = false;
+  if (std::abs(qa) > 1.0e-8) {
+    const double discriminant = qb * qb - qa * qc;
+    if (discriminant >= 0.0) {
+      const double candidate = (-qb - std::sqrt(discriminant)) / qa;
+      const double segment_position = segment_offset +
+                                      candidate * segment_ray;
+      if (candidate >= minimum_distance && candidate < nearest &&
+          segment_position > 0.0 && segment_position < segment_squared) {
+        nearest = candidate;
+        hit = true;
+      }
+    }
+  }
+  double endpoint = nearest;
+  if (CameraRaySphereDistance(origin, direction, a, radius,
+                              minimum_distance, nearest, &endpoint)) {
+    nearest = endpoint;
+    hit = true;
+  }
+  endpoint = nearest;
+  if (CameraRaySphereDistance(origin, direction, b, radius,
+                              minimum_distance, nearest, &endpoint)) {
+    nearest = endpoint;
+    hit = true;
+  }
+  if (hit && distance) {
+    *distance = nearest;
+  }
+  return hit;
+}
+
+bool CameraSweptSphereTriangleDistance(
+    const Vec3& origin, const Vec3& direction, const Vec3& a, const Vec3& b,
+    const Vec3& c, double radius, double minimum_distance,
+    double maximum_distance, double* distance) {
+  double nearest = maximum_distance;
+  bool hit = false;
+  const Vec3 start = CameraVectorAdd(
+      origin, CameraVectorScale(direction, minimum_distance));
+  if (CameraPointTriangleDistanceSquared(start, a, b, c) <=
+      radius * radius) {
+    nearest = minimum_distance;
+    hit = true;
+  }
+
+  Vec3 normal = CameraVectorCross(CameraVectorSubtract(b, a),
+                                  CameraVectorSubtract(c, a));
+  const double normal_length = std::sqrt(CameraVectorDot(normal, normal));
+  if (normal_length > 1.0e-8) {
+    normal = CameraVectorScale(normal, 1.0 / normal_length);
+    const double origin_plane = CameraVectorDot(
+        CameraVectorSubtract(origin, a), normal);
+    const double ray_plane = CameraVectorDot(direction, normal);
+    if (std::abs(ray_plane) > 1.0e-8) {
+      for (double target_plane : {radius, -radius}) {
+        const double candidate =
+            (target_plane - origin_plane) / ray_plane;
+        if (candidate < minimum_distance || candidate >= nearest) {
+          continue;
+        }
+        const Vec3 center = CameraVectorAdd(
+            origin, CameraVectorScale(direction, candidate));
+        const Vec3 contact = CameraVectorSubtract(
+            center, CameraVectorScale(normal, target_plane));
+        if (CameraPointInsideTriangle(contact, a, b, c, normal)) {
+          nearest = candidate;
+          hit = true;
+        }
+      }
+    }
+  }
+
+  for (const auto& edge :
+       {std::pair<Vec3, Vec3>{a, b}, {b, c}, {c, a}}) {
+    double candidate = nearest;
+    if (CameraRayCapsuleDistance(origin, direction, edge.first, edge.second,
+                                 radius, minimum_distance, nearest,
+                                 &candidate)) {
+      nearest = candidate;
+      hit = true;
+    }
+  }
+  if (hit && distance) {
+    *distance = nearest;
+  }
+  return hit;
+}
+
+bool CameraMeshSweepDistance(const CameraCollisionMesh& mesh,
+                             const Matrix3x4& world, const Vec3& origin,
+                             const Vec3& direction, double radius,
+                             double minimum_distance,
+                             double maximum_distance,
+                             double* nearest_distance) {
   bool hit = false;
   double nearest = maximum_distance;
   for (const CameraMeshTriangle& triangle : mesh.triangles) {
@@ -2117,8 +2317,9 @@ bool CameraMeshRayDistance(const CameraCollisionMesh& mesh,
     const Vec3 b = CameraMeshPointToWorld(world, triangle.b);
     const Vec3 c = CameraMeshPointToWorld(world, triangle.c);
     double candidate = nearest;
-    if (CameraRayTriangleDistance(origin, direction, a, b, c, nearest,
-                                  &candidate)) {
+    if (CameraSweptSphereTriangleDistance(
+            origin, direction, a, b, c, radius, minimum_distance, nearest,
+            &candidate)) {
       nearest = candidate;
       hit = true;
     }
@@ -2166,8 +2367,15 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   // rejected by the old 900-unit cap.
   constexpr double kMinimumObjectRadius = 24.0;
   constexpr double kMaximumObjectRadius = 6000.0;
-  constexpr double kBroadPhaseInflation = 112.0;
-  constexpr double kSurfaceClearance = 112.0;
+  // The camera is a volume, not a point. A 96-unit sphere is close to the
+  // clearance already proven safe for the retail room resolver, while still
+  // fitting through the supported build's narrow corridors. The final
+  // backoff is deliberately small because the swept sphere already includes
+  // the physical clearance; subtracting the old point-ray margin again made
+  // the arm jump unnecessarily far inward.
+  constexpr double kCameraSphereRadius = 96.0;
+  constexpr double kContactBackoff = 8.0;
+  constexpr double kBroadPhaseInflation = kCameraSphereRadius;
   constexpr double kBoundsMotionTolerance = 16.0;
   constexpr double kRadiusMotionTolerance = 8.0;
   constexpr double kMinimumCameraDistance = 180.0;
@@ -2254,14 +2462,14 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
       continue;
     }
     double surface_distance = nearest_surface_distance;
-    if (!CameraMeshRayDistance(*mesh, current.world, origin, ray_direction,
-                               nearest_surface_distance,
-                               &surface_distance) ||
-        surface_distance <= kMinimumCameraDistance) {
+    if (!CameraMeshSweepDistance(
+            *mesh, current.world, origin, ray_direction,
+            kCameraSphereRadius, kMinimumCameraDistance,
+            nearest_surface_distance, &surface_distance)) {
       continue;
     }
     const double safe_distance = std::max(
-        kMinimumCameraDistance, surface_distance - kSurfaceClearance);
+        kMinimumCameraDistance, surface_distance - kContactBackoff);
     if (safe_distance >= nearest_distance) {
       continue;
     }
@@ -2286,13 +2494,13 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   if (g_debug_log) {
     AppendNativeLog(
         "camera_mesh_sweep node=%08llX resource=%llu triangles=%llu "
-        "object_radius=%.1f surface=%.1f camera_radius=%.1f "
+        "object_radius=%.1f contact=%.1f sphere=%.1f camera_radius=%.1f "
         "requested=%.1f",
         static_cast<unsigned long long>(nearest_node),
         static_cast<unsigned long long>(nearest_resource),
         static_cast<unsigned long long>(nearest_triangle_count),
         nearest_object_radius, nearest_surface_distance,
-        nearest_distance, requested_distance);
+        kCameraSphereRadius, nearest_distance, requested_distance);
   }
   ++g_camera_mesh_sweeps;
   return true;
@@ -7616,7 +7824,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.69 render-mesh collision spring arm: "
+      "Deathtrap native render overlay 0.0.70 swept-sphere render-mesh spring arm: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "

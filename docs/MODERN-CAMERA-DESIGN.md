@@ -351,6 +351,16 @@ near plane outside the mesh. Consequently, a lever housing, stair block or
 other visible prop no longer needs a gameplay/BSP collision flag to block the
 camera, while the empty space inside a coarse sphere remains traversable.
 
+Version `0.0.70` gives the camera itself a physical volume. The `0.0.69`
+centre ray could change the selected face abruptly or pass exactly beside a
+triangle edge, producing both running jitter and occasional penetration of a
+visible prop. The new narrow phase sweeps a 96-world-unit sphere across every
+candidate triangle's face, edges and vertices and performs a closest-point
+overlap test at the start of the usable arm. Because the radius already
+contains the required surface clearance, only a small numerical backoff is
+applied to the accepted centre distance. The original native BSP resolver,
+immediate inward contraction and damped outward recovery remain unchanged.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

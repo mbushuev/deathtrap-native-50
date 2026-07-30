@@ -229,6 +229,19 @@ lever blocks and decorative meshes that are rendered but never registered as
 retail camera obstacles. Diagnostics expose resource parsing as
 `camera_mesh_cache` and accepted contacts as `camera_mesh_sweep`.
 
+Runtime traces from `0.0.69` showed why an exact centre ray is still not a
+camera collision volume. On the same static resource the nearest hit jumped
+between faces (for example, 623, 393, 488 and 669 world units), and the ray
+temporarily missed the mesh when it crossed a triangle edge even though the
+camera near volume already overlapped the prop. Version `0.0.70` replaces the
+final point-ray query with an exact swept sphere against the cached render
+mesh. Each triangle is tested as the union of its offset face slab, three edge
+capsules and three vertex spheres; the initial sphere is also checked against
+the triangle closest point. The broad-phase sphere remains only a rejection
+test. This supplies continuous contact across polygon boundaries and prevents
+edge tunnelling without treating the empty part of an object's bounding
+sphere as solid.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
