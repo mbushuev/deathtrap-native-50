@@ -235,6 +235,23 @@ struct CameraCollisionMesh {
   std::vector<CameraMeshTriangle> triangles;
 };
 
+// Debug-only evidence for the exact render triangle selected by the
+// supplemental camera sweep.  Keeping this separate from the collision result
+// lets diagnostic builds prove which prop was hit without changing the
+// spring-arm decision.
+struct CameraMeshHitDiagnostic {
+  uintptr_t node = 0;
+  uintptr_t resource = 0;
+  size_t triangle_index = std::numeric_limits<size_t>::max();
+  Vec3 a{};
+  Vec3 b{};
+  Vec3 c{};
+  Matrix3x4 world{};
+  std::array<int32_t, 3> bounds_center{};
+  int32_t bounds_radius = 0;
+  bool valid = false;
+};
+
 struct Quaternion {
   double w = 1.0;
   double x = 0.0;
@@ -2460,14 +2477,17 @@ bool CameraMeshSweepDistance(const CameraCollisionMesh& mesh,
                              double minimum_distance,
                              double maximum_distance,
                              double* nearest_distance,
-                             bool* initial_overlap = nullptr) {
+                             bool* initial_overlap = nullptr,
+                             CameraMeshHitDiagnostic* diagnostic = nullptr) {
   if (initial_overlap) {
     *initial_overlap = false;
   }
   bool hit = false;
   bool any_initial_overlap = false;
   double nearest = maximum_distance;
-  for (const CameraMeshTriangle& triangle : mesh.triangles) {
+  for (size_t triangle_index = 0; triangle_index < mesh.triangles.size();
+       ++triangle_index) {
+    const CameraMeshTriangle& triangle = mesh.triangles[triangle_index];
     const Vec3 a = CameraMeshPointToWorld(world, triangle.a);
     const Vec3 b = CameraMeshPointToWorld(world, triangle.b);
     const Vec3 c = CameraMeshPointToWorld(world, triangle.c);
@@ -2478,6 +2498,14 @@ bool CameraMeshSweepDistance(const CameraCollisionMesh& mesh,
             &candidate, &triangle_initial_overlap)) {
       nearest = candidate;
       hit = true;
+      if (diagnostic) {
+        diagnostic->triangle_index = triangle_index;
+        diagnostic->a = a;
+        diagnostic->b = b;
+        diagnostic->c = c;
+        diagnostic->world = world;
+        diagnostic->valid = true;
+      }
       any_initial_overlap =
           any_initial_overlap || triangle_initial_overlap;
     }
@@ -2494,7 +2522,8 @@ bool CameraMeshSweepDistance(const CameraCollisionMesh& mesh,
 bool ClipThirdPersonOrbitAgainstSceneObjects(
     const std::array<int32_t, 3>& focus,
     const std::array<int32_t, 3>& requested,
-    std::array<int32_t, 3>* clipped) {
+    std::array<int32_t, 3>* clipped,
+    CameraMeshHitDiagnostic* hit_diagnostic = nullptr) {
   if (!clipped || g_previous_snapshot.nodes.empty() ||
       g_older_snapshot.nodes.empty() ||
       !g_previous_snapshot.player ||
@@ -2545,6 +2574,7 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   double nearest_object_radius = 0.0;
   size_t nearest_triangle_count = 0;
   bool nearest_initial_overlap = false;
+  CameraMeshHitDiagnostic nearest_diagnostic;
   const Vec3 origin{static_cast<double>(focus[0]),
                     static_cast<double>(focus[1]),
                     static_cast<double>(focus[2])};
@@ -2622,11 +2652,12 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     }
     double surface_distance = nearest_surface_distance;
     bool mesh_initial_overlap = false;
+    CameraMeshHitDiagnostic candidate_diagnostic;
     if (!CameraMeshSweepDistance(
             *mesh, current.world, origin, ray_direction,
             kCameraSphereRadius, kSweepStartDistance,
             nearest_surface_distance, &surface_distance,
-            &mesh_initial_overlap)) {
+            &mesh_initial_overlap, &candidate_diagnostic)) {
       continue;
     }
     // Lara and her ancestors were excluded above, so an overlap at the native
@@ -2642,6 +2673,11 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     nearest_object_radius = static_cast<double>(current.bounds_radius);
     nearest_triangle_count = mesh->triangles.size();
     nearest_initial_overlap = mesh_initial_overlap;
+    nearest_diagnostic = candidate_diagnostic;
+    nearest_diagnostic.node = node;
+    nearest_diagnostic.resource = current.render_resource_handle;
+    nearest_diagnostic.bounds_center = current.bounds_center;
+    nearest_diagnostic.bounds_radius = current.bounds_radius;
   }
 
   if (!nearest_node) {
@@ -2654,6 +2690,9 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
                       std::lround(direction[1] * nearest_distance)),
       focus[2] + static_cast<int32_t>(
                       std::lround(direction[2] * nearest_distance))};
+  if (hit_diagnostic) {
+    *hit_diagnostic = nearest_diagnostic;
+  }
   if (g_debug_log) {
     AppendNativeLog(
         "camera_mesh_sweep node=%08llX resource=%llu triangles=%llu "
@@ -2665,6 +2704,27 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
         nearest_object_radius, nearest_surface_distance,
         kCameraSphereRadius, nearest_distance, requested_distance,
         nearest_initial_overlap ? 1u : 0u);
+    if (nearest_diagnostic.valid) {
+      AppendNativeLog(
+          "camera_mesh_hit node=%08llX resource=%llu tri=%llu "
+          "world_t=%.0f/%.0f/%.0f bounds=%d/%d/%d/r%d "
+          "a=%.0f/%.0f/%.0f b=%.0f/%.0f/%.0f c=%.0f/%.0f/%.0f",
+          static_cast<unsigned long long>(nearest_diagnostic.node),
+          static_cast<unsigned long long>(nearest_diagnostic.resource),
+          static_cast<unsigned long long>(nearest_diagnostic.triangle_index),
+          static_cast<double>(nearest_diagnostic.world.values[9]),
+          static_cast<double>(nearest_diagnostic.world.values[10]),
+          static_cast<double>(nearest_diagnostic.world.values[11]),
+          nearest_diagnostic.bounds_center[0],
+          nearest_diagnostic.bounds_center[1],
+          nearest_diagnostic.bounds_center[2],
+          nearest_diagnostic.bounds_radius,
+          nearest_diagnostic.a.x, nearest_diagnostic.a.y,
+          nearest_diagnostic.a.z, nearest_diagnostic.b.x,
+          nearest_diagnostic.b.y, nearest_diagnostic.b.z,
+          nearest_diagnostic.c.x, nearest_diagnostic.c.y,
+          nearest_diagnostic.c.z);
+    }
   }
   ++g_camera_mesh_sweeps;
   return true;
@@ -2857,8 +2917,9 @@ void __cdecl HookMode3Camera(void* controller) {
       ClipThirdPersonOrbitAgainstNativeWorld(
           controller, camera_focus, orbit, &collision_target);
   std::array<int32_t, 3> mesh_target = collision_target;
+  CameraMeshHitDiagnostic mesh_hit_diagnostic;
   const bool render_mesh_contact = ClipThirdPersonOrbitAgainstSceneObjects(
-      camera_focus, collision_target, &mesh_target);
+      camera_focus, collision_target, &mesh_target, &mesh_hit_diagnostic);
   if (render_mesh_contact) {
     collision_target = mesh_target;
   }
@@ -2883,6 +2944,46 @@ void __cdecl HookMode3Camera(void* controller) {
   g_configure_camera(controller, submitted_target[0], submitted_target[1],
                      submitted_target[2],
                      room_or_sector, 1);
+  if (g_debug_log) {
+    std::array<int32_t, 3> configured_desired{};
+    std::array<int32_t, 3> configured_resolved{};
+    Matrix3x4 published{};
+    const bool desired_valid = SafeRead(
+        reinterpret_cast<const void*>(
+            base + kCameraControllerDesiredPositionOffset),
+        configured_desired.data(), sizeof(configured_desired));
+    const bool resolved_valid = SafeRead(
+        reinterpret_cast<const void*>(
+            base + kCameraControllerResolvedPositionOffset),
+        configured_resolved.data(), sizeof(configured_resolved));
+    const bool published_valid = g_dungeon_base && SafeRead(
+        g_dungeon_base + kPublishedCameraMatrixRva,
+        &published, sizeof(published));
+    static uint32_t diagnostic_sequence = 0;
+    ++diagnostic_sequence;
+    if (spring_arm_contact || (diagnostic_sequence & 15u) == 0u) {
+      AppendNativeLog(
+          "camera_pipeline focus=%d/%d/%d desired=%d/%d/%d "
+          "hard=%d/%d/%d submit=%d/%d/%d "
+          "after_desired=%d/%d/%d after_resolved=%d/%d/%d "
+          "published=%d/%d/%d valid=%u/%u/%u native=%u mesh=%u "
+          "node=%08llX resource=%llu tri=%llu",
+          camera_focus[0], camera_focus[1], camera_focus[2],
+          orbit[0], orbit[1], orbit[2],
+          collision_target[0], collision_target[1], collision_target[2],
+          submitted_target[0], submitted_target[1], submitted_target[2],
+          configured_desired[0], configured_desired[1],
+          configured_desired[2], configured_resolved[0],
+          configured_resolved[1], configured_resolved[2],
+          published.values[9], published.values[10], published.values[11],
+          desired_valid ? 1u : 0u, resolved_valid ? 1u : 0u,
+          published_valid ? 1u : 0u, native_world_contact ? 1u : 0u,
+          render_mesh_contact ? 1u : 0u,
+          static_cast<unsigned long long>(mesh_hit_diagnostic.node),
+          static_cast<unsigned long long>(mesh_hit_diagnostic.resource),
+          static_cast<unsigned long long>(mesh_hit_diagnostic.triangle_index));
+    }
+  }
 }
 
 WORD VibrationMotorValue(uint32_t percent, double channel_scale) {
@@ -7799,7 +7900,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.75 native-volume spring arm: "
+      "Deathtrap native render overlay 0.0.76 camera collision telemetry "
+      "(behaviour unchanged from 0.0.75): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
