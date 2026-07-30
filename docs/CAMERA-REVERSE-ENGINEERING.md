@@ -272,6 +272,31 @@ trap that pins the camera inside a lever block. The pure spring-arm state and
 this overlap-direction rule have standalone tests in
 `camera_spring_arm_test`.
 
+Version `0.0.76` added read-only telemetry at every stage of this path. The
+problematic lever housing is conclusively identified as scene node
+`0x060343A8`, render resource `12708` (24 triangles in that run). The swept
+sphere hits triangle 11 and computes a safe endpoint before the camera centre
+crosses its face. This rules out a missing resource, an undersized radius and
+an incorrect broad-phase classification for the reproduced black-corner case.
+
+The same trace exposed a separate temporal defect in the retail resolver. On
+first contact the hook submitted the safe endpoint `-11144/-1500/16483`, but
+the resolved and published positions remained at the previous unobstructed
+endpoint `-10126/-1687/16709` until the next source tick. Static analysis of
+`0x2DC80`/`0x2DE10` then identified the four-position smoothing history at
+controller `+0x204`: its cached average is at `+0x20C`, and four 12-byte Vec3
+samples begin at `+0x218`. This old history, rather than collision discovery,
+was the source of the one-frame penetration and the following correction
+jolt.
+
+Version `0.0.77` therefore performs a narrowly gated same-tick contraction.
+Only when an obstruction is positively detected and the retail resolved
+radius is still more than 24 units outside the clipped arm, it atomically
+updates the resolved/desired positions, the four-sample history, the live
+camera-node translation and the already-published matrix. It preserves the
+small vertical/aim correction produced by `0x2F380`. Unobstructed tracking,
+release smoothing and authored camera reveals never enter this path.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

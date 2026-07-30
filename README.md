@@ -1,7 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.76` (camera collision telemetry; behaviour
-is unchanged from 0.0.75).
+Current development version: `0.0.77` (same-tick camera collision commit).
 
 The `modern-third-person-camera` branch contains the first opt-in native orbit
 prototype. It takes ownership at the mode-3 dispatcher before the retail

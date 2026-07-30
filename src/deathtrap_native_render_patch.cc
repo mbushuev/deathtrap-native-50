@@ -84,6 +84,7 @@ constexpr size_t kCameraControllerPlayerXPointerOffset = 0xFCu;
 constexpr size_t kCameraControllerPlayerYPointerOffset = 0x100u;
 constexpr size_t kCameraControllerPlayerZPointerOffset = 0x104u;
 constexpr size_t kCameraControllerRoomPointerOffset = 0x108u;
+constexpr size_t kCameraControllerOwnerOffset = 0x19Cu;
 constexpr size_t kCameraControllerScriptOwnerOffset = 0x1B8u;
 constexpr size_t kCameraControllerDesiredPositionOffset = 0x1F4u;
 constexpr size_t kCameraControllerEndpointSectorOffset = 0x200u;
@@ -91,6 +92,15 @@ constexpr size_t kCameraControllerPreviousFocusOffset = 0x258u;
 constexpr size_t kCameraControllerFocusOffset = 0x264u;
 constexpr size_t kCameraControllerFocusDeltaOffset = 0x270u;
 constexpr size_t kCameraControllerResolvedPositionOffset = 0x1DCu;
+// Dungeon.dll+0x2DC80 initializes a four-sample position history at +0x204.
+// +0x20C is its cached average and +0x218 is the first of four Vec3 samples.
+// The retail resolver normally advances this history gradually.  A newly
+// detected close obstruction is different: keeping the old samples for one
+// more render publishes the camera inside the prop that caused the clip.
+constexpr size_t kCameraControllerPositionHistoryAverageOffset = 0x20Cu;
+constexpr size_t kCameraControllerPositionHistorySamplesOffset = 0x218u;
+constexpr size_t kCameraControllerPositionHistorySampleStride = 0x0Cu;
+constexpr size_t kCameraControllerPositionHistorySampleCount = 4u;
 constexpr size_t kCameraControllerActiveModeOffset = 0x27Cu;
 constexpr uint8_t kCameraScriptOwnerActiveMask = 0x80u;
 constexpr uintptr_t kActiveCloseCombatWeaponRva = 0x001D8A68u;
@@ -2789,6 +2799,134 @@ bool ResolveThirdPersonSpringArm(
   return true;
 }
 
+bool CommitImmediateSpringArmContraction(
+    void* controller, const std::array<int32_t, 3>& focus,
+    const std::array<int32_t, 3>& submitted, bool obstruction_present,
+    std::array<int32_t, 3>* committed_position) {
+  if (!controller || !obstruction_present) {
+    return false;
+  }
+
+  const uintptr_t base = reinterpret_cast<uintptr_t>(controller);
+  std::array<int32_t, 3> configured_desired{};
+  std::array<int32_t, 3> configured_resolved{};
+  if (!SafeRead(reinterpret_cast<const void*>(
+                    base + kCameraControllerDesiredPositionOffset),
+                configured_desired.data(), sizeof(configured_desired)) ||
+      !SafeRead(reinterpret_cast<const void*>(
+                    base + kCameraControllerResolvedPositionOffset),
+                configured_resolved.data(), sizeof(configured_resolved))) {
+    return false;
+  }
+
+  const double submitted_radius = CameraPositionDistance(focus, submitted);
+  const double desired_radius =
+      CameraPositionDistance(focus, configured_desired);
+  const double resolved_radius =
+      CameraPositionDistance(focus, configured_resolved);
+  constexpr double kResolverLagTolerance = 24.0;
+  constexpr double kConfiguredTargetTolerance = 48.0;
+  if (!std::isfinite(submitted_radius) || !std::isfinite(desired_radius) ||
+      !std::isfinite(resolved_radius) ||
+      resolved_radius <= submitted_radius + kResolverLagTolerance) {
+    return false;
+  }
+
+  // 0x2F380 may apply a small retail vertical/aim correction to the endpoint
+  // we submitted. Preserve it whenever it remains within the clipped arm;
+  // otherwise use the exact swept-sphere endpoint.
+  const std::array<int32_t, 3>& target =
+      desired_radius <= submitted_radius + kConfiguredTargetTolerance
+          ? configured_desired
+          : submitted;
+
+  bool written = SafeWrite(
+      reinterpret_cast<void*>(base +
+                              kCameraControllerResolvedPositionOffset),
+      target.data(), sizeof(target));
+  written &= SafeWrite(
+      reinterpret_cast<void*>(base +
+                              kCameraControllerDesiredPositionOffset),
+      target.data(), sizeof(target));
+  written &= SafeWrite(
+      reinterpret_cast<void*>(
+          base + kCameraControllerPositionHistoryAverageOffset),
+      target.data(), sizeof(target));
+  for (size_t index = 0;
+       index < kCameraControllerPositionHistorySampleCount; ++index) {
+    written &= SafeWrite(
+        reinterpret_cast<void*>(
+            base + kCameraControllerPositionHistorySamplesOffset +
+            index * kCameraControllerPositionHistorySampleStride),
+        target.data(), sizeof(target));
+  }
+
+  uintptr_t camera_owner = 0;
+  uintptr_t camera_node = 0;
+  const bool node_valid =
+      SafeReadValue(reinterpret_cast<const void*>(
+                        base + kCameraControllerOwnerOffset),
+                    &camera_owner) &&
+      camera_owner &&
+      SafeReadValue(reinterpret_cast<const void*>(camera_owner +
+                                                  kCameraNodeOffset),
+                    &camera_node) &&
+      camera_node;
+  if (node_valid) {
+    // Node+0 is the primary camera translation. The world/local matrices are
+    // also updated here so either ordering of 0x3AC00 and the render copy sees
+    // the same safe endpoint on this source tick.
+    written &= SafeWrite(reinterpret_cast<void*>(camera_node), target.data(),
+                         sizeof(target));
+    Matrix3x4 world{};
+    if (SafeRead(reinterpret_cast<const void*>(camera_node + kMatrixOffset),
+                 &world, sizeof(world))) {
+      std::copy(target.begin(), target.end(), world.values.begin() + 9);
+      written &= SafeWrite(reinterpret_cast<void*>(camera_node + kMatrixOffset),
+                           &world, sizeof(world));
+    } else {
+      written = false;
+    }
+    Matrix3x4 local{};
+    if (SafeRead(
+            reinterpret_cast<const void*>(camera_node + kLocalMatrixOffset),
+            &local, sizeof(local))) {
+      std::copy(target.begin(), target.end(), local.values.begin() + 9);
+      written &= SafeWrite(
+          reinterpret_cast<void*>(camera_node + kLocalMatrixOffset), &local,
+          sizeof(local));
+    } else {
+      written = false;
+    }
+  } else {
+    written = false;
+  }
+
+  Matrix3x4 published{};
+  if (g_dungeon_base &&
+      SafeRead(g_dungeon_base + kPublishedCameraMatrixRva, &published,
+               sizeof(published))) {
+    std::copy(target.begin(), target.end(), published.values.begin() + 9);
+    written &= SafeWrite(g_dungeon_base + kPublishedCameraMatrixRva,
+                         &published, sizeof(published));
+  } else {
+    written = false;
+  }
+
+  if (committed_position) {
+    *committed_position = target;
+  }
+  if (g_debug_log) {
+    AppendNativeLog(
+        "camera_collision_commit result=%s resolved_radius=%.1f "
+        "safe_radius=%.1f target_radius=%.1f target=%d/%d/%d node=%08llX",
+        written ? "OK" : "PARTIAL", resolved_radius, submitted_radius,
+        CameraPositionDistance(focus, target), target[0], target[1], target[2],
+        static_cast<unsigned long long>(camera_node));
+  }
+  return written;
+}
+
 void __cdecl HookMode3Camera(void* controller) {
   if (!g_original_mode3_camera || !g_configure_camera || !controller) {
     if (g_original_mode3_camera) {
@@ -2944,6 +3082,10 @@ void __cdecl HookMode3Camera(void* controller) {
   g_configure_camera(controller, submitted_target[0], submitted_target[1],
                      submitted_target[2],
                      room_or_sector, 1);
+  std::array<int32_t, 3> committed_target{};
+  const bool immediate_contraction = CommitImmediateSpringArmContraction(
+      controller, camera_focus, submitted_target, spring_arm_contact,
+      &committed_target);
   if (g_debug_log) {
     std::array<int32_t, 3> configured_desired{};
     std::array<int32_t, 3> configured_resolved{};
@@ -2967,7 +3109,7 @@ void __cdecl HookMode3Camera(void* controller) {
           "hard=%d/%d/%d submit=%d/%d/%d "
           "after_desired=%d/%d/%d after_resolved=%d/%d/%d "
           "published=%d/%d/%d valid=%u/%u/%u native=%u mesh=%u "
-          "node=%08llX resource=%llu tri=%llu",
+          "commit=%u committed=%d/%d/%d node=%08llX resource=%llu tri=%llu",
           camera_focus[0], camera_focus[1], camera_focus[2],
           orbit[0], orbit[1], orbit[2],
           collision_target[0], collision_target[1], collision_target[2],
@@ -2979,6 +3121,8 @@ void __cdecl HookMode3Camera(void* controller) {
           desired_valid ? 1u : 0u, resolved_valid ? 1u : 0u,
           published_valid ? 1u : 0u, native_world_contact ? 1u : 0u,
           render_mesh_contact ? 1u : 0u,
+          immediate_contraction ? 1u : 0u, committed_target[0],
+          committed_target[1], committed_target[2],
           static_cast<unsigned long long>(mesh_hit_diagnostic.node),
           static_cast<unsigned long long>(mesh_hit_diagnostic.resource),
           static_cast<unsigned long long>(mesh_hit_diagnostic.triangle_index));
@@ -7900,8 +8044,9 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.76 camera collision telemetry "
-      "(behaviour unchanged from 0.0.75): "
+      "Deathtrap native render overlay 0.0.77 same-tick camera collision "
+      "commit "
+      "(diagnostic-backed lever-block fix): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
