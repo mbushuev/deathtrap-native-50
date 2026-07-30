@@ -48,6 +48,13 @@ constexpr uintptr_t kUiOwnerPointerRva = 0x0034F9D0u;
 constexpr uintptr_t kEngineFrameCounterRva = 0x001D24DCu;
 constexpr uintptr_t kPublishedCameraMatrixRva = 0x001D4110u;
 constexpr uintptr_t kRetailCameraManagerPointerRva = 0x001F11C0u;
+// Renderer resource registry used by Dungeon.dll+0x39900 and 0x3AC00.
+// A scene node stores a positive resource index at node+0x3C. The registry
+// entry points at the original Asylum mesh, including its polygon list and
+// local-space vertices. This is intentionally read-only: several visible
+// props are omitted from the room BSP used by the retail camera resolver.
+constexpr uintptr_t kRenderResourceCountRva = 0x00236F90u;
+constexpr uintptr_t kRenderResourceTableRva = 0x00237130u;
 // Dungeon.dll+0x30E30 dispatches the retail camera state machine through this
 // global controller. Unlike the small context camera owner above, this object
 // contains the active mode, target and cached camera values used by the
@@ -206,6 +213,20 @@ struct Vec3 {
   double x = 0.0;
   double y = 0.0;
   double z = 0.0;
+};
+
+struct CameraMeshTriangle {
+  std::array<int32_t, 3> a{};
+  std::array<int32_t, 3> b{};
+  std::array<int32_t, 3> c{};
+};
+
+struct CameraCollisionMesh {
+  uintptr_t resource = 0;
+  uintptr_t polygon_table = 0;
+  uint32_t polygon_count = 0;
+  bool parsed = false;
+  std::vector<CameraMeshTriangle> triangles;
 };
 
 struct Quaternion {
@@ -460,6 +481,12 @@ struct ThirdPersonOrbitState {
 };
 
 ThirdPersonOrbitState g_third_person_orbit_state;
+std::mutex g_camera_collision_mesh_mutex;
+std::unordered_map<uintptr_t, CameraCollisionMesh>
+    g_camera_collision_meshes;
+uint64_t g_camera_mesh_cache_hits = 0;
+uint64_t g_camera_mesh_cache_misses = 0;
+uint64_t g_camera_mesh_sweeps = 0;
 
 enum class CustomCameraViewMode : uint32_t {
   kModernThirdPerson = 0,
@@ -1893,6 +1920,215 @@ bool SceneNodeDescendsFrom(const SceneSnapshot& scene, uintptr_t node,
   return false;
 }
 
+Vec3 CameraMeshPointToWorld(const Matrix3x4& matrix,
+                            const std::array<int32_t, 3>& point) {
+  // Asylum stores affine matrices for row-vector multiplication: values
+  // 0/1/2 are the world components of local X, 3/4/5 of local Y and 6/7/8
+  // of local Z. All components, including translation, use 14-bit fixed
+  // point, so the result remains in the same coordinate space as the camera
+  // controller and node+0x80 world bounds.
+  constexpr double scale = 1.0 / 16384.0;
+  return {
+      (static_cast<double>(point[0]) * matrix.values[0] +
+       static_cast<double>(point[1]) * matrix.values[3] +
+       static_cast<double>(point[2]) * matrix.values[6]) * scale +
+          matrix.values[9],
+      (static_cast<double>(point[0]) * matrix.values[1] +
+       static_cast<double>(point[1]) * matrix.values[4] +
+       static_cast<double>(point[2]) * matrix.values[7]) * scale +
+          matrix.values[10],
+      (static_cast<double>(point[0]) * matrix.values[2] +
+       static_cast<double>(point[1]) * matrix.values[5] +
+       static_cast<double>(point[2]) * matrix.values[8]) * scale +
+          matrix.values[11]};
+}
+
+bool ReadCameraMeshVertex(uintptr_t reference,
+                          std::array<int32_t, 3>* vertex) {
+  if (!reference || !vertex) {
+    return false;
+  }
+  uintptr_t vertex_address = 0;
+  if (!SafeReadValue(reinterpret_cast<const void*>(reference + 8u),
+                     &vertex_address) ||
+      !vertex_address ||
+      !SafeRead(reinterpret_cast<const void*>(vertex_address + 4u),
+                vertex->data(), sizeof(*vertex))) {
+    return false;
+  }
+  // Corrupt/unloaded resource pointers must never turn into an enormous
+  // camera blocker. Retail levels stay many orders of magnitude below this.
+  constexpr int32_t kMaximumCoordinate = 1 << 26;
+  return std::abs(static_cast<int64_t>((*vertex)[0])) < kMaximumCoordinate &&
+         std::abs(static_cast<int64_t>((*vertex)[1])) < kMaximumCoordinate &&
+         std::abs(static_cast<int64_t>((*vertex)[2])) < kMaximumCoordinate;
+}
+
+const CameraCollisionMesh* ResolveCameraCollisionMesh(uintptr_t handle) {
+  if (!g_dungeon_base || !handle || handle > 0xFFFFu) {
+    return nullptr;
+  }
+  int32_t resource_count = 0;
+  if (!SafeReadValue(g_dungeon_base + kRenderResourceCountRva,
+                     &resource_count) ||
+      resource_count <= 0 || handle >= static_cast<uintptr_t>(resource_count)) {
+    return nullptr;
+  }
+  uintptr_t resource = 0;
+  if (!SafeReadValue(g_dungeon_base + kRenderResourceTableRva +
+                         handle * sizeof(uintptr_t),
+                     &resource) ||
+      !resource) {
+    return nullptr;
+  }
+  uint32_t polygon_count = 0;
+  uintptr_t polygon_table = 0;
+  if (!SafeReadValue(reinterpret_cast<const void*>(resource + 0x18u),
+                     &polygon_count) ||
+      !SafeReadValue(reinterpret_cast<const void*>(resource + 0x1Cu),
+                     &polygon_table) ||
+      !polygon_table || polygon_count == 0 || polygon_count > 65536u) {
+    return nullptr;
+  }
+
+  auto found = g_camera_collision_meshes.find(handle);
+  if (found != g_camera_collision_meshes.end() &&
+      found->second.resource == resource &&
+      found->second.polygon_table == polygon_table &&
+      found->second.polygon_count == polygon_count) {
+    ++g_camera_mesh_cache_hits;
+    return found->second.parsed ? &found->second : nullptr;
+  }
+
+  ++g_camera_mesh_cache_misses;
+  CameraCollisionMesh mesh;
+  mesh.resource = resource;
+  mesh.polygon_table = polygon_table;
+  mesh.polygon_count = polygon_count;
+  constexpr uint32_t kMaximumPolygonVertices = 128u;
+  constexpr size_t kMaximumTrianglesPerResource = 262144u;
+  for (uint32_t polygon_index = 0; polygon_index < polygon_count;
+       ++polygon_index) {
+    const uintptr_t polygon = polygon_table +
+        static_cast<uintptr_t>(polygon_index) * 0x34u;
+    uint32_t vertex_count = 0;
+    uintptr_t references = 0;
+    if (!SafeReadValue(reinterpret_cast<const void*>(polygon + 0x28u),
+                       &vertex_count) ||
+        !SafeReadValue(reinterpret_cast<const void*>(polygon + 0x2Cu),
+                       &references) ||
+        !references || vertex_count < 3u ||
+        vertex_count > kMaximumPolygonVertices) {
+      continue;
+    }
+    std::vector<std::array<int32_t, 3>> vertices(vertex_count);
+    bool valid = true;
+    for (uint32_t vertex_index = 0; vertex_index < vertex_count;
+         ++vertex_index) {
+      if (!ReadCameraMeshVertex(
+              references + static_cast<uintptr_t>(vertex_index) * 0x10u,
+              &vertices[vertex_index])) {
+        valid = false;
+        break;
+      }
+    }
+    if (!valid) {
+      continue;
+    }
+    // Asylum's renderer emits a convex polygon from every 0x34-byte surface
+    // record. The same fan used by the fixed-function backend gives us the
+    // actual visible surface rather than a coarse node sphere.
+    for (uint32_t vertex_index = 1u; vertex_index + 1u < vertex_count;
+         ++vertex_index) {
+      mesh.triangles.push_back(
+          {vertices[0], vertices[vertex_index],
+           vertices[vertex_index + 1u]});
+      if (mesh.triangles.size() >= kMaximumTrianglesPerResource) {
+        break;
+      }
+    }
+    if (mesh.triangles.size() >= kMaximumTrianglesPerResource) {
+      break;
+    }
+  }
+  mesh.parsed = !mesh.triangles.empty();
+  auto inserted = g_camera_collision_meshes.insert_or_assign(
+      handle, std::move(mesh));
+  if (g_debug_log) {
+    AppendNativeLog(
+        "camera_mesh_cache handle=%llu polygons=%u triangles=%llu valid=%d",
+        static_cast<unsigned long long>(handle), polygon_count,
+        static_cast<unsigned long long>(inserted.first->second.triangles.size()),
+        inserted.first->second.parsed ? 1 : 0);
+  }
+  return inserted.first->second.parsed ? &inserted.first->second : nullptr;
+}
+
+bool CameraRayTriangleDistance(const Vec3& origin, const Vec3& direction,
+                               const Vec3& a, const Vec3& b, const Vec3& c,
+                               double maximum_distance, double* distance) {
+  const Vec3 edge1{b.x - a.x, b.y - a.y, b.z - a.z};
+  const Vec3 edge2{c.x - a.x, c.y - a.y, c.z - a.z};
+  const Vec3 p{direction.y * edge2.z - direction.z * edge2.y,
+               direction.z * edge2.x - direction.x * edge2.z,
+               direction.x * edge2.y - direction.y * edge2.x};
+  const double determinant =
+      edge1.x * p.x + edge1.y * p.y + edge1.z * p.z;
+  if (!std::isfinite(determinant) || std::abs(determinant) < 1.0e-8) {
+    return false;
+  }
+  const double inverse_determinant = 1.0 / determinant;
+  const Vec3 from_a{origin.x - a.x, origin.y - a.y, origin.z - a.z};
+  const double u =
+      (from_a.x * p.x + from_a.y * p.y + from_a.z * p.z) *
+      inverse_determinant;
+  if (u < -1.0e-6 || u > 1.0 + 1.0e-6) {
+    return false;
+  }
+  const Vec3 q{from_a.y * edge1.z - from_a.z * edge1.y,
+               from_a.z * edge1.x - from_a.x * edge1.z,
+               from_a.x * edge1.y - from_a.y * edge1.x};
+  const double v =
+      (direction.x * q.x + direction.y * q.y + direction.z * q.z) *
+      inverse_determinant;
+  if (v < -1.0e-6 || u + v > 1.0 + 1.0e-6) {
+    return false;
+  }
+  const double hit =
+      (edge2.x * q.x + edge2.y * q.y + edge2.z * q.z) *
+      inverse_determinant;
+  if (!std::isfinite(hit) || hit <= 0.0 || hit >= maximum_distance) {
+    return false;
+  }
+  if (distance) {
+    *distance = hit;
+  }
+  return true;
+}
+
+bool CameraMeshRayDistance(const CameraCollisionMesh& mesh,
+                           const Matrix3x4& world, const Vec3& origin,
+                           const Vec3& direction, double maximum_distance,
+                           double* nearest_distance) {
+  bool hit = false;
+  double nearest = maximum_distance;
+  for (const CameraMeshTriangle& triangle : mesh.triangles) {
+    const Vec3 a = CameraMeshPointToWorld(world, triangle.a);
+    const Vec3 b = CameraMeshPointToWorld(world, triangle.b);
+    const Vec3 c = CameraMeshPointToWorld(world, triangle.c);
+    double candidate = nearest;
+    if (CameraRayTriangleDistance(origin, direction, a, b, c, nearest,
+                                  &candidate)) {
+      nearest = candidate;
+      hit = true;
+    }
+  }
+  if (hit && nearest_distance) {
+    *nearest_distance = nearest;
+  }
+  return hit;
+}
+
 bool ClipThirdPersonOrbitAgainstSceneObjects(
     const std::array<int32_t, 3>& player,
     const std::array<int32_t, 3>& requested,
@@ -1921,29 +2157,32 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
       ray_x / requested_distance, ray_y / requested_distance,
       ray_z / requested_distance};
 
-  // Dungeon's room BSP does not contain every visible prop. However, the
-  // scene-cache pass at 0x3AC00 publishes an own-object world bounding sphere
-  // at node+0x80 for every node with a render resource. Sweep the camera
-  // centre through stable drawable spheres so switches, stairs and other
-  // static props can shorten the spring arm before the native damping stage.
-  // Parent/room aggregate spheres, animated actors and the player hierarchy
-  // are deliberately excluded.
-  constexpr double kMinimumObjectRadius = 48.0;
-  constexpr double kMaximumObjectRadius = 900.0;
-  // The shared collision-radius update below already keeps a 96-unit
-  // player-side margin. Inflate only enough to keep the first authoritative
-  // sample off the visual surface; using the full margin here as well would
-  // shorten the persistent arm twice.
-  constexpr double kCameraInflation = 24.0;
+  // The retail room resolver traverses BSP cells and portals only. Visible
+  // props such as lever housings and stairs may not participate in that
+  // structure at all. node+0x80 remains a useful broad phase, but the actual
+  // hit is now calculated against the original render polygons referenced by
+  // node+0x3C. This avoids both classes of sphere failure: a concave sphere
+  // containing the player, and a large decorative object whose sphere was
+  // rejected by the old 900-unit cap.
+  constexpr double kMinimumObjectRadius = 24.0;
+  constexpr double kMaximumObjectRadius = 6000.0;
+  constexpr double kBroadPhaseInflation = 112.0;
+  constexpr double kSurfaceClearance = 112.0;
   constexpr double kBoundsMotionTolerance = 16.0;
   constexpr double kRadiusMotionTolerance = 8.0;
   constexpr double kMinimumCameraDistance = 180.0;
 
   double nearest_distance = requested_distance;
+  double nearest_surface_distance = requested_distance;
   uintptr_t nearest_node = 0;
+  uintptr_t nearest_resource = 0;
   double nearest_object_radius = 0.0;
-  uintptr_t overlap_node = 0;
-  double overlap_radius = 0.0;
+  size_t nearest_triangle_count = 0;
+  const Vec3 origin{static_cast<double>(player[0]),
+                    static_cast<double>(player[1]),
+                    static_cast<double>(player[2])};
+  const Vec3 ray_direction{direction[0], direction[1], direction[2]};
+  std::lock_guard<std::mutex> mesh_lock(g_camera_collision_mesh_mutex);
   for (const auto& entry : g_previous_snapshot.nodes) {
     const uintptr_t node = entry.first;
     const NodeTransform& current = entry.second;
@@ -1957,7 +2196,7 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
 
     // Ignore Lara and all of her mesh/bone nodes. Also ignore drawable room
     // ancestors that contain Lara; their aggregate geometry is already owned
-    // by the native room collision and a sphere would seal doorways.
+    // by the native room collision and can include transitional scene data.
     if (SceneNodeDescendsFrom(g_previous_snapshot, node,
                              g_previous_snapshot.player) ||
         SceneNodeDescendsFrom(g_previous_snapshot,
@@ -1989,77 +2228,49 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     const double center_z =
         static_cast<double>(current.bounds_center[2] - player[2]);
     const double inflated_radius =
-        static_cast<double>(current.bounds_radius) + kCameraInflation;
+        static_cast<double>(current.bounds_radius) + kBroadPhaseInflation;
     const double center_distance_squared =
         center_x * center_x + center_y * center_y + center_z * center_z;
     if (!std::isfinite(center_distance_squared)) {
       continue;
     }
-    const double requested_center_x =
-        static_cast<double>(requested[0] - current.bounds_center[0]);
-    const double requested_center_y =
-        static_cast<double>(requested[1] - current.bounds_center[1]);
-    const double requested_center_z =
-        static_cast<double>(requested[2] - current.bounds_center[2]);
-    const double requested_center_distance_squared =
-        requested_center_x * requested_center_x +
-        requested_center_y * requested_center_y +
-        requested_center_z * requested_center_z;
-    const bool player_inside =
-        center_distance_squared <= inflated_radius * inflated_radius;
-    const bool requested_inside =
-        requested_center_distance_squared <=
-        inflated_radius * inflated_radius;
-    if (player_inside) {
-      // The player can legitimately stand against or partially within a
-      // coarse prop sphere (lever housings are a common example).  Such a
-      // sphere has no usable segment entry, but allowing the desired camera
-      // endpoint to remain inside it produces the all-black/inside-model
-      // failure.  Mark it unresolved so the caller can retain its previously
-      // verified endpoint. Player/room ancestors were excluded above, so this
-      // does not turn an entire room aggregate into a camera blocker.
-      if (requested_inside &&
-          (!overlap_node || current.bounds_radius < overlap_radius)) {
-        overlap_node = node;
-        overlap_radius = static_cast<double>(current.bounds_radius);
-      }
-      continue;
-    }
     const double projection = center_x * direction[0] +
                               center_y * direction[1] +
                               center_z * direction[2];
-    if (projection <= kMinimumCameraDistance ||
-        projection - inflated_radius >= nearest_distance) {
+    if (projection + inflated_radius <= kMinimumCameraDistance ||
+        projection - inflated_radius >= nearest_surface_distance) {
       continue;
     }
     const double perpendicular_squared = std::max(
         0.0, center_distance_squared - projection * projection);
     const double radius_squared = inflated_radius * inflated_radius;
-    if (perpendicular_squared >= radius_squared) {
+    if (perpendicular_squared > radius_squared) {
       continue;
     }
-    const double entry_distance =
-        projection - std::sqrt(radius_squared - perpendicular_squared);
-    if (!std::isfinite(entry_distance) ||
-        entry_distance < kMinimumCameraDistance ||
-        entry_distance >= nearest_distance) {
-      continue;
-    }
-    nearest_distance = entry_distance;
-    nearest_node = node;
-    nearest_object_radius = static_cast<double>(current.bounds_radius);
-  }
 
-  if (overlap_node) {
-    if (unresolved_overlap) {
-      *unresolved_overlap = true;
+    const CameraCollisionMesh* mesh =
+        ResolveCameraCollisionMesh(current.render_resource_handle);
+    if (!mesh) {
+      continue;
     }
-    if (g_debug_log) {
-      AppendNativeLog(
-          "camera_object_overlap node=%08llX object_radius=%.1f "
-          "reason=player_and_camera_inside",
-          static_cast<unsigned long long>(overlap_node), overlap_radius);
+    double surface_distance = nearest_surface_distance;
+    if (!CameraMeshRayDistance(*mesh, current.world, origin, ray_direction,
+                               nearest_surface_distance,
+                               &surface_distance) ||
+        surface_distance <= kMinimumCameraDistance) {
+      continue;
     }
+    const double safe_distance = std::max(
+        kMinimumCameraDistance, surface_distance - kSurfaceClearance);
+    if (safe_distance >= nearest_distance) {
+      continue;
+    }
+    nearest_distance = safe_distance;
+    nearest_surface_distance = surface_distance;
+    nearest_node = node;
+    nearest_resource = current.render_resource_handle;
+    nearest_object_radius = static_cast<double>(current.bounds_radius);
+    nearest_triangle_count = mesh->triangles.size();
   }
 
   if (!nearest_node || nearest_distance + 1.0 >= requested_distance) {
@@ -2074,11 +2285,16 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
                       std::lround(direction[2] * nearest_distance))};
   if (g_debug_log) {
     AppendNativeLog(
-        "camera_object_sweep node=%08llX object_radius=%.1f "
-        "camera_radius=%.1f requested=%.1f",
-        static_cast<unsigned long long>(nearest_node), nearest_object_radius,
+        "camera_mesh_sweep node=%08llX resource=%llu triangles=%llu "
+        "object_radius=%.1f surface=%.1f camera_radius=%.1f "
+        "requested=%.1f",
+        static_cast<unsigned long long>(nearest_node),
+        static_cast<unsigned long long>(nearest_resource),
+        static_cast<unsigned long long>(nearest_triangle_count),
+        nearest_object_radius, nearest_surface_distance,
         nearest_distance, requested_distance);
   }
+  ++g_camera_mesh_sweeps;
   return true;
 }
 
@@ -7400,7 +7616,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.68 floor-safe collision spring arm: "
+      "Deathtrap native render overlay 0.0.69 render-mesh collision spring arm: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "

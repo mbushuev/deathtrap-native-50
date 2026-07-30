@@ -210,6 +210,25 @@ origin-containing prop has no usable segment entry. Diagnostics expose these
 paths as `camera_floor_guard`, `camera_object_overlap` and
 `camera_safe_restore`.
 
+Version `0.0.69` replaces those coarse spheres as the final prop-collision
+decision. Static analysis of `0x8B0D0`, `0x8B1E0`, `0x8C170`, `0x94C00` and
+`0x94C60` recovered the native render-resource layout. The positive handle at
+`node+0x3C` indexes the table at `0x10237130`; each resource exposes a polygon
+count/table at `+0x18/+0x1C`, every 0x34-byte polygon stores its vertex count
+and 0x10-byte reference array at `+0x28/+0x2C`, and each reference points to a
+local-space vertex whose XYZ begins at `+0x04`. The implementation caches
+triangulated read-only copies of those polygons and transforms them with the
+node's live world matrix.
+
+The spring arm now uses `node+0x80` only as a broad phase, then intersects the
+player-to-camera ray with the actual visible triangles and stops 112 world
+units before the nearest surface. Player descendants and ancestors, moving
+objects and invalid resources remain excluded. This is a separate geometry
+layer above the room cell/portal traversal in `0x4E760`; it covers stairs,
+lever blocks and decorative meshes that are rendered but never registered as
+retail camera obstacles. Diagnostics expose resource parsing as
+`camera_mesh_cache` and accepted contacts as `camera_mesh_sweep`.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

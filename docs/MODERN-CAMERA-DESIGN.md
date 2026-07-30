@@ -341,6 +341,16 @@ entering the prop and attempting a delayed push-out. The fallback is updated
 only by endpoints that pass the native room resolver and the supplementary
 object test.
 
+Version `0.0.69` removes the sphere itself from the final collision decision.
+The resource handle at `node+0x3C` is resolved through the game's renderer
+registry, and its original convex surface records are cached as local-space
+triangles. Stable scene nodes first pass their cheap `node+0x80` sphere broad
+phase; the spring arm is shortened only when its centre ray intersects a real
+world-transformed render triangle. A fixed surface clearance keeps the camera
+near plane outside the mesh. Consequently, a lever housing, stair block or
+other visible prop no longer needs a gameplay/BSP collision flag to block the
+camera, while the empty space inside a coarse sphere remains traversable.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
