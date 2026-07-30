@@ -191,6 +191,44 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetData(
 
   DWORD written = *count;
   const bool peek = (flags & DIGDD_PEEK) != 0;
+  if (DeathtrapModernCameraConsumesMouse() &&
+      object_size >= sizeof(DIDEVICEOBJECTDATA)) {
+    // Some Deathtrap input paths use buffered DirectInput rather than
+    // GetDeviceState.  Let buttons and the wheel pass through, but take
+    // exclusive ownership of physical X/Y motion while modern camera-look is
+    // active.  Without this second interception the same mouse movement also
+    // reached the retail movement bindings and rotated/stepped Lara.
+    DWORD kept = 0;
+    int32_t physical_x = 0;
+    int32_t physical_y = 0;
+    for (DWORD index = 0; index < written; ++index) {
+      auto* source_bytes = reinterpret_cast<uint8_t*>(data) +
+                           static_cast<size_t>(index) * object_size;
+      DIDEVICEOBJECTDATA event = {};
+      std::memcpy(&event, source_bytes, sizeof(event));
+      if (event.dwOfs == DIMOFS_X || event.dwOfs == DIMOFS_Y) {
+        if (!peek) {
+          const int32_t delta = static_cast<int32_t>(event.dwData);
+          if (event.dwOfs == DIMOFS_X) {
+            physical_x = std::clamp(physical_x + delta, -8192, 8192);
+          } else {
+            physical_y = std::clamp(physical_y + delta, -8192, 8192);
+          }
+        }
+        continue;
+      }
+      if (kept != index) {
+        auto* destination = reinterpret_cast<uint8_t*>(data) +
+                            static_cast<size_t>(kept) * object_size;
+        std::memmove(destination, source_bytes, object_size);
+      }
+      ++kept;
+    }
+    written = kept;
+    if (!peek && (physical_x != 0 || physical_y != 0)) {
+      SubmitDeathtrapPhysicalMouseDelta(physical_x, physical_y);
+    }
+  }
   auto append = [&](DWORD offset, DWORD value) {
     if (written >= capacity) {
       return false;

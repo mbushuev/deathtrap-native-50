@@ -139,6 +139,23 @@ by the existing `0x2DEF0` resolver, feeds spring-arm contraction on the next
 source tick. Contraction is immediate and extension is gradual; no framebuffer
 or screen-space collision heuristic is involved.
 
+Version `0.0.60` corrects two ownership mistakes exposed by the `0.0.59`
+runtime trace. Entry into the hooked mode-3 dispatcher is authoritative; the
+value of `controller+0x27C` after the retail callback is not. Fixed/rail
+branches rewrite that byte to `0` or `1` while still executing the same
+mode-3 path, so the old redundant post-callback test disabled orbit in most
+room-camera zones. The modern endpoint is now accepted across every branch of
+the verified mode-3 dispatcher.
+
+An active `controller+0x1B8` owner is likewise diagnostic evidence, not a
+sufficient reason to surrender the camera: ordinary fixed-camera zones set
+the same flag. A retail reveal now requires a recent explicit interaction plus
+independently moving native camera output while the player is stationary.
+Physical mouse X/Y is intercepted in both DirectInput delivery models
+(`GetDeviceState` and buffered `GetDeviceData`), accumulated only by the
+orbit camera and removed from the events returned to the original gameplay
+bindings. Mouse buttons, wheel, menus and selectors remain native.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

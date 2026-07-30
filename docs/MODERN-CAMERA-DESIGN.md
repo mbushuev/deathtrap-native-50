@@ -242,6 +242,16 @@ state. Menus, selectors, retail first person and retail camera mode receive the
 original mouse stream unchanged. The accepted source endpoints continue to be
 rigidly interpolated by the native 50 Hz presentation layer.
 
+Version `0.0.60` removes the false post-callback camera-mode gate. Runtime
+`0.0.59` showed that the fixed/rail branches reached the hooked mode-3
+dispatcher and then changed the visible mode byte to `0` or `1`; treating that
+byte as a second ownership check was why orbit stopped in most locations.
+Room/fixed-camera ownership can no longer switch the modern rig off by itself.
+Only an explicitly armed interaction-driven reveal may temporarily yield to
+the retail camera. The DirectInput proxy also filters physical X/Y from the
+buffered `GetDeviceData` path, completing the separation between mouse camera
+look and character movement.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

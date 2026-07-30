@@ -72,7 +72,6 @@ constexpr size_t kCameraControllerScriptOwnerOffset = 0x1B8u;
 constexpr size_t kCameraControllerDesiredPositionOffset = 0x1F4u;
 constexpr size_t kCameraControllerResolvedPositionOffset = 0x1DCu;
 constexpr size_t kCameraControllerActiveModeOffset = 0x27Cu;
-constexpr uint8_t kCameraModeThirdPerson = 3u;
 constexpr uint8_t kCameraScriptOwnerActiveMask = 0x80u;
 constexpr uintptr_t kActiveCloseCombatWeaponRva = 0x001D8A68u;
 constexpr uintptr_t kActiveSpellRva = 0x001D8A6Cu;
@@ -1300,13 +1299,6 @@ bool ReadCameraPlayerPosition(void* controller,
   return true;
 }
 
-bool ReadActiveCameraMode(void* controller, uint8_t* mode) {
-  return controller && mode &&
-         SafeReadValue(reinterpret_cast<const uint8_t*>(controller) +
-                           kCameraControllerActiveModeOffset,
-                       mode);
-}
-
 bool BeginMode3SourceTick(void* controller) {
   int32_t engine_frame = 0;
   if (!g_dungeon_base ||
@@ -1417,10 +1409,10 @@ bool EvaluateRetailCameraTakeover(
       state.stationary_native_motion += native_motion;
     }
 
-    // A real reveal is the native candidate moving independently while Lara
-    // is stationary. The owner bit is not reliable: ordinary fixed-camera
-    // zones may set it, while some lever reveals do not. An interaction arms
-    // the sensitive path; the owner remains useful only for automatic shots.
+    // A real reveal is the native candidate moving independently after an
+    // explicit interaction while Lara is stationary.  The owner bit is not
+    // an arbitration signal: runtime 0.0.59 proved that ordinary room/fixed
+    // camera zones set it too, causing apparently random camera takeovers.
     const uint64_t last_interaction_ms =
         g_last_controller_interaction_ms.load(std::memory_order_acquire);
     const bool recent_interaction = last_interaction_ms &&
@@ -1429,8 +1421,7 @@ bool EvaluateRetailCameraTakeover(
         player_stationary && recent_interaction && native_motion >= 72.0;
     const bool travelling_reveal =
         player_stationary &&
-        ((recent_interaction && state.stationary_native_motion >= 120.0) ||
-         (owner != 0 && state.stationary_native_motion >= 360.0));
+        recent_interaction && state.stationary_native_motion >= 120.0;
     if (now_ms >= state.cooldown_until_ms &&
         (snap_reveal || travelling_reveal)) {
       state.takeover_latched = true;
@@ -1507,20 +1498,18 @@ void ResetThirdPersonOrbit(const char* reason) {
 bool BuildThirdPersonOrbitPosition(void* controller,
                                    const std::array<int32_t, 3>& native,
                                    std::array<int32_t, 3>* orbit) {
-  if (!orbit) {
+  if (!controller || !orbit) {
     return false;
   }
-  uint8_t mode = 0;
-  const bool mode_valid = ReadActiveCameraMode(controller, &mode);
   const bool controller_input_active =
       g_third_person_orbit_input_active.load(std::memory_order_acquire);
   const bool mouse_input_active = DeathtrapModernCameraConsumesMouse();
   const bool input_active = controller_input_active || mouse_input_active;
-  if (!g_third_person_orbit_enabled || !mode_valid) {
-    ResetThirdPersonOrbit(!mode_valid ? "invalid_controller" : "disabled");
+  if (!g_third_person_orbit_enabled) {
+    ResetThirdPersonOrbit("disabled");
     return false;
   }
-  if (!CustomCameraOwnsMode3() || mode != kCameraModeThirdPerson) {
+  if (!CustomCameraOwnsMode3()) {
     if (g_third_person_orbit_state.engaged) {
       g_third_person_orbit_state.suspended = true;
       g_third_person_orbit_state.filtered_input_x = 0.0;
@@ -1528,6 +1517,11 @@ bool BuildThirdPersonOrbitPosition(void* controller,
     }
     return false;
   }
+  // This function is reached only from the verified mode-3 dispatcher hook.
+  // Do not re-check controller+0x27C after the retail callback: fixed/rail
+  // branches rewrite that byte to 0/1 even though execution is still inside
+  // the mode-3 camera path.  The old post-callback test made orbit disappear
+  // in most rooms and resume only when the byte happened to return to 3.
   // Menus, the radial selector and the retail first-person camera temporarily
   // own the right stick. Keep the orbit rig suspended instead of destroying
   // it, so returning to third person resumes the exact previous view.
@@ -6775,7 +6769,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.59 source-tick camera: "
+      "Deathtrap native render overlay 0.0.60 camera ownership fix: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
