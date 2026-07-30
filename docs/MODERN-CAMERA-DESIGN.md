@@ -381,6 +381,18 @@ minimum is also reduced to the swept sphere's 96-unit radius: repeated
 `contact=180` events proved that the old clamp could leave the camera volume
 partly inside a tight corner with no legal way to retreat further inward.
 
+Version `0.0.73` separates the 96-unit camera collision volume from the
+minimum permitted distance between the camera centre and the player pivot.
+When a swept sphere already overlaps a render triangle at the start of its
+usable arm, the condition is now reported explicitly and the endpoint
+collapses to a 16-unit near-pivot position on the player's side of the
+surface. A translated historical endpoint is deliberately not reused because
+it may already lie behind a one-sided prop after a room transition. Such an
+overlap endpoint is also excluded from the last-safe cache. In addition, an
+exact render-mesh contact survives up to two missing adjacent snapshots before
+outward recovery begins. This removes the measured `96 -> 144 -> 96` release
+cycle without delaying a real release after the spring-arm direction changes.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

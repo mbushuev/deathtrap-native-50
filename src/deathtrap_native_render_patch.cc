@@ -430,10 +430,12 @@ double g_third_person_orbit_min_radius = 650.0;
 double g_third_person_orbit_max_radius = 1800.0;
 double g_third_person_orbit_preferred_radius = 1400.0;
 double g_third_person_orbit_response_seconds = 0.05;
-// Keep the camera centre outside the 96-unit swept sphere, but do not retain
-// the old 180-unit blind zone.  Contacts at exactly 180 in v0.0.71 proved
-// that the arm was being clamped while its volume was still inside a corner.
-constexpr double kThirdPersonMinimumCollisionRadius = 96.0;
+// Camera-centre distance and collision-volume radius are intentionally
+// different quantities. A 96-unit swept sphere may need to collapse almost
+// to the player pivot in a tight corner; clamping its centre to the sphere
+// radius allowed the centre to cross a one-sided prop and expose the void
+// behind it. Keep only a small non-zero centre offset for near-plane safety.
+constexpr double kThirdPersonMinimumCameraDistance = 16.0;
 std::atomic<int32_t> g_third_person_orbit_input_x{0};
 std::atomic<int32_t> g_third_person_orbit_input_y{0};
 std::atomic<bool> g_third_person_orbit_input_active{false};
@@ -1853,8 +1855,15 @@ bool BuildThirdPersonOrbitPosition(void* controller,
       std::cos(g_third_person_orbit_state.yaw) * direction_horizontal};
   bool contact_manifold_changed =
       !g_third_person_orbit_state.collision_contact_valid;
+  // A drawable node may be absent from one captured snapshot while crossing
+  // a room boundary or refreshing its cache. Treat two adjacent clear samples
+  // as part of the same contact manifold. Otherwise a one-tick miss expands
+  // the arm by 48 units and the same mesh contracts it on the following tick,
+  // producing the visible 96->144->96 shake seen in v0.0.72 logs.
   const bool retained_render_mesh_contact =
-      g_third_person_orbit_state.render_mesh_contact_latched;
+      g_third_person_orbit_state.render_mesh_contact_latched ||
+      (g_third_person_orbit_state.collision_contact_valid &&
+       g_third_person_orbit_state.collision_clear_ticks < 3u);
   g_third_person_orbit_state.render_mesh_contact_latched = false;
   if (g_third_person_orbit_state.collision_contact_valid) {
     const auto& contact_direction =
@@ -1883,7 +1892,7 @@ bool BuildThirdPersonOrbitPosition(void* controller,
     }
   }
   const double active_radius = std::max(
-      kThirdPersonMinimumCollisionRadius,
+      kThirdPersonMinimumCameraDistance,
       g_third_person_orbit_state.collision_radius);
   const double horizontal = active_radius *
                             std::cos(g_third_person_orbit_state.pitch);
@@ -2265,7 +2274,11 @@ bool CameraRayCapsuleDistance(const Vec3& origin, const Vec3& direction,
 bool CameraSweptSphereTriangleDistance(
     const Vec3& origin, const Vec3& direction, const Vec3& a, const Vec3& b,
     const Vec3& c, double radius, double minimum_distance,
-    double maximum_distance, double* distance) {
+    double maximum_distance, double* distance,
+    bool* initial_overlap = nullptr) {
+  if (initial_overlap) {
+    *initial_overlap = false;
+  }
   double nearest = maximum_distance;
   bool hit = false;
   const Vec3 start = CameraVectorAdd(
@@ -2274,6 +2287,9 @@ bool CameraSweptSphereTriangleDistance(
       radius * radius) {
     nearest = minimum_distance;
     hit = true;
+    if (initial_overlap) {
+      *initial_overlap = true;
+    }
   }
 
   Vec3 normal = CameraVectorCross(CameraVectorSubtract(b, a),
@@ -2324,23 +2340,34 @@ bool CameraMeshSweepDistance(const CameraCollisionMesh& mesh,
                              const Vec3& direction, double radius,
                              double minimum_distance,
                              double maximum_distance,
-                             double* nearest_distance) {
+                             double* nearest_distance,
+                             bool* initial_overlap = nullptr) {
+  if (initial_overlap) {
+    *initial_overlap = false;
+  }
   bool hit = false;
+  bool any_initial_overlap = false;
   double nearest = maximum_distance;
   for (const CameraMeshTriangle& triangle : mesh.triangles) {
     const Vec3 a = CameraMeshPointToWorld(world, triangle.a);
     const Vec3 b = CameraMeshPointToWorld(world, triangle.b);
     const Vec3 c = CameraMeshPointToWorld(world, triangle.c);
     double candidate = nearest;
+    bool triangle_initial_overlap = false;
     if (CameraSweptSphereTriangleDistance(
             origin, direction, a, b, c, radius, minimum_distance, nearest,
-            &candidate)) {
+            &candidate, &triangle_initial_overlap)) {
       nearest = candidate;
       hit = true;
+      any_initial_overlap =
+          any_initial_overlap || triangle_initial_overlap;
     }
   }
   if (hit && nearest_distance) {
     *nearest_distance = nearest;
+  }
+  if (initial_overlap) {
+    *initial_overlap = any_initial_overlap;
   }
   return hit;
 }
@@ -2366,7 +2393,7 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   const double requested_distance =
       std::hypot(std::hypot(ray_x, ray_z), ray_y);
   if (!std::isfinite(requested_distance) ||
-      requested_distance < kThirdPersonMinimumCollisionRadius ||
+      requested_distance < kThirdPersonMinimumCameraDistance ||
       requested_distance > 5000.0) {
     return false;
   }
@@ -2396,7 +2423,7 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   constexpr double kBoundsMotionTolerance = 16.0;
   constexpr double kRadiusMotionTolerance = 8.0;
   constexpr double kMinimumCameraDistance =
-      kThirdPersonMinimumCollisionRadius;
+      kThirdPersonMinimumCameraDistance;
 
   double nearest_distance = requested_distance;
   // Probe a short distance beyond the currently contracted arm. Without
@@ -2409,6 +2436,7 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   uintptr_t nearest_resource = 0;
   double nearest_object_radius = 0.0;
   size_t nearest_triangle_count = 0;
+  bool nearest_initial_overlap = false;
   const Vec3 origin{static_cast<double>(player[0]),
                     static_cast<double>(player[1]),
                     static_cast<double>(player[2])};
@@ -2485,10 +2513,12 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
       continue;
     }
     double surface_distance = nearest_surface_distance;
+    bool mesh_initial_overlap = false;
     if (!CameraMeshSweepDistance(
             *mesh, current.world, origin, ray_direction,
             kCameraSphereRadius, kMinimumCameraDistance,
-            nearest_surface_distance, &surface_distance)) {
+            nearest_surface_distance, &surface_distance,
+            &mesh_initial_overlap)) {
       continue;
     }
     const double safe_distance = std::max(
@@ -2502,10 +2532,14 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     nearest_resource = current.render_resource_handle;
     nearest_object_radius = static_cast<double>(current.bounds_radius);
     nearest_triangle_count = mesh->triangles.size();
+    nearest_initial_overlap = mesh_initial_overlap;
   }
 
   if (!nearest_node) {
     return false;
+  }
+  if (nearest_initial_overlap && unresolved_overlap) {
+    *unresolved_overlap = true;
   }
   *clipped = {
       player[0] + static_cast<int32_t>(
@@ -2518,12 +2552,13 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     AppendNativeLog(
         "camera_mesh_sweep node=%08llX resource=%llu triangles=%llu "
         "object_radius=%.1f contact=%.1f sphere=%.1f camera_radius=%.1f "
-        "requested=%.1f",
+        "requested=%.1f overlap=%u",
         static_cast<unsigned long long>(nearest_node),
         static_cast<unsigned long long>(nearest_resource),
         static_cast<unsigned long long>(nearest_triangle_count),
         nearest_object_radius, nearest_surface_distance,
-        kCameraSphereRadius, nearest_distance, requested_distance);
+        kCameraSphereRadius, nearest_distance, requested_distance,
+        nearest_initial_overlap ? 1u : 0u);
   }
   ++g_camera_mesh_sweeps;
   return true;
@@ -2568,7 +2603,7 @@ void __cdecl HookCameraCollisionResolve(
       std::hypot(resolved_x, resolved_z), resolved_y);
   if (!std::isfinite(requested_distance) ||
        !std::isfinite(resolved_distance) ||
-       requested_distance < kThirdPersonMinimumCollisionRadius ||
+       requested_distance < kThirdPersonMinimumCameraDistance ||
        resolved_distance < 80.0 || resolved_distance > 5000.0) {
     return;
   }
@@ -2623,7 +2658,7 @@ void UpdateThirdPersonCollisionRadius(void* controller) {
   const double requested_distance = std::hypot(
       std::hypot(requested_x, requested_z), requested_y);
   if (!std::isfinite(requested_distance) ||
-      requested_distance < kThirdPersonMinimumCollisionRadius ||
+      requested_distance < kThirdPersonMinimumCameraDistance ||
       requested_distance > 5000.0) {
     g_third_person_orbit_state.collision_confirmation_ticks = 0;
     g_third_person_orbit_state.collision_clear_ticks = 0;
@@ -2634,7 +2669,7 @@ void UpdateThirdPersonCollisionRadius(void* controller) {
       g_raw_camera_collision_capture.render_mesh_contact) {
     const double mesh_radius = std::clamp(
         g_raw_camera_collision_capture.render_mesh_radius,
-        kThirdPersonMinimumCollisionRadius,
+        kThirdPersonMinimumCameraDistance,
         requested_distance);
     const double previous_radius =
         g_third_person_orbit_state.collision_radius;
@@ -2811,39 +2846,16 @@ void __cdecl HookMode3Camera(void* controller) {
     g_third_person_orbit_state.render_mesh_contact_latched = true;
   }
 
-  if (unresolved_object_overlap &&
-      g_third_person_orbit_state.last_safe_position_valid) {
-    // Follow player translation while preserving the last safe camera offset;
-    // otherwise a moving actor would leave the retained endpoint behind.
-    std::array<int32_t, 3> retained = {
-        g_third_person_orbit_state.last_safe_position[0] +
-            (camera_player[0] -
-             g_third_person_orbit_state.last_safe_player[0]),
-        g_third_person_orbit_state.last_safe_position[1] +
-            (camera_player[1] -
-             g_third_person_orbit_state.last_safe_player[1]),
-        g_third_person_orbit_state.last_safe_position[2] +
-            (camera_player[2] -
-             g_third_person_orbit_state.last_safe_player[2])};
-    retained[1] = std::max(retained[1], minimum_camera_y);
-    collision_target = retained;
+  if (unresolved_object_overlap) {
+    // The sweep began with its collision volume already touching geometry.
+    // A translated previous endpoint or the retail camera may be on the far
+    // side of that one-sided mesh, so neither is a safe fallback. The sweep
+    // has deliberately returned the near-pivot point on the player's side;
+    // publish it immediately and keep it out of the last-safe cache.
+    collision_target[1] = std::max(collision_target[1], minimum_camera_y);
     if (g_debug_log) {
       AppendNativeLog(
-          "camera_safe_restore target=%d/%d/%d player=%d/%d/%d",
-          retained[0], retained[1], retained[2], camera_player[0],
-          camera_player[1], camera_player[2]);
-    }
-  } else if (unresolved_object_overlap && before_original_valid) {
-    // The first orbit tick may begin beside a prop before a custom endpoint
-    // has been accepted. The camera position published by the preceding
-    // retail tick is the only proven fallback in that narrow bootstrap case.
-    collision_target = before_original;
-    collision_target[1] =
-        std::max(collision_target[1], minimum_camera_y);
-    if (g_debug_log) {
-      AppendNativeLog(
-          "camera_safe_restore target=%d/%d/%d player=%d/%d/%d "
-          "source=retail_bootstrap",
+          "camera_overlap_collapse target=%d/%d/%d player=%d/%d/%d",
           collision_target[0], collision_target[1], collision_target[2],
           camera_player[0], camera_player[1], camera_player[2]);
     }
@@ -7785,7 +7797,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.72 render-mesh-owned spring arm: "
+      "Deathtrap native render overlay 0.0.73 overlap-safe spring arm: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "

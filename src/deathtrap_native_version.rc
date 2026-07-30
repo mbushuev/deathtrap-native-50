@@ -19,11 +19,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "vvmaksvv\0"
             VALUE "FileDescription", "Deathtrap Native 50 Overlay\0"
-            VALUE "FileVersion", "0.0.72\0"
+            VALUE "FileVersion", "0.0.73\0"
             VALUE "InternalName", "DINPUT.dll\0"
             VALUE "OriginalFilename", "DINPUT.dll\0"
             VALUE "ProductName", "Deathtrap Native 50 Overlay\0"
-            VALUE "ProductVersion", "0.0.72\0"
+            VALUE "ProductVersion", "0.0.73\0"
         END
     END
     BLOCK "VarFileInfo"
