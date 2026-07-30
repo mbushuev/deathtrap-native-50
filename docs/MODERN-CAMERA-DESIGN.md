@@ -361,6 +361,16 @@ contains the required surface clearance, only a small numerical backoff is
 applied to the accepted centre distance. The original native BSP resolver,
 immediate inward contraction and damped outward recovery remain unchanged.
 
+Version `0.0.71` separates exact object contact from ambiguous native follow
+motion. A mesh contact owns the spring arm while the same surface remains
+within a 24-unit hysteresis band, even as the player moves, eliminating the
+extend/re-contract cycle seen during running. Its already validated swept-
+sphere radius is applied directly rather than subtracting the native
+96-unit margin a second time. Native BSP results still use the captured
+pre-damping endpoint, but require temporal stability before changing the
+persistent arm; ordinary camera-follow lag can no longer trigger immediate
+pull-in.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

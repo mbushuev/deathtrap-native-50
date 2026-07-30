@@ -242,6 +242,18 @@ test. This supplies continuous contact across polygon boundaries and prevents
 edge tunnelling without treating the empty part of an object's bounding
 sphere as solid.
 
+The first `0.0.70` run verified the geometry but exposed a separate ownership
+loop. Player translation invalidated the contact anchor every source tick, the
+arm extended by 30--48 units, and the same mesh immediately contracted it
+again. At the same time, the raw native room resolver produced changing
+inward endpoints during unobstructed follow motion; treating every such sample
+as authoritative caused long radius staircases. Version `0.0.71` retains a
+render-mesh contact through a 24-unit forward band and does not release it
+merely because the player translated. Exact mesh contacts still pull in
+immediately. Native-only endpoints no longer bypass the retail limiter on one
+sample: the pre-damping value is retained for analysis and must pass the
+existing multi-tick stable-surface confirmation first.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
