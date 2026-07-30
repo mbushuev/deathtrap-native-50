@@ -391,7 +391,7 @@ double g_third_person_orbit_max_pitch_radians = 0.0;
 double g_custom_head_min_pitch_radians = 0.0;
 double g_custom_head_max_pitch_radians = 0.0;
 int32_t g_custom_head_height = 485;
-int32_t g_custom_head_forward_offset = 80;
+int32_t g_custom_head_forward_offset = 180;
 double g_third_person_orbit_min_radius = 650.0;
 double g_third_person_orbit_max_radius = 1800.0;
 double g_third_person_orbit_response_seconds = 0.05;
@@ -399,6 +399,7 @@ std::atomic<int32_t> g_third_person_orbit_input_x{0};
 std::atomic<int32_t> g_third_person_orbit_input_y{0};
 std::atomic<bool> g_third_person_orbit_input_active{false};
 std::atomic<uint64_t> g_third_person_orbit_input_sequence{0};
+std::atomic<uint64_t> g_last_controller_interaction_ms{0};
 
 struct ThirdPersonOrbitState {
   void* controller = nullptr;
@@ -410,6 +411,9 @@ struct ThirdPersonOrbitState {
   double filtered_input_x = 0.0;
   double filtered_input_y = 0.0;
   std::array<int32_t, 3> previous_player{};
+  std::array<int32_t, 3> requested_position{};
+  bool requested_position_valid = false;
+  uint32_t collision_confirmation_ticks = 0;
   uint64_t last_input_sequence = 0;
   uint64_t last_input_time_ms = 0;
   uint64_t applications = 0;
@@ -427,6 +431,22 @@ enum class CustomCameraViewMode : uint32_t {
 std::atomic<uint32_t> g_custom_camera_view_mode{
     static_cast<uint32_t>(CustomCameraViewMode::kModernThirdPerson)};
 std::atomic<bool> g_scripted_camera_override_active{false};
+
+struct RetailCameraArbitrationState {
+  bool raw_owner_active = false;
+  bool takeover_latched = false;
+  bool previous_player_valid = false;
+  bool previous_native_candidate_valid = false;
+  uintptr_t owner = 0;
+  std::array<int32_t, 3> previous_player{};
+  std::array<int32_t, 3> previous_native_candidate{};
+  double stationary_native_motion = 0.0;
+  uint32_t moving_ticks = 0;
+  uint64_t takeover_started_ms = 0;
+  uint64_t cooldown_until_ms = 0;
+};
+
+RetailCameraArbitrationState g_retail_camera_arbitration;
 
 CustomCameraViewMode CurrentCustomCameraViewMode() {
   const uint32_t raw = g_custom_camera_view_mode.load(
@@ -1271,20 +1291,121 @@ bool ReadActiveCameraMode(void* controller, uint8_t* mode) {
                        mode);
 }
 
-bool RetailScriptedCameraOwnsMode3(void* controller) {
-  if (!controller) {
+double CameraPositionDistance(const std::array<int32_t, 3>& a,
+                              const std::array<int32_t, 3>& b) {
+  return std::hypot(
+      std::hypot(static_cast<double>(a[0]) - static_cast<double>(b[0]),
+                 static_cast<double>(a[2]) - static_cast<double>(b[2])),
+      static_cast<double>(a[1]) - static_cast<double>(b[1]));
+}
+
+bool ReadRetailCameraOwner(void* controller, uintptr_t* owner) {
+  if (!controller || !owner) {
     return false;
   }
-  uintptr_t owner = 0;
+  *owner = 0;
   uint8_t flags = 0;
   return SafeReadValue(
              reinterpret_cast<const uint8_t*>(controller) +
                  kCameraControllerScriptOwnerOffset,
-             &owner) &&
-         owner &&
-         SafeReadValue(reinterpret_cast<const uint8_t*>(owner) + 8u,
+             owner) &&
+         *owner &&
+         SafeReadValue(reinterpret_cast<const uint8_t*>(*owner) + 8u,
                        &flags) &&
          (flags & kCameraScriptOwnerActiveMask) != 0;
+}
+
+void ClearRetailCameraTakeover(const char* reason, bool begin_cooldown) {
+  if (g_retail_camera_arbitration.takeover_latched) {
+    AppendNativeLog("camera_script takeover=OFF reason=%s", reason);
+  }
+  const uint64_t cooldown = begin_cooldown ? GetTickCount64() + 1200u : 0u;
+  g_retail_camera_arbitration = {};
+  g_retail_camera_arbitration.cooldown_until_ms = cooldown;
+}
+
+bool EvaluateRetailCameraTakeover(
+    void* controller, uintptr_t owner,
+    const std::array<int32_t, 3>& before_original) {
+  std::array<int32_t, 3> player{};
+  std::array<int32_t, 3> native_candidate{};
+  if (!ReadCameraPlayerPosition(controller, &player) ||
+      !SafeRead(reinterpret_cast<const uint8_t*>(controller) +
+                    kCameraControllerResolvedPositionOffset,
+                native_candidate.data(), sizeof(native_candidate))) {
+    ClearRetailCameraTakeover("invalid_native_sample", false);
+    return false;
+  }
+
+  RetailCameraArbitrationState& state = g_retail_camera_arbitration;
+  const bool owner_changed = !state.raw_owner_active || state.owner != owner;
+  double player_motion = 0.0;
+  if (state.previous_player_valid) {
+    player_motion = CameraPositionDistance(player, state.previous_player);
+  } else if (g_third_person_orbit_state.engaged) {
+    player_motion = CameraPositionDistance(
+        player, g_third_person_orbit_state.previous_player);
+  }
+  const bool player_stationary = player_motion <= 24.0;
+
+  double native_motion = 0.0;
+  if (!owner_changed && state.previous_native_candidate_valid) {
+    native_motion = CameraPositionDistance(
+        native_candidate, state.previous_native_candidate);
+  } else {
+    native_motion = CameraPositionDistance(native_candidate, before_original);
+  }
+
+  const uint64_t now_ms = GetTickCount64();
+  if (state.takeover_latched) {
+    state.moving_ticks = player_motion > 32.0 ? state.moving_ticks + 1u : 0u;
+    if (player_motion > 120.0 || state.moving_ticks >= 2u) {
+      ClearRetailCameraTakeover("player_resumed", true);
+      return false;
+    }
+    if (now_ms - state.takeover_started_ms > 10000u) {
+      ClearRetailCameraTakeover("timeout", true);
+      return false;
+    }
+  } else {
+    if (!player_stationary) {
+      state.stationary_native_motion = 0.0;
+    } else if (native_motion >= 20.0) {
+      state.stationary_native_motion += native_motion;
+    }
+
+    // owner+8 bit 7 is also present in ordinary fixed-camera zones, so it is
+    // only a prerequisite. A real lever/result reveal additionally moves the
+    // retail camera independently while gameplay has stopped moving Lara.
+    const uint64_t last_interaction_ms =
+        g_last_controller_interaction_ms.load(std::memory_order_acquire);
+    const bool recent_interaction = last_interaction_ms &&
+        now_ms - last_interaction_ms <= 1500u;
+    const bool snap_reveal =
+        player_stationary && native_motion >= 300.0 &&
+        (!owner_changed || recent_interaction);
+    const bool travelling_reveal =
+        player_stationary && state.stationary_native_motion >= 360.0;
+    if (now_ms >= state.cooldown_until_ms &&
+        (snap_reveal || travelling_reveal)) {
+      state.takeover_latched = true;
+      state.takeover_started_ms = now_ms;
+      state.moving_ticks = 0;
+      AppendNativeLog(
+          "camera_script takeover=ON owner=%08llX player_motion=%.1f "
+          "native_motion=%.1f accumulated=%.1f",
+          static_cast<unsigned long long>(owner), player_motion,
+          native_motion, state.stationary_native_motion);
+    }
+  }
+
+  state.raw_owner_active = true;
+  state.owner = owner;
+  state.previous_player = player;
+  state.previous_player_valid = true;
+  state.previous_native_candidate = native_candidate;
+  state.previous_native_candidate_valid = true;
+  return state.takeover_latched;
 }
 
 bool InitializeThirdPersonOrbit(void* controller, int32_t native_x,
@@ -1501,6 +1622,9 @@ bool BuildThirdPersonOrbitPosition(void* controller,
       active_radius));
   const int32_t orbit_z = player[2] + static_cast<int32_t>(std::lround(
       std::cos(g_third_person_orbit_state.yaw) * horizontal));
+  g_third_person_orbit_state.requested_position = {
+      orbit_x, orbit_y, orbit_z};
+  g_third_person_orbit_state.requested_position_valid = true;
   g_third_person_orbit_state.previous_player = player;
   ++g_third_person_orbit_state.applications;
   if (g_debug_log &&
@@ -1524,6 +1648,7 @@ bool BuildThirdPersonOrbitPosition(void* controller,
 void UpdateThirdPersonCollisionRadius(void* controller) {
   if (!controller || !g_third_person_orbit_state.engaged ||
       g_third_person_orbit_state.controller != controller ||
+      !g_third_person_orbit_state.requested_position_valid ||
       CurrentCustomCameraViewMode() !=
           CustomCameraViewMode::kModernThirdPerson) {
     return;
@@ -1536,18 +1661,62 @@ void UpdateThirdPersonCollisionRadius(void* controller) {
                 resolved.data(), sizeof(resolved))) {
     return;
   }
-  const double dx = static_cast<double>(resolved[0] - player[0]);
-  const double dy = static_cast<double>(resolved[1] - player[1]);
-  const double dz = static_cast<double>(resolved[2] - player[2]);
-  const double distance = std::hypot(std::hypot(dx, dz), dy);
-  if (!std::isfinite(distance) || distance < 160.0 || distance > 5000.0) {
+  const auto& requested = g_third_person_orbit_state.requested_position;
+  const double requested_x = static_cast<double>(requested[0] - player[0]);
+  const double requested_y = static_cast<double>(requested[1] - player[1]);
+  const double requested_z = static_cast<double>(requested[2] - player[2]);
+  const double resolved_x = static_cast<double>(resolved[0] - player[0]);
+  const double resolved_y = static_cast<double>(resolved[1] - player[1]);
+  const double resolved_z = static_cast<double>(resolved[2] - player[2]);
+  const double requested_distance = std::hypot(
+      std::hypot(requested_x, requested_z), requested_y);
+  const double resolved_distance = std::hypot(
+      std::hypot(resolved_x, resolved_z), resolved_y);
+  if (!std::isfinite(requested_distance) ||
+      !std::isfinite(resolved_distance) || requested_distance < 160.0 ||
+      resolved_distance < 160.0 || resolved_distance > 5000.0) {
+    g_third_person_orbit_state.collision_confirmation_ticks = 0;
     return;
   }
-  // The retail resolver at 0x2DEF0 owns world collision. We only feed its
-  // measured contraction back into the next arm length, never infer walls
-  // from pixels and never write collision state ourselves.
-  if (distance + 36.0 < g_third_person_orbit_state.collision_radius) {
-    g_third_person_orbit_state.collision_radius = distance;
+
+  const double direction_dot =
+      (requested_x * resolved_x + requested_y * resolved_y +
+       requested_z * resolved_z) /
+      std::max(1.0, requested_distance * resolved_distance);
+  const bool aligned_contraction =
+      direction_dot >= 0.94 &&
+      resolved_distance + 48.0 < requested_distance &&
+      resolved_distance + 36.0 <
+          g_third_person_orbit_state.collision_radius;
+  if (!aligned_contraction) {
+    g_third_person_orbit_state.collision_confirmation_ticks = 0;
+    return;
+  }
+
+  const uint32_t confirmations =
+      ++g_third_person_orbit_state.collision_confirmation_ticks;
+  const bool severe_obstruction =
+      direction_dot >= 0.985 && resolved_distance < requested_distance * 0.55;
+  if (confirmations < 2u && !severe_obstruction) {
+    return;
+  }
+
+  // The retail resolver at 0x2DEF0 owns world collision. Accept only a
+  // confirmed point on the requested spring-arm ray. Cross-ray points are
+  // other native camera constraints and previously made the radius jump from
+  // roughly 1700 to 230 and back while merely rotating. Contract quickly but
+  // continuously; outward recovery remains damped in the builder above.
+  const double previous_radius = g_third_person_orbit_state.collision_radius;
+  g_third_person_orbit_state.collision_radius = std::max(
+      resolved_distance,
+      g_third_person_orbit_state.collision_radius - 180.0);
+  if (g_debug_log && previous_radius -
+                         g_third_person_orbit_state.collision_radius > 1.0) {
+    AppendNativeLog(
+        "camera_collision contract radius=%.1f->%.1f resolved=%.1f "
+        "requested=%.1f dot=%.3f confirmations=%u",
+        previous_radius, g_third_person_orbit_state.collision_radius,
+        resolved_distance, requested_distance, direction_dot, confirmations);
   }
 }
 
@@ -1559,7 +1728,32 @@ void __cdecl HookMode3Camera(void* controller) {
     return;
   }
 
-  const bool scripted = RetailScriptedCameraOwnsMode3(controller);
+  const uintptr_t base = reinterpret_cast<uintptr_t>(controller);
+  std::array<int32_t, 3> before_original{};
+  const bool before_original_valid = SafeRead(
+      reinterpret_cast<const uint8_t*>(controller) +
+          kCameraControllerResolvedPositionOffset,
+      before_original.data(), sizeof(before_original));
+  uintptr_t retail_owner = 0;
+  const bool raw_retail_owner =
+      ReadRetailCameraOwner(controller, &retail_owner);
+  bool original_called = false;
+  bool scripted = false;
+  if (raw_retail_owner) {
+    // Always let the retail callback expose its candidate first. Ordinary
+    // fixed-camera zones use the same owner flag as lever-result reveals; the
+    // temporal arbitration below distinguishes them by actual camera/player
+    // motion, after which the custom spring arm may safely overwrite only the
+    // ordinary fixed-zone candidate.
+    g_original_mode3_camera(controller);
+    original_called = true;
+    scripted = before_original_valid && EvaluateRetailCameraTakeover(
+                                          controller, retail_owner,
+                                          before_original);
+  } else if (g_retail_camera_arbitration.raw_owner_active ||
+             g_retail_camera_arbitration.takeover_latched) {
+    ClearRetailCameraTakeover("owner_clear", false);
+  }
   g_scripted_camera_override_active.store(scripted,
                                            std::memory_order_release);
   if (scripted) {
@@ -1570,23 +1764,25 @@ void __cdecl HookMode3Camera(void* controller) {
       g_third_person_orbit_state.filtered_input_y = 0.0;
       AppendNativeLog("camera_orbit suspend reason=retail_script_owner");
     }
-    g_original_mode3_camera(controller);
     return;
   }
 
-  const uintptr_t base = reinterpret_cast<uintptr_t>(controller);
   std::array<int32_t, 3> native{};
   if (!SafeRead(reinterpret_cast<const void*>(
                     base + kCameraControllerDesiredPositionOffset),
                 native.data(), sizeof(native))) {
     ResetThirdPersonOrbit("native_desired_position");
-    g_original_mode3_camera(controller);
+    if (!original_called) {
+      g_original_mode3_camera(controller);
+    }
     return;
   }
 
   std::array<int32_t, 3> orbit{};
   if (!BuildThirdPersonOrbitPosition(controller, native, &orbit)) {
-    g_original_mode3_camera(controller);
+    if (!original_called) {
+      g_original_mode3_camera(controller);
+    }
     return;
   }
 
@@ -1599,7 +1795,9 @@ void __cdecl HookMode3Camera(void* controller) {
       !SafeReadValue(reinterpret_cast<const void*>(room_holder),
                      &room_or_sector)) {
     ResetThirdPersonOrbit("room_pointer");
-    g_original_mode3_camera(controller);
+    if (!original_called) {
+      g_original_mode3_camera(controller);
+    }
     return;
   }
 
@@ -2653,6 +2851,11 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
   const WORD buttons = pad.wButtons;
   const WORD pressed = buttons & ~g_previous_xinput_buttons;
   if (gameplay) {
+    if (!selector_captures_controls &&
+        (pressed & XINPUT_GAMEPAD_X) != 0) {
+      g_last_controller_interaction_ms.store(GetTickCount64(),
+                                              std::memory_order_release);
+    }
     const bool strafe_modifier =
         (buttons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
     InjectVirtualKey(InjectedKey::kW, left_y > g_xinput_movement_threshold);
@@ -4424,10 +4627,7 @@ bool ApplyCustomHeadViewTarget(SceneSnapshot* current) {
     return false;
   }
   void* const controller = g_dungeon_base + kCameraControllerRva;
-  uint8_t active_mode = 0;
-  if (!ReadActiveCameraMode(controller, &active_mode) ||
-      active_mode != kCameraModeThirdPerson ||
-      g_third_person_orbit_state.controller != controller) {
+  if (g_third_person_orbit_state.controller != controller) {
     return false;
   }
   auto camera = current->nodes.find(current->camera);
@@ -4441,11 +4641,10 @@ bool ApplyCustomHeadViewTarget(SceneSnapshot* current) {
   // expected outward view while preserving the model, hands, weapon, shadow,
   // culling mode and gameplay state. In particular this never calls the
   // retail mode-4 callback, which also mutates persistent visibility flags.
-  const double horizontal = std::cos(g_third_person_orbit_state.pitch);
   const double forward_x =
-      -std::sin(g_third_person_orbit_state.yaw) * horizontal;
+      -std::sin(g_third_person_orbit_state.yaw);
   const double forward_z =
-      -std::cos(g_third_person_orbit_state.yaw) * horizontal;
+      -std::cos(g_third_person_orbit_state.yaw);
   const std::array<int32_t, 3> eye = {
       player->second.world.values[9] + static_cast<int32_t>(std::lround(
           forward_x * static_cast<double>(g_custom_head_forward_offset))),
@@ -6385,7 +6584,7 @@ void InitializePatchState() {
   g_custom_head_height = std::clamp(
       ConfiguredInteger(L"Camera", L"HeadHeight", 485), 300, 700);
   g_custom_head_forward_offset = std::clamp(
-      ConfiguredInteger(L"Camera", L"HeadForwardOffset", 80), 0, 180);
+      ConfiguredInteger(L"Camera", L"HeadForwardOffset", 180), 120, 300);
   g_third_person_orbit_min_radius = static_cast<double>(std::clamp(
       ConfiguredInteger(L"Camera", L"MinimumRadius", 650), 200, 3000));
   g_third_person_orbit_max_radius = static_cast<double>(std::clamp(
@@ -6497,7 +6696,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.57 three-mode collision-aware camera: "
+      "Deathtrap native render overlay 0.0.58 cinematic-arbitrated camera: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "
@@ -6667,8 +6866,8 @@ bool InstallDeathtrapNativeRenderHooks() {
                                              std::memory_order_release);
         AppendNativeLog(
             "camera_orbit hook=active rva=%08llX configure=%08llX "
-            "mode3_free_path_override=1 scripted_owner_priority=1 "
-            "native_pipeline=1 spring_feedback=1 "
+            "mode3_free_path_override=1 cinematic_arbitration=1 "
+            "native_pipeline=1 ray_validated_spring_feedback=1 "
             "head_pose=render_only body_safe=1 transition=SAFE_CUT",
             static_cast<unsigned long long>(kMode3CameraRva),
             static_cast<unsigned long long>(kConfigureCameraRva));
