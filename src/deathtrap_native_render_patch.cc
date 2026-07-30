@@ -430,6 +430,10 @@ double g_third_person_orbit_min_radius = 650.0;
 double g_third_person_orbit_max_radius = 1800.0;
 double g_third_person_orbit_preferred_radius = 1400.0;
 double g_third_person_orbit_response_seconds = 0.05;
+// Keep the camera centre outside the 96-unit swept sphere, but do not retain
+// the old 180-unit blind zone.  Contacts at exactly 180 in v0.0.71 proved
+// that the arm was being clamped while its volume was still inside a corner.
+constexpr double kThirdPersonMinimumCollisionRadius = 96.0;
 std::atomic<int32_t> g_third_person_orbit_input_x{0};
 std::atomic<int32_t> g_third_person_orbit_input_y{0};
 std::atomic<bool> g_third_person_orbit_input_active{false};
@@ -1879,7 +1883,8 @@ bool BuildThirdPersonOrbitPosition(void* controller,
     }
   }
   const double active_radius = std::max(
-      180.0, g_third_person_orbit_state.collision_radius);
+      kThirdPersonMinimumCollisionRadius,
+      g_third_person_orbit_state.collision_radius);
   const double horizontal = active_radius *
                             std::cos(g_third_person_orbit_state.pitch);
   const int32_t orbit_x = player[0] + static_cast<int32_t>(std::lround(
@@ -2360,7 +2365,8 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   const double ray_z = static_cast<double>(requested[2] - player[2]);
   const double requested_distance =
       std::hypot(std::hypot(ray_x, ray_z), ray_y);
-  if (!std::isfinite(requested_distance) || requested_distance < 240.0 ||
+  if (!std::isfinite(requested_distance) ||
+      requested_distance < kThirdPersonMinimumCollisionRadius ||
       requested_distance > 5000.0) {
     return false;
   }
@@ -2389,7 +2395,8 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   constexpr double kBroadPhaseInflation = kCameraSphereRadius;
   constexpr double kBoundsMotionTolerance = 16.0;
   constexpr double kRadiusMotionTolerance = 8.0;
-  constexpr double kMinimumCameraDistance = 180.0;
+  constexpr double kMinimumCameraDistance =
+      kThirdPersonMinimumCollisionRadius;
 
   double nearest_distance = requested_distance;
   // Probe a short distance beyond the currently contracted arm. Without
@@ -2560,8 +2567,9 @@ void __cdecl HookCameraCollisionResolve(
   const double resolved_distance = std::hypot(
       std::hypot(resolved_x, resolved_z), resolved_y);
   if (!std::isfinite(requested_distance) ||
-      !std::isfinite(resolved_distance) || requested_distance < 160.0 ||
-      resolved_distance < 160.0 || resolved_distance > 5000.0) {
+       !std::isfinite(resolved_distance) ||
+       requested_distance < kThirdPersonMinimumCollisionRadius ||
+       resolved_distance < 80.0 || resolved_distance > 5000.0) {
     return;
   }
 
@@ -2605,39 +2613,18 @@ void UpdateThirdPersonCollisionRadius(void* controller) {
     return;
   }
   std::array<int32_t, 3> player{};
-  std::array<int32_t, 3> resolved{};
-  if (!ReadCameraPlayerPosition(controller, &player) ||
-      !SafeRead(reinterpret_cast<const uint8_t*>(controller) +
-                    kCameraControllerResolvedPositionOffset,
-                resolved.data(), sizeof(resolved))) {
+  if (!ReadCameraPlayerPosition(controller, &player)) {
     return;
-  }
-  const bool authoritative_collision =
-      g_raw_camera_collision_capture.controller == controller &&
-      g_raw_camera_collision_capture.authoritative_valid;
-  if (authoritative_collision) {
-    resolved = g_raw_camera_collision_capture.authoritative;
-  } else if (g_raw_camera_collision_capture.controller == controller &&
-             g_raw_camera_collision_capture.raw_valid) {
-    // Consume the pre-damping resolver endpoint. The published position also
-    // contains the retail 0x6E movement limiter, which walks through a long
-    // series of false contractions while the player is merely running.
-    resolved = g_raw_camera_collision_capture.raw;
   }
   const auto& requested = g_third_person_orbit_state.requested_position;
   const double requested_x = static_cast<double>(requested[0] - player[0]);
   const double requested_y = static_cast<double>(requested[1] - player[1]);
   const double requested_z = static_cast<double>(requested[2] - player[2]);
-  const double resolved_x = static_cast<double>(resolved[0] - player[0]);
-  const double resolved_y = static_cast<double>(resolved[1] - player[1]);
-  const double resolved_z = static_cast<double>(resolved[2] - player[2]);
   const double requested_distance = std::hypot(
       std::hypot(requested_x, requested_z), requested_y);
-  const double resolved_distance = std::hypot(
-      std::hypot(resolved_x, resolved_z), resolved_y);
   if (!std::isfinite(requested_distance) ||
-      !std::isfinite(resolved_distance) || requested_distance < 160.0 ||
-      resolved_distance < 160.0 || resolved_distance > 5000.0) {
+      requested_distance < kThirdPersonMinimumCollisionRadius ||
+      requested_distance > 5000.0) {
     g_third_person_orbit_state.collision_confirmation_ticks = 0;
     g_third_person_orbit_state.collision_clear_ticks = 0;
     return;
@@ -2646,7 +2633,8 @@ void UpdateThirdPersonCollisionRadius(void* controller) {
   if (g_raw_camera_collision_capture.controller == controller &&
       g_raw_camera_collision_capture.render_mesh_contact) {
     const double mesh_radius = std::clamp(
-        g_raw_camera_collision_capture.render_mesh_radius, 180.0,
+        g_raw_camera_collision_capture.render_mesh_radius,
+        kThirdPersonMinimumCollisionRadius,
         requested_distance);
     const double previous_radius =
         g_third_person_orbit_state.collision_radius;
@@ -2674,117 +2662,16 @@ void UpdateThirdPersonCollisionRadius(void* controller) {
     return;
   }
 
-  // The native resolver also damps angular camera travel, and mouse samples
-  // are asynchronous to the 50 Hz engine tick. Candidate-distance stability
-  // below distinguishes that changing lag from a real surface; do not disable
-  // collision observation during rotation because thin props and stairs must
-  // be able to pull the camera in while the ray is moving.
-  const uint64_t now_ms = GetTickCount64();
-  const bool recently_rotating =
-      now_ms - g_third_person_orbit_state.last_orbit_activity_ms <= 180u;
-
-  const double direction_dot =
-      (requested_x * resolved_x + requested_y * resolved_y +
-       requested_z * resolved_z) /
-      std::max(1.0, requested_distance * resolved_distance);
-  const bool aligned_contraction =
-      direction_dot >= 0.94 &&
-      resolved_distance + 48.0 < requested_distance &&
-      resolved_distance + 36.0 <
-          g_third_person_orbit_state.collision_radius;
-  if (!aligned_contraction) {
-    g_third_person_orbit_state.collision_confirmation_ticks = 0;
-    g_third_person_orbit_state.collision_candidate_radius = 0.0;
-    g_third_person_orbit_state.collision_candidate_ticks = 0;
-    g_third_person_orbit_state.collision_clear_ticks =
-        std::min(g_third_person_orbit_state.collision_clear_ticks + 1u,
-                 120u);
-    return;
-  }
-  g_third_person_orbit_state.collision_clear_ticks = 0;
-
-  // A physical surface resolves repeatedly at almost the same distance. The
-  // native camera's angular smoothing instead walks through a long sequence
-  // of different distances (the v0.0.63 failure was 1342, 1272, 1128 ...
-  // 165). Require a stable candidate before changing persistent arm length.
-  constexpr double kCollisionSurfaceMargin = 96.0;
-  constexpr double kCandidateStabilityTolerance = 42.0;
-  const double candidate_radius =
-      std::max(180.0, resolved_distance - kCollisionSurfaceMargin);
-  if (authoritative_collision) {
-    const double previous_radius =
-        g_third_person_orbit_state.collision_radius;
-    g_third_person_orbit_state.collision_radius = std::max(
-        180.0, std::min(g_third_person_orbit_state.collision_radius,
-                        candidate_radius));
-    g_third_person_orbit_state.last_confirmed_collision_ms = now_ms;
-    g_third_person_orbit_state.collision_contact_direction = {
-        requested_x / requested_distance,
-        requested_y / requested_distance,
-        requested_z / requested_distance};
-    g_third_person_orbit_state.collision_contact_player = player;
-    g_third_person_orbit_state.collision_contact_valid = true;
-    g_third_person_orbit_state.collision_candidate_radius = candidate_radius;
-    g_third_person_orbit_state.collision_candidate_ticks = 1u;
-    g_third_person_orbit_state.collision_confirmation_ticks = 1u;
-    if (g_debug_log &&
-        previous_radius - g_third_person_orbit_state.collision_radius > 1.0) {
-      AppendNativeLog(
-          "camera_collision immediate radius=%.1f->%.1f raw=%.1f "
-          "requested=%.1f dot=%.3f source=pre_damping",
-          previous_radius, g_third_person_orbit_state.collision_radius,
-          resolved_distance, requested_distance, direction_dot);
-    }
-    return;
-  }
-  if (g_third_person_orbit_state.collision_candidate_ticks == 0u ||
-      std::abs(candidate_radius -
-               g_third_person_orbit_state.collision_candidate_radius) >
-          kCandidateStabilityTolerance) {
-    g_third_person_orbit_state.collision_candidate_radius = candidate_radius;
-    g_third_person_orbit_state.collision_candidate_ticks = 1u;
-    g_third_person_orbit_state.collision_confirmation_ticks = 1u;
-    return;
-  }
-  g_third_person_orbit_state.collision_candidate_radius =
-      g_third_person_orbit_state.collision_candidate_radius * 0.65 +
-      candidate_radius * 0.35;
-  const uint32_t confirmations =
-      ++g_third_person_orbit_state.collision_candidate_ticks;
-  g_third_person_orbit_state.collision_confirmation_ticks = confirmations;
-  const bool deep_obstruction =
-      direction_dot >= 0.97 &&
-      resolved_distance < requested_distance * 0.80;
-  const uint32_t required_confirmations =
-      recently_rotating && deep_obstruction ? 2u : 3u;
-  if (confirmations < required_confirmations) {
-    return;
-  }
-
-  // The retail resolver at 0x2DEF0 owns world collision. Accept only a
-  // confirmed point on the requested spring-arm ray. Cross-ray points are
-  // other native camera constraints and previously made the radius jump from
-  // roughly 1700 to 230 and back while merely rotating. Contract quickly but
-  // continuously; outward recovery remains damped in the builder above.
-  const double previous_radius = g_third_person_orbit_state.collision_radius;
-  g_third_person_orbit_state.collision_radius = std::max(
-      180.0, std::min(g_third_person_orbit_state.collision_radius,
-                      g_third_person_orbit_state.collision_candidate_radius));
-  g_third_person_orbit_state.last_confirmed_collision_ms = now_ms;
-  g_third_person_orbit_state.collision_contact_direction = {
-      requested_x / requested_distance,
-      requested_y / requested_distance,
-      requested_z / requested_distance};
-  g_third_person_orbit_state.collision_contact_player = player;
-  g_third_person_orbit_state.collision_contact_valid = true;
-  if (g_debug_log && previous_radius -
-                         g_third_person_orbit_state.collision_radius > 1.0) {
-    AppendNativeLog(
-        "camera_collision contract radius=%.1f->%.1f resolved=%.1f "
-        "requested=%.1f dot=%.3f confirmations=%u",
-        previous_radius, g_third_person_orbit_state.collision_radius,
-        resolved_distance, requested_distance, direction_dot, confirmations);
-  }
+  // The retail resolver is retained inside the game's configure call as a
+  // same-frame room/BSP safety net, but it must never feed persistent modern
+  // spring-arm state.  Its output contains the old camera's follow damping,
+  // and v0.0.71 logs showed 63 false contractions while simply running.  The
+  // exact render-mesh swept sphere above is now the sole owner of arm length.
+  g_third_person_orbit_state.collision_confirmation_ticks = 0;
+  g_third_person_orbit_state.collision_candidate_radius = 0.0;
+  g_third_person_orbit_state.collision_candidate_ticks = 0;
+  g_third_person_orbit_state.collision_clear_ticks =
+      std::min(g_third_person_orbit_state.collision_clear_ticks + 1u, 120u);
 }
 
 void __cdecl HookMode3Camera(void* controller) {
@@ -7898,7 +7785,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.71 stable-contact spring arm: "
+      "Deathtrap native render overlay 0.0.72 render-mesh-owned spring arm: "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
       "integer x3 presentation "

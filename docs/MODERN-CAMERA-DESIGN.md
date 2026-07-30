@@ -371,6 +371,16 @@ pre-damping endpoint, but require temporal stability before changing the
 persistent arm; ordinary camera-follow lag can no longer trigger immediate
 pull-in.
 
+Version `0.0.72` removes the remaining ownership conflict exposed by the
+`0.0.71` runtime log. The old resolver produced 63 persistent arm contractions
+during ordinary running, walking the radius through unrelated follow-camera
+distances even when orbit input was idle. It remains active as a same-frame
+room/BSP safety stage, but only exact swept-sphere contacts against render
+meshes may now change the modern spring-arm length. The former 180-unit hard
+minimum is also reduced to the swept sphere's 96-unit radius: repeated
+`contact=180` events proved that the old clamp could leave the camera volume
+partly inside a tight corner with no legal way to retreat further inward.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
