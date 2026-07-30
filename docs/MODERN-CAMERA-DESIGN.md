@@ -435,19 +435,6 @@ radius, the exact submitted point is now committed to the controller history,
 camera node and published matrix after `0x2F380`. At full radius, the retail
 path remains untouched.
 
-Version `0.0.82` fixes a separate geometric blind spot proven by the final
-`0.0.81` trace. The spring-arm direction and the published camera forward
-axis differed by roughly 37 degrees near lever resource `12708`. A 96-unit
-centre sphere could therefore remain clear while the side of the actual view
-footprint crossed the object's one-sided polygon and exposed its black back
-face. The render-mesh narrow phase now supplements the centre sphere with an
-oriented 4:3 footprint derived from the published camera right/up basis. Eight
-small swept samples cover its sides and corners. The query runs once with the
-current basis before spring-arm integration and once with the final basis
-after the retail configure call; a newly detected contraction is committed in
-the same exact tick. This is geometric rejection, not pixel analysis, so dark
-rooms, loading frames and deliberate fades are never frozen or replaced.
-
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
