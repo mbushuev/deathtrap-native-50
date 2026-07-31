@@ -299,6 +299,9 @@ state. Inside `MovementForwardArcDegrees=85`, the bridge releases A/D, asserts
 only forward motion and substitutes a bounded turn at the native `0x44DD0`
 locomotion gateway. A 20-degree exit margin prevents repeated state changes at
 the boundary. Set the value to `0` to restore the stable tank mapping.
+`CameraRelativeInvertY=1` corrects the tested controller's physical vertical
+axis before applying the camera basis; use `0` only when another controller
+mapper already supplies the opposite sign.
 `MovementTurnDegreesPerTick=12` limits the controlled per-source-tick turn.
 Running engages at `RunThresholdPercent=50` and
 disengages only below `RunReleaseThresholdPercent=30`; this hysteresis prevents

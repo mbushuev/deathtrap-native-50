@@ -975,6 +975,14 @@ accepts the bounded camera-relative delta while preserving native root motion,
 animation, collision and walk/run selection. A 20-degree exit margin around
 the configured entry arc provides state hysteresis.
 
+The initial cardinal test of `0.0.120` exposed an input-axis difference, not a
+state-machine failure: physical backward arrived as the positive vertical
+component and therefore matched camera forward. Native root motion shows that
+heading zero advances world +Z, ruling out a global 180-degree basis change.
+`0.0.121` inverts only left-stick Y for camera-relative third-person movement;
+`CameraRelativeInvertY=0` supports mappers that already provide the expected
+sign. The controller resolver and two-phase steering remain unchanged.
+
 ### Phase E: tuning and release
 
 - Expose sensitivity, inversion, pitch limits, shoulder side, distance,

@@ -1098,3 +1098,14 @@ the native turn-in-place state. Once inside the configured forward arc, both
 A/D actions are released, W alone enters locomotion, and `0x44DD0` receives the
 bounded camera-relative delta. The forward phase is not abandoned until the
 error exceeds the configured arc by 20 degrees, preventing boundary chatter.
+
+The first `0.0.120` cardinal-direction run then proved a separate input-axis
+mismatch. With orbit yaw 180 degrees, physical backward produced target
+heading approximately 0 while the live actor was also heading 0, so backward
+alone entered forward locomotion. Native root-motion records independently
+show that heading 0 advances world +Z, ruling out a 180-degree actor-heading
+basis correction (which would also exchange left and right). Version `0.0.121`
+therefore inverts only the camera-relative left-stick Y component before the
+camera basis is applied. `CameraRelativeInvertY=0` is available for controller
+mappers that already expose the expected sign. Controller identity, state
+hysteresis and the native locomotion hook are otherwise unchanged.

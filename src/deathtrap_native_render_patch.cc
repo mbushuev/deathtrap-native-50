@@ -713,6 +713,7 @@ double g_xinput_movement_threshold = 0.14;
 double g_xinput_run_threshold = 0.50;
 double g_xinput_run_release_threshold = 0.30;
 bool g_xinput_camera_relative_movement = true;
+bool g_xinput_camera_relative_invert_y = true;
 double g_xinput_movement_turn_degrees_per_tick = 12.0;
 double g_xinput_movement_forward_arc_degrees = 85.0;
 bool g_xinput_run_active = false;
@@ -6231,14 +6232,18 @@ bool CameraRelativeDesiredHeading(const NormalizedStick2& stick,
       1000000.0;
   // Orbit yaw points from the player focus toward the camera.  Movement-up
   // uses the opposite flattened vector; screen-right is its perpendicular.
-  // Converting the combined vector to the game's 1024-unit turn keeps the
-  // target in the same angle convention consumed by Dungeon.dll+0x44EA0.
+  // The tested controller path reports its physical vertical stick direction
+  // opposite to the screen-space convention used here. Keep that correction
+  // separate from the world/actor heading basis so left and right are not
+  // exchanged with each other.
   const double forward_x = -std::sin(camera_yaw);
   const double forward_z = -std::cos(camera_yaw);
   const double right_x = -forward_z;
   const double right_z = forward_x;
-  const double desired_x = forward_x * stick.y + right_x * stick.x;
-  const double desired_z = forward_z * stick.y + right_z * stick.x;
+  const double movement_y =
+      g_xinput_camera_relative_invert_y ? -stick.y : stick.y;
+  const double desired_x = forward_x * movement_y + right_x * stick.x;
+  const double desired_z = forward_z * movement_y + right_z * stick.x;
   if (std::hypot(desired_x, desired_z) <= 0.000001) {
     return false;
   }
@@ -6367,6 +6372,15 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     const bool movement_requested =
         movement_stick.magnitude > g_xinput_movement_threshold;
     if (camera_relative_available && movement_requested) {
+      if (g_debug_log && !g_xinput_camera_relative_was_active) {
+        AppendNativeLog(
+            "xinput movement stick raw=%d/%d normalized=%.3f/%.3f "
+            "camera_y_invert=%u",
+            static_cast<int>(pad.sThumbLX),
+            static_cast<int>(pad.sThumbLY), movement_stick.x,
+            movement_stick.y,
+            g_xinput_camera_relative_invert_y ? 1u : 0u);
+      }
       const int32_t heading_error =
           PlayerHeadingDelta(desired_heading, current_heading);
       const int32_t forward_enter_arc = static_cast<int32_t>(std::lround(
@@ -10546,6 +10560,8 @@ void InitializePatchState() {
   }
   g_xinput_camera_relative_movement =
       ConfiguredInteger(L"XInput", L"CameraRelativeMovement", 1) != 0;
+  g_xinput_camera_relative_invert_y =
+      ConfiguredInteger(L"XInput", L"CameraRelativeInvertY", 1) != 0;
   g_xinput_movement_turn_degrees_per_tick =
       static_cast<double>(std::clamp(
           ConfiguredInteger(L"XInput", L"MovementTurnDegreesPerTick", 12),
@@ -10590,8 +10606,9 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.120 validated movement-controller "
-      "identity and hysteretic camera-relative locomotion with "
+      "Deathtrap native render overlay 0.0.121 corrected camera-relative "
+      "left-stick Y with validated movement-controller identity and "
+      "hysteretic camera-relative locomotion with "
       "stable selector ownership, v0.0.115 camera, Start dispatch and "
       "retail first-person with progressive mesh tangent ownership "
       "(complete native wall/floor/orientation result plus transactional "
@@ -10629,7 +10646,7 @@ void InitializePatchState() {
       "are observation-only and commit through Dungeon.dll+0x90610 once per "
       "real gameplay tick (enabled=%u invert=%u); XInput controller=%u "
       "base_bindings=%u hold_ms=%u deadzones=%d/%d radial=%d center_y=%d "
-      "camera_relative_movement=%u turn=%.0fdeg arc=%.0fdeg "
+      "camera_relative_movement=%u invert_y=%u turn=%.0fdeg arc=%.0fdeg "
       "vibration=%u/%u%% action=%u/%u/%u/%ums event=%u/%u/%u/%u/%u/"
       "%u/%ums heavy=%uhp/%ums "
       "available=%u camera_probe=%u orbit=%u sensitivity=%d/%ddeg "
@@ -10645,6 +10662,7 @@ void InitializePatchState() {
       g_xinput_selector_radius,
       g_xinput_selector_center_y,
       g_xinput_camera_relative_movement ? 1u : 0u,
+      g_xinput_camera_relative_invert_y ? 1u : 0u,
       g_xinput_movement_turn_degrees_per_tick,
       g_xinput_movement_forward_arc_degrees,
       g_xinput_vibration_enabled ? 1u : 0u,
