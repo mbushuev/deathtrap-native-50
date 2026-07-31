@@ -542,6 +542,15 @@ struct ThirdPersonOrbitState {
 };
 
 ThirdPersonOrbitState g_third_person_orbit_state;
+struct CameraPresentationFollowState {
+  bool initialized = false;
+  void* controller = nullptr;
+  std::array<int32_t, 3> focus{};
+  uint64_t smoothed_ticks = 0;
+  uint64_t held_ticks = 0;
+  uint64_t hard_cuts = 0;
+};
+CameraPresentationFollowState g_camera_presentation_follow;
 std::mutex g_camera_collision_mesh_mutex;
 std::unordered_map<uintptr_t, CameraCollisionMesh>
     g_camera_collision_meshes;
@@ -2167,6 +2176,7 @@ void ResetThirdPersonOrbit(const char* reason) {
   }
   ClearCameraMeshPresentationLatch(reason);
   g_third_person_orbit_state = {};
+  g_camera_presentation_follow = {};
 }
 
 bool BuildThirdPersonOrbitPosition(void* controller,
@@ -6904,6 +6914,187 @@ Matrix3x4 MultiplyAffine(const Matrix3x4& local,
   return world;
 }
 
+bool ApplyModernCameraPresentationFollow(SceneSnapshot* current) {
+  if (!current || !current->camera ||
+      !g_third_person_orbit_state.engaged ||
+      g_third_person_orbit_state.suspended ||
+      g_third_person_orbit_state.orbit_input_active_this_tick ||
+      g_scripted_camera_override_active.load(std::memory_order_acquire) ||
+      !g_dungeon_base) {
+    g_camera_presentation_follow = {};
+    return false;
+  }
+
+  void* const controller = g_dungeon_base + kCameraControllerRva;
+  if (g_third_person_orbit_state.controller != controller) {
+    g_camera_presentation_follow = {};
+    return false;
+  }
+  {
+    std::lock_guard<std::mutex> lock(
+        g_camera_mesh_presentation_latch_mutex);
+    if (g_camera_mesh_presentation_latch.active) {
+      g_camera_presentation_follow = {};
+      return false;
+    }
+  }
+
+  auto camera = current->nodes.find(current->camera);
+  const auto previous_camera =
+      g_previous_snapshot.nodes.find(current->camera);
+  std::array<int32_t, 3> focus{};
+  if (camera == current->nodes.end() ||
+      previous_camera == g_previous_snapshot.nodes.end() ||
+      g_previous_snapshot.root != current->root ||
+      !ReadCameraFocusPosition(controller, &focus)) {
+    g_camera_presentation_follow = {};
+    return false;
+  }
+
+  CameraPresentationFollowState& state =
+      g_camera_presentation_follow;
+  if (!state.initialized || state.controller != controller) {
+    state = {};
+    state.initialized = true;
+    state.controller = controller;
+    state.focus = focus;
+    return false;
+  }
+  const double focus_motion = CameraPositionDistance(state.focus, focus);
+  if (!std::isfinite(focus_motion) || focus_motion > 512.0) {
+    ++state.hard_cuts;
+    state.focus = focus;
+    return false;
+  }
+
+  const std::array<int32_t, 3> desired = {
+      camera->second.world.values[9],
+      camera->second.world.values[10],
+      camera->second.world.values[11]};
+  const std::array<int32_t, 3> previous_presented = {
+      previous_camera->second.world.values[9],
+      previous_camera->second.world.values[10],
+      previous_camera->second.world.values[11]};
+  const std::array<int32_t, 3> carried =
+      TranslateCameraTargetWithFocus(state.focus, focus,
+                                     previous_presented);
+  state.focus = focus;
+
+  if (CameraPositionDistance(carried, desired) <= 1.0) {
+    return false;
+  }
+
+  auto endpoint_is_clear =
+      [&](const std::array<int32_t, 3>& endpoint) {
+        bool native_blocked = true;
+        if (!NativeCameraVolumeBlocked(
+                controller, focus, endpoint, &native_blocked) ||
+            native_blocked) {
+          return false;
+        }
+        std::array<int32_t, 3> ignored{};
+        CameraMeshHitDiagnostic ignored_diagnostic;
+        return !ClipThirdPersonOrbitAgainstSceneObjects(
+            focus, endpoint, &ignored, &ignored_diagnostic);
+      };
+
+  // A no-longer-safe displayed endpoint is a real new obstruction. Accept the
+  // native result immediately; collision pull-in must never be softened.
+  if (!endpoint_is_clear(carried)) {
+    ++state.hard_cuts;
+    if (g_debug_log) {
+      AppendNativeLog(
+          "camera_follow state=HARD_CUT reason=previous_blocked "
+          "from=%d/%d/%d to=%d/%d/%d total=%llu",
+          carried[0], carried[1], carried[2],
+          desired[0], desired[1], desired[2],
+          static_cast<unsigned long long>(state.hard_cuts));
+    }
+    return false;
+  }
+
+  constexpr double kFollowResponse = 0.35;
+  constexpr double kHorizontalMaximumStep = 128.0;
+  constexpr double kVerticalMaximumStep = 48.0;
+  const std::array<int32_t, 3> candidate =
+      StepCameraPresentationFollow(
+          carried, desired, kFollowResponse,
+          kHorizontalMaximumStep, kVerticalMaximumStep);
+
+  bool temporal_native_blocked = true;
+  const bool temporal_native_valid =
+      NativeCameraVolumeBlocked(
+          controller, carried, candidate,
+          &temporal_native_blocked);
+  CameraMeshHitDiagnostic chord_diagnostic;
+  double chord_hit = 0.0;
+  const bool temporal_mesh_blocked =
+      CameraTemporalChordIntersectsSceneObjects(
+          *current, g_previous_snapshot,
+          {static_cast<double>(carried[0]),
+           static_cast<double>(carried[1]),
+           static_cast<double>(carried[2])},
+          {static_cast<double>(candidate[0]),
+           static_cast<double>(candidate[1]),
+           static_cast<double>(candidate[2])},
+          &chord_diagnostic, &chord_hit);
+  const bool candidate_clear = endpoint_is_clear(candidate);
+  const bool hold = !candidate_clear ||
+                    !temporal_native_valid ||
+                    temporal_native_blocked ||
+                    temporal_mesh_blocked;
+  const std::array<int32_t, 3>& presented =
+      hold ? carried : candidate;
+  const double desired_delta =
+      CameraPositionDistance(carried, desired);
+  const double presented_delta =
+      CameraPositionDistance(carried, presented);
+  const double blend_phase =
+      desired_delta > 1.0
+          ? std::clamp(presented_delta / desired_delta, 0.0, 1.0)
+          : 1.0;
+  Matrix3x4 blended_world{};
+  Matrix3x4 blended_local{};
+  if (BlendCameraRigid(
+          previous_camera->second.world, camera->second.world,
+          blend_phase, &blended_world) &&
+      BlendCameraRigid(
+          previous_camera->second.local, camera->second.local,
+          blend_phase, &blended_local)) {
+    camera->second.world = blended_world;
+    camera->second.local = blended_local;
+  }
+  if (!SetSnapshotCameraTranslation(
+          current, current->camera, presented)) {
+    g_camera_presentation_follow = {};
+    return false;
+  }
+
+  if (hold) {
+    ++state.held_ticks;
+  } else {
+    ++state.smoothed_ticks;
+  }
+  if (g_debug_log &&
+      (desired_delta >= 96.0 ||
+       ((state.smoothed_ticks + state.held_ticks) % 60u) == 1u)) {
+    AppendNativeLog(
+        "camera_follow state=%s desired_delta=%.1f "
+        "from=%d/%d/%d target=%d/%d/%d presented=%d/%d/%d "
+        "native=%u/%u mesh=%u hit=%.1f smooth=%llu hold=%llu",
+        hold ? "HOLD" : "SMOOTH", desired_delta,
+        carried[0], carried[1], carried[2],
+        desired[0], desired[1], desired[2],
+        presented[0], presented[1], presented[2],
+        temporal_native_valid ? 1u : 0u,
+        temporal_native_blocked ? 1u : 0u,
+        temporal_mesh_blocked ? 1u : 0u, chord_hit,
+        static_cast<unsigned long long>(state.smoothed_ticks),
+        static_cast<unsigned long long>(state.held_ticks));
+  }
+  return true;
+}
+
 void CaptureNode(uintptr_t node, SceneSnapshot* snapshot,
                  std::unordered_set<uintptr_t>* visited) {
   while (node && snapshot->nodes.size() < kMaximumSceneNodes) {
@@ -8446,6 +8637,7 @@ void ResetSceneHistory() {
   g_older_snapshot = {};
   g_previous_snapshot = {};
   ClearCameraMeshPresentationLatch("scene_history_reset");
+  g_camera_presentation_follow = {};
   g_landing_observer_valid = false;
   g_landing_observer_airborne = false;
   g_landing_observer_airborne_ticks = 0;
@@ -8685,9 +8877,12 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   }
 
   SceneSnapshot current = CaptureScene(context);
+  const bool modern_follow_target =
+      ApplyModernCameraPresentationFollow(&current);
   const bool custom_head_target = ApplyCustomHeadViewTarget(&current);
   const bool custom_camera_transition = ApplyCustomCameraTransition(&current);
-  if (custom_head_target || custom_camera_transition) {
+  if (modern_follow_target || custom_head_target ||
+      custom_camera_transition) {
     // The transition is render-only. Native controller state remains mode 3;
     // only the captured camera transform and its published mirror are moved.
     RestoreScene(current);
@@ -9194,7 +9389,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.97 camera history rebase "
+      "Deathtrap native render overlay 0.0.98 safe presentation follow "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "

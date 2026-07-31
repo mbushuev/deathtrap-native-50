@@ -135,6 +135,35 @@ int main() {
     return 1;
   }
 
+  const std::array<int32_t, 3> follow_step =
+      StepCameraPresentationFollow(
+          {0, 0, 0}, {1000, 1000, -1000}, 0.35, 128.0, 48.0);
+  if (follow_step != std::array<int32_t, 3>{128, 48, -128}) {
+    std::cerr << "presentation follow did not respect axis speed limits\n";
+    return 1;
+  }
+  const std::array<int32_t, 3> follow_response =
+      StepCameraPresentationFollow(
+          {100, 100, 100}, {200, 120, 50}, 0.35, 128.0, 48.0);
+  if (follow_response != std::array<int32_t, 3>{135, 107, 82}) {
+    std::cerr << "presentation follow response was not proportional\n";
+    return 1;
+  }
+  const std::array<int32_t, 3> follow_settle =
+      StepCameraPresentationFollow(
+          {100, 100, 100}, {101, 99, 100}, 0.35, 128.0, 48.0);
+  if (follow_settle != std::array<int32_t, 3>{101, 99, 100}) {
+    std::cerr << "presentation follow did not settle exactly\n";
+    return 1;
+  }
+  const std::array<int32_t, 3> invalid_follow =
+      StepCameraPresentationFollow(
+          {100, 100, 100}, {200, 200, 200}, 0.0, 128.0, 48.0);
+  if (invalid_follow != std::array<int32_t, 3>{100, 100, 100}) {
+    std::cerr << "invalid presentation follow parameters changed position\n";
+    return 1;
+  }
+
   auto step = StepCameraSpringArm(1400.0, 420.0, 1400.0, true, 0, 0);
   ExpectNear(step.radius, 420.0, "immediate contraction");
 

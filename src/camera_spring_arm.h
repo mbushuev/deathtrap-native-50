@@ -212,6 +212,45 @@ inline std::array<int32_t, 3> TranslateCameraTargetWithFocus(
   return translated;
 }
 
+inline std::array<int32_t, 3> StepCameraPresentationFollow(
+    const std::array<int32_t, 3>& current,
+    const std::array<int32_t, 3>& target,
+    double response, double horizontal_maximum_step,
+    double vertical_maximum_step) {
+  if (!std::isfinite(response) || response <= 0.0 || response > 1.0 ||
+      !std::isfinite(horizontal_maximum_step) ||
+      horizontal_maximum_step <= 0.0 ||
+      !std::isfinite(vertical_maximum_step) ||
+      vertical_maximum_step <= 0.0) {
+    return current;
+  }
+
+  std::array<int32_t, 3> next{};
+  for (size_t axis = 0; axis < next.size(); ++axis) {
+    const int64_t delta =
+        static_cast<int64_t>(target[axis]) - current[axis];
+    if (std::abs(delta) <= 1) {
+      next[axis] = target[axis];
+      continue;
+    }
+    const double maximum_step =
+        axis == 1u ? vertical_maximum_step : horizontal_maximum_step;
+    double step = std::clamp(
+        static_cast<double>(delta) * response,
+        -maximum_step, maximum_step);
+    if (std::abs(step) < 1.0) {
+      step = delta < 0 ? -1.0 : 1.0;
+    }
+    const int64_t value =
+        static_cast<int64_t>(current[axis]) +
+        static_cast<int64_t>(std::llround(step));
+    next[axis] = static_cast<int32_t>(std::clamp<int64_t>(
+        value, std::numeric_limits<int32_t>::min(),
+        std::numeric_limits<int32_t>::max()));
+  }
+  return next;
+}
+
 inline CameraSpringArmStep StepCameraSpringArm(
     double desired_distance, double hard_safe_distance,
     double previous_radius, bool obstruction_present,
