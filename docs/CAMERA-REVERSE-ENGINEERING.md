@@ -990,3 +990,29 @@ passes. It is read-only and batches its file writes. The resulting
 `camera_probe` records in `deathtrap_native_render.log` provide the offset
 deltas needed to locate yaw, pitch, position, mode and collision-owned fields
 before an orbit-camera prototype is attempted.
+
+## Verified native player-heading path (0.0.116)
+
+Static analysis of the supported `Dungeon.dll` identifies a narrow movement
+integration point that does not mutate the live action table or player
+position:
+
+- the ordinary locomotion callback at `0x7E530` selects one of its native turn
+  values through `player+0x154` and calls `0x44EA0` at the sole xref
+  `0x7E5BD`;
+- `0x44EA0` first calls `0x44DD0`, which adds the selected delta to the Q10
+  heading at `[player+0x10]->+0x1C` and mirrors heading plus the native offset
+  into the engine render/collision orientation;
+- its second step at `0x44E30` derives native body lean from the same selected
+  turn value;
+- the engine's own shortest-angle helper at `0x93D60` confirms a 1024-unit
+  full turn and the `[-512, 511]` wrapped-delta convention.
+
+Version `0.0.116` hooks only `0x44EA0`. While camera-relative XInput movement
+is active, it temporarily substitutes a bounded desired-turn delta through the
+already selected `player+0x154` source, calls the complete original function,
+then restores that source. The player coordinate, speed, animation state,
+collision solver and action table are never written. The hook validates the
+live UI owner and restricts the source pointer to the player object's bounded
+input-field range; any failed validation falls back to the preceding tank
+mapping.

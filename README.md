@@ -175,10 +175,15 @@ D3D11 settings, first-run verification and troubleshooting.
   A clicks/confirms and skips movies, the left stick or D-pad emits arrow
   navigation, B/Start goes back, and X is an alternate loading/movie skip.
   `MenuRightStickPixelsPerTick=6` controls pointer speed independently.
-- `XInput/MovementThresholdPercent=14` restores responsive turning. Running
-  engages at `RunThresholdPercent=50` and remains latched until the stick falls
-  below `RunReleaseThresholdPercent=30`, preventing brief diagonal/noisy stick
-  samples from repeatedly dropping the character back to a walk.
+- In third person the left stick now selects a direction relative to the
+  modern camera. The patch supplies only a bounded desired-turn delta through
+  the verified native player-heading path; retail forward movement, animation,
+  collision and walk/run remain authoritative. `MovementTurnDegreesPerTick=12`
+  controls the maximum turn, while `MovementForwardArcDegrees=85` makes a
+  large reversal turn briefly in place before moving. LB and first person keep
+  the native side-step layout. Running engages at `RunThresholdPercent=50` and
+  remains latched until the circular stick magnitude falls below
+  `RunReleaseThresholdPercent=30`.
 - D-pad selects the four native inventory categories: up close combat, right
   ranged, down spells, left potions/charms. A short tap cycles the next
   available entry. Holding for 225 ms opens a large radial selector; the right

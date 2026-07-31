@@ -117,6 +117,17 @@ constexpr uintptr_t kUseConsumableRva = 0x0007B9C0u;
 constexpr uintptr_t kUseChalkRva = 0x000458B0u;
 constexpr uintptr_t kInventorySlotDrawRva = 0x000772A0u;
 constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
+// The active walk/run state calls this single player-turn entry at 0x7E5BD.
+// It reads the selected turn source through player+0x154, adds that Q10
+// delta to the native heading at [player+0x10]->+0x1C, and mirrors the
+// result into the engine-owned render/collision orientation.  Supplying a
+// temporary desired delta here keeps position, animation and collision on
+// the retail movement path.
+constexpr uintptr_t kPlayerTurnRva = 0x00044EA0u;
+constexpr size_t kPlayerRenderLinkOffset = 0x10u;
+constexpr size_t kPlayerTurnSourcePointerOffset = 0x154u;
+constexpr size_t kPlayerHeadingOffset = 0x1Cu;
+constexpr int32_t kPlayerHeadingUnitsPerTurn = 1024;
 constexpr uintptr_t kDamageHandlerRva = 0x0001C130u;
 constexpr uintptr_t kMeleeAttackWindowRva = 0x0001D620u;
 // These are post-validation gameplay events, not input actions. 0x834F0 is
@@ -698,6 +709,9 @@ int32_t g_xinput_selector_center_y = 316;
 double g_xinput_movement_threshold = 0.14;
 double g_xinput_run_threshold = 0.50;
 double g_xinput_run_release_threshold = 0.30;
+bool g_xinput_camera_relative_movement = true;
+double g_xinput_movement_turn_degrees_per_tick = 12.0;
+double g_xinput_movement_forward_arc_degrees = 85.0;
 bool g_xinput_run_active = false;
 uint64_t g_xinput_chalk_actions_asserted = 0;
 uint64_t g_weapon_wheel_switches = 0;
@@ -766,6 +780,7 @@ using RangedWeaponLaunchFn = void*(__cdecl*)(void* actor,
                                              void* launch_context,
                                              void* launch_output);
 using UseConsumableFn = void(__cdecl*)(int32_t item_id);
+using PlayerTurnFn = void(__cdecl*)(void* player, int32_t lean_scale);
 using Mode3CameraFn = void(__cdecl*)(void* controller);
 using ConfigureCameraFn = void(__cdecl*)(void* controller, int32_t x,
                                          int32_t y, int32_t z,
@@ -789,6 +804,7 @@ SuccessfulBlockImpactFn g_original_successful_block_impact = nullptr;
 OffensiveSpellLaunchFn g_original_offensive_spell_launch = nullptr;
 RangedWeaponLaunchFn g_original_ranged_weapon_launch = nullptr;
 UseConsumableFn g_original_use_consumable = nullptr;
+PlayerTurnFn g_original_player_turn = nullptr;
 Mode3CameraFn g_original_mode3_camera = nullptr;
 ConfigureCameraFn g_configure_camera = nullptr;
 ResolveCameraSectorFn g_resolve_camera_sector = nullptr;
@@ -1318,6 +1334,12 @@ std::atomic<bool> g_xinput_controller_present{false};
 WORD g_previous_xinput_buttons = 0;
 std::atomic<bool> g_xinput_first_person_toggled{false};
 std::atomic<bool> g_xinput_menu_mode{true};
+std::atomic<bool> g_xinput_camera_relative_intent{false};
+std::atomic<int32_t> g_xinput_desired_heading{0};
+std::atomic<int32_t> g_xinput_movement_magnitude_milli{0};
+std::atomic<bool> g_player_turn_hook_installed{false};
+std::atomic<bool> g_third_person_heading_reference_valid{false};
+std::atomic<int32_t> g_third_person_heading_reference_microradians{0};
 bool g_xinput_previous_native_gameplay = false;
 bool g_xinput_vibration_enabled = true;
 uint32_t g_xinput_vibration_strength_percent = 100u;
@@ -1366,6 +1388,8 @@ uint32_t g_landing_observer_airborne_ticks = 0;
 int32_t g_landing_observer_previous_y = 0;
 int32_t g_landing_observer_peak_vertical_delta = 0;
 std::atomic_flag g_xinput_poll_guard = ATOMIC_FLAG_INIT;
+bool g_xinput_camera_relative_was_active = false;
+uint64_t g_xinput_camera_relative_turn_calls = 0;
 
 class ScopedXInputPoll {
  public:
@@ -2346,6 +2370,12 @@ bool InitializeThirdPersonOrbit(void* controller, int32_t native_x,
   g_third_person_orbit_state.controller = controller;
   g_third_person_orbit_state.engaged = true;
   g_third_person_orbit_state.yaw = std::atan2(dx, dz);
+  g_third_person_heading_reference_microradians.store(
+      static_cast<int32_t>(std::lround(
+          g_third_person_orbit_state.yaw * 1000000.0)),
+      std::memory_order_release);
+  g_third_person_heading_reference_valid.store(true,
+                                                std::memory_order_release);
   g_third_person_orbit_state.pitch = std::clamp(
       std::atan2(dy, std::max(horizontal, 1.0)),
       g_third_person_orbit_min_pitch_radians,
@@ -2389,6 +2419,8 @@ void ResetThirdPersonOrbit(const char* reason) {
   }
   ClearCameraMeshPresentationLatch(reason);
   g_third_person_orbit_state = {};
+  g_third_person_heading_reference_valid.store(false,
+                                                std::memory_order_release);
   g_camera_presentation_follow = {};
 }
 
@@ -2539,6 +2571,13 @@ bool BuildThirdPersonOrbitPosition(void* controller,
           g_third_person_orbit_state.yaw, 2.0 * kOrbitPi);
     }
   }
+
+  g_third_person_heading_reference_microradians.store(
+      static_cast<int32_t>(std::lround(
+          g_third_person_orbit_state.yaw * 1000000.0)),
+      std::memory_order_release);
+  g_third_person_heading_reference_valid.store(true,
+                                                std::memory_order_release);
 
   const double player_motion = CameraPositionDistance(
       focus, g_third_person_orbit_state.previous_player);
@@ -5657,6 +5696,9 @@ int __cdecl HookDamageHandler(void* target, int32_t requested_damage,
 }
 
 void ReleaseInjectedControllerInput() {
+  g_xinput_camera_relative_intent.store(false,
+                                        std::memory_order_release);
+  g_xinput_camera_relative_was_active = false;
   for (size_t i = 0; i < g_injected_keys.size(); ++i) {
     InjectVirtualKey(static_cast<InjectedKey>(i), false);
   }
@@ -6065,6 +6107,186 @@ double NormalizedStick(SHORT value, int32_t deadzone) {
   return signed_value < 0 ? -normalized : normalized;
 }
 
+struct NormalizedStick2 {
+  double x = 0.0;
+  double y = 0.0;
+  double magnitude = 0.0;
+};
+
+NormalizedStick2 NormalizeCircularStick(SHORT raw_x, SHORT raw_y,
+                                        int32_t deadzone) {
+  const double x = static_cast<double>(raw_x);
+  const double y = static_cast<double>(raw_y);
+  const double raw_magnitude = std::hypot(x, y);
+  if (!std::isfinite(raw_magnitude) || raw_magnitude <= deadzone ||
+      raw_magnitude <= 0.0) {
+    return {};
+  }
+  const double magnitude = std::clamp(
+      (raw_magnitude - static_cast<double>(deadzone)) /
+          static_cast<double>(32767 - deadzone),
+      0.0, 1.0);
+  return {x / raw_magnitude * magnitude,
+          y / raw_magnitude * magnitude, magnitude};
+}
+
+int32_t NormalizePlayerHeading(int32_t heading) {
+  heading %= kPlayerHeadingUnitsPerTurn;
+  if (heading < 0) {
+    heading += kPlayerHeadingUnitsPerTurn;
+  }
+  return heading;
+}
+
+int32_t PlayerHeadingDelta(int32_t target, int32_t current) {
+  int32_t delta = NormalizePlayerHeading(target) -
+                  NormalizePlayerHeading(current);
+  if (delta > kPlayerHeadingUnitsPerTurn / 2) {
+    delta -= kPlayerHeadingUnitsPerTurn;
+  } else if (delta < -kPlayerHeadingUnitsPerTurn / 2) {
+    delta += kPlayerHeadingUnitsPerTurn;
+  }
+  return delta;
+}
+
+bool ReadLivePlayerHeading(int32_t* heading, uintptr_t* live_player = nullptr) {
+  if (!heading || !g_dungeon_base) {
+    return false;
+  }
+  uintptr_t player = 0;
+  uintptr_t render_link = 0;
+  uintptr_t render_node = 0;
+  int32_t value = 0;
+  if (!SafeReadValue(g_dungeon_base + kUiOwnerPointerRva, &player) ||
+      !player ||
+      !SafeReadValue(reinterpret_cast<const void*>(
+                         player + kPlayerRenderLinkOffset),
+                     &render_link) ||
+      !render_link ||
+      !SafeReadValue(reinterpret_cast<const void*>(render_link),
+                     &render_node) ||
+      !render_node ||
+      !SafeReadValue(reinterpret_cast<const void*>(
+                         render_node + kPlayerHeadingOffset),
+                     &value)) {
+    return false;
+  }
+  *heading = NormalizePlayerHeading(value);
+  if (live_player) {
+    *live_player = player;
+  }
+  return true;
+}
+
+bool CameraRelativeDesiredHeading(const NormalizedStick2& stick,
+                                  int32_t* heading) {
+  if (!heading || stick.magnitude <= 0.0 ||
+      !g_third_person_heading_reference_valid.load(
+          std::memory_order_acquire)) {
+    return false;
+  }
+  const double camera_yaw =
+      static_cast<double>(g_third_person_heading_reference_microradians.load(
+          std::memory_order_acquire)) /
+      1000000.0;
+  // Orbit yaw points from the player focus toward the camera.  Movement-up
+  // uses the opposite flattened vector; screen-right is its perpendicular.
+  // Converting the combined vector to the game's 1024-unit turn keeps the
+  // target in the same angle convention consumed by Dungeon.dll+0x44EA0.
+  const double forward_x = -std::sin(camera_yaw);
+  const double forward_z = -std::cos(camera_yaw);
+  const double right_x = -forward_z;
+  const double right_z = forward_x;
+  const double desired_x = forward_x * stick.y + right_x * stick.x;
+  const double desired_z = forward_z * stick.y + right_z * stick.x;
+  if (std::hypot(desired_x, desired_z) <= 0.000001) {
+    return false;
+  }
+  const double radians = std::atan2(desired_x, desired_z);
+  *heading = NormalizePlayerHeading(static_cast<int32_t>(std::lround(
+      radians * static_cast<double>(kPlayerHeadingUnitsPerTurn) /
+      (2.0 * kOrbitPi))));
+  return true;
+}
+
+void PublishCameraRelativeMovementIntent(bool active, int32_t heading,
+                                         double magnitude) {
+  g_xinput_desired_heading.store(NormalizePlayerHeading(heading),
+                                 std::memory_order_release);
+  g_xinput_movement_magnitude_milli.store(
+      static_cast<int32_t>(std::lround(
+          std::clamp(magnitude, 0.0, 1.0) * 1000.0)),
+      std::memory_order_release);
+  g_xinput_camera_relative_intent.store(active,
+                                        std::memory_order_release);
+  if (g_debug_log && active != g_xinput_camera_relative_was_active) {
+    AppendNativeLog("xinput movement camera_relative=%u target=%d magnitude=%.3f",
+                    active ? 1u : 0u, NormalizePlayerHeading(heading),
+                    magnitude);
+  }
+  g_xinput_camera_relative_was_active = active;
+}
+
+void __cdecl HookPlayerTurn(void* player, int32_t lean_scale) {
+  if (!g_original_player_turn) {
+    return;
+  }
+  if (!player ||
+      !g_xinput_camera_relative_intent.load(std::memory_order_acquire)) {
+    g_original_player_turn(player, lean_scale);
+    return;
+  }
+
+  uintptr_t live_player = 0;
+  int32_t current_heading = 0;
+  uintptr_t turn_source = 0;
+  int32_t original_turn = 0;
+  if (!ReadLivePlayerHeading(&current_heading, &live_player) ||
+      live_player != reinterpret_cast<uintptr_t>(player) ||
+      !SafeReadValue(reinterpret_cast<const void*>(
+                         live_player + kPlayerTurnSourcePointerOffset),
+                     &turn_source) ||
+      turn_source < live_player + 0x100u ||
+      turn_source >= live_player + 0x180u ||
+      !SafeReadValue(reinterpret_cast<const void*>(turn_source),
+                     &original_turn)) {
+    g_original_player_turn(player, lean_scale);
+    return;
+  }
+
+  const int32_t target = g_xinput_desired_heading.load(
+      std::memory_order_acquire);
+  const int32_t error = PlayerHeadingDelta(target, current_heading);
+  const double magnitude = static_cast<double>(
+      g_xinput_movement_magnitude_milli.load(std::memory_order_acquire)) /
+      1000.0;
+  const double scaled_turn_degrees =
+      g_xinput_movement_turn_degrees_per_tick *
+      (0.55 + 0.45 * std::clamp(magnitude, 0.0, 1.0));
+  const int32_t maximum_step = std::max(
+      1, static_cast<int32_t>(std::lround(
+             scaled_turn_degrees * kPlayerHeadingUnitsPerTurn / 360.0)));
+  const int32_t turn_delta = std::clamp(error, -maximum_step, maximum_step);
+  if (!SafeWrite(reinterpret_cast<void*>(turn_source), &turn_delta,
+                 sizeof(turn_delta))) {
+    g_original_player_turn(player, lean_scale);
+    return;
+  }
+
+  g_original_player_turn(player, lean_scale);
+  SafeWrite(reinterpret_cast<void*>(turn_source), &original_turn,
+            sizeof(original_turn));
+  ++g_xinput_camera_relative_turn_calls;
+  if (g_debug_log &&
+      (g_xinput_camera_relative_turn_calls % 60u) == 1u) {
+    AppendNativeLog(
+        "xinput movement heading current=%d target=%d error=%d step=%d "
+        "magnitude=%.3f source=%p",
+        current_heading, target, error, turn_delta, magnitude,
+        reinterpret_cast<void*>(turn_source));
+  }
+}
+
 void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
                                   bool selector_captures_controls) {
   UpdateControllerVibration(pad, gameplay, selector_captures_controls);
@@ -6075,6 +6297,8 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
   }
   const double left_x = NormalizedStick(pad.sThumbLX, g_xinput_left_deadzone);
   const double left_y = NormalizedStick(pad.sThumbLY, g_xinput_left_deadzone);
+  const NormalizedStick2 movement_stick = NormalizeCircularStick(
+      pad.sThumbLX, pad.sThumbLY, g_xinput_left_deadzone);
   const double right_x =
       NormalizedStick(pad.sThumbRX, g_xinput_right_deadzone);
   const double right_y =
@@ -6088,27 +6312,68 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     }
     const bool strafe_modifier =
         (buttons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
-    InjectVirtualKey(InjectedKey::kW, left_y > g_xinput_movement_threshold);
-    InjectVirtualKey(InjectedKey::kS, left_y < -g_xinput_movement_threshold);
-    // Default to the original predictable tank turn on the movement stick.
-    // Holding LB changes only the horizontal axis to the retail side-step
-    // actions, preserving forward/diagonal movement without Ctrl+W clashes.
-    InjectVirtualKey(InjectedKey::kA,
-                     !strafe_modifier &&
-                         left_x < -g_xinput_movement_threshold);
-    InjectVirtualKey(InjectedKey::kD,
-                     !strafe_modifier &&
-                         left_x > g_xinput_movement_threshold);
-    InjectVirtualKey(InjectedKey::kJ,
-                     strafe_modifier &&
-                         left_x < -g_xinput_movement_threshold);
-    InjectVirtualKey(InjectedKey::kK,
-                     strafe_modifier &&
-                         left_x > g_xinput_movement_threshold);
-    const double forward_magnitude = std::abs(left_y);
-    if (forward_magnitude >= g_xinput_run_threshold) {
+    const bool first_person_movement =
+        g_xinput_first_person_toggled.load(std::memory_order_acquire) ||
+        RetailFirstPersonActive();
+    int32_t desired_heading = 0;
+    int32_t current_heading = 0;
+    const bool camera_relative_available =
+        g_xinput_camera_relative_movement &&
+        g_player_turn_hook_installed.load(std::memory_order_acquire) &&
+        !strafe_modifier && !first_person_movement &&
+        CustomCameraOwnsMode3() &&
+        CameraRelativeDesiredHeading(movement_stick, &desired_heading) &&
+        ReadLivePlayerHeading(&current_heading);
+    const bool movement_requested =
+        movement_stick.magnitude > g_xinput_movement_threshold;
+    if (camera_relative_available && movement_requested) {
+      const int32_t heading_error =
+          PlayerHeadingDelta(desired_heading, current_heading);
+      const int32_t forward_arc = static_cast<int32_t>(std::lround(
+          g_xinput_movement_forward_arc_degrees *
+          kPlayerHeadingUnitsPerTurn / 360.0));
+      // Large reversals turn in place briefly; once within the configurable
+      // forward arc, the original forward action produces a smooth native
+      // curve with unchanged animation, speed and collision response.
+      InjectVirtualKey(InjectedKey::kW,
+                       std::abs(heading_error) <= forward_arc);
+      InjectVirtualKey(InjectedKey::kS, false);
+      InjectVirtualKey(InjectedKey::kA, false);
+      InjectVirtualKey(InjectedKey::kD, false);
+      InjectVirtualKey(InjectedKey::kJ, false);
+      InjectVirtualKey(InjectedKey::kK, false);
+      PublishCameraRelativeMovementIntent(
+          true, desired_heading, movement_stick.magnitude);
+    } else {
+      PublishCameraRelativeMovementIntent(false, desired_heading,
+                                          movement_stick.magnitude);
+      InjectVirtualKey(InjectedKey::kW,
+                       left_y > g_xinput_movement_threshold);
+      InjectVirtualKey(InjectedKey::kS,
+                       left_y < -g_xinput_movement_threshold);
+      // First person and LB retain explicit native side-step actions. If the
+      // verified heading hook is unavailable, third person fails closed to
+      // the preceding retail tank mapping.
+      const bool side_step = strafe_modifier || first_person_movement;
+      InjectVirtualKey(InjectedKey::kA,
+                       !side_step &&
+                           left_x < -g_xinput_movement_threshold);
+      InjectVirtualKey(InjectedKey::kD,
+                       !side_step &&
+                           left_x > g_xinput_movement_threshold);
+      InjectVirtualKey(InjectedKey::kJ,
+                       side_step &&
+                           left_x < -g_xinput_movement_threshold);
+      InjectVirtualKey(InjectedKey::kK,
+                       side_step &&
+                           left_x > g_xinput_movement_threshold);
+    }
+    const double run_magnitude = camera_relative_available
+                                     ? movement_stick.magnitude
+                                     : std::abs(left_y);
+    if (run_magnitude >= g_xinput_run_threshold) {
       g_xinput_run_active = true;
-    } else if (forward_magnitude <= g_xinput_run_release_threshold) {
+    } else if (run_magnitude <= g_xinput_run_release_threshold) {
       g_xinput_run_active = false;
     }
     InjectVirtualKey(InjectedKey::kShift, g_xinput_run_active);
@@ -6160,6 +6425,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         !selector_captures_controls && !first_person_active &&
             CustomCameraOwnsMode3());
   } else {
+    PublishCameraRelativeMovementIntent(false, 0, 0.0);
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
     g_xinput_first_person_toggled = false;
     g_xinput_run_active = false;
@@ -10207,6 +10473,16 @@ void InitializePatchState() {
     g_xinput_run_release_threshold =
         std::max(0.20, g_xinput_run_threshold - 0.12);
   }
+  g_xinput_camera_relative_movement =
+      ConfiguredInteger(L"XInput", L"CameraRelativeMovement", 1) != 0;
+  g_xinput_movement_turn_degrees_per_tick =
+      static_cast<double>(std::clamp(
+          ConfiguredInteger(L"XInput", L"MovementTurnDegreesPerTick", 12),
+          4, 30));
+  g_xinput_movement_forward_arc_degrees =
+      static_cast<double>(std::clamp(
+          ConfiguredInteger(L"XInput", L"MovementForwardArcDegrees", 85),
+          30, 140));
   if (g_xinput_enabled) {
     LoadXInputRuntime();
   }
@@ -10243,7 +10519,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.115 native Start dispatch and "
+      "Deathtrap native render overlay 0.0.116 camera-relative native "
+      "player heading with stable v0.0.115 camera, Start dispatch and "
       "retail first-person with progressive mesh tangent ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
@@ -10280,6 +10557,7 @@ void InitializePatchState() {
       "are observation-only and commit through Dungeon.dll+0x90610 once per "
       "real gameplay tick (enabled=%u invert=%u); XInput controller=%u "
       "base_bindings=%u hold_ms=%u deadzones=%d/%d radial=%d center_y=%d "
+      "camera_relative_movement=%u turn=%.0fdeg arc=%.0fdeg "
       "vibration=%u/%u%% action=%u/%u/%u/%ums event=%u/%u/%u/%u/%u/"
       "%u/%ums heavy=%uhp/%ums "
       "available=%u camera_probe=%u orbit=%u sensitivity=%d/%ddeg "
@@ -10294,6 +10572,9 @@ void InitializePatchState() {
       g_xinput_right_deadzone,
       g_xinput_selector_radius,
       g_xinput_selector_center_y,
+      g_xinput_camera_relative_movement ? 1u : 0u,
+      g_xinput_movement_turn_degrees_per_tick,
+      g_xinput_movement_forward_arc_degrees,
       g_xinput_vibration_enabled ? 1u : 0u,
       g_xinput_vibration_strength_percent,
       g_xinput_melee_swing_vibration_ms,
@@ -10513,6 +10794,41 @@ bool InstallDeathtrapNativeRenderHooks() {
     } else {
       AppendNativeLog("camera_orbit hook=create_failed status=%d",
                       static_cast<int>(create_camera));
+    }
+  }
+
+  // Optional gamepad-only movement modernization. Static analysis proves
+  // that 0x44EA0 has one gameplay caller (0x7E5BD) and is the native
+  // desired-turn gateway, so this hook changes neither position nor the
+  // action table. Failure is non-fatal and leaves the preceding tank mapping.
+  if (g_third_person_orbit_enabled &&
+      g_xinput_camera_relative_movement) {
+    void* const player_turn_target = g_dungeon_base + kPlayerTurnRva;
+    const MH_STATUS create_player_turn = MH_CreateHook(
+        player_turn_target, reinterpret_cast<void*>(&HookPlayerTurn),
+        reinterpret_cast<void**>(&g_original_player_turn));
+    if (create_player_turn == MH_OK ||
+        create_player_turn == MH_ERROR_ALREADY_CREATED) {
+      const MH_STATUS enable_player_turn = MH_EnableHook(player_turn_target);
+      if (enable_player_turn == MH_OK ||
+          enable_player_turn == MH_ERROR_ENABLED) {
+        g_player_turn_hook_installed.store(true,
+                                           std::memory_order_release);
+        AppendNativeLog(
+            "xinput movement heading_hook=active rva=%08llX "
+            "source=player+154 heading=[player+10]->1C units=1024",
+            static_cast<unsigned long long>(kPlayerTurnRva));
+      } else {
+        AppendNativeLog(
+            "xinput movement heading_hook=enable_failed status=%d "
+            "fallback=tank",
+            static_cast<int>(enable_player_turn));
+      }
+    } else {
+      AppendNativeLog(
+          "xinput movement heading_hook=create_failed status=%d "
+          "fallback=tank",
+          static_cast<int>(create_player_turn));
     }
   }
 

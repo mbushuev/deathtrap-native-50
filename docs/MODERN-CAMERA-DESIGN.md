@@ -918,6 +918,16 @@ camera-policy cycle.
   original motion, collision, animation and speed selection.
 - Add soft and explicit recenter only after movement is stable.
 
+Version `0.0.116` implements the first two items through the verified
+`Dungeon.dll+0x44EA0` player-turn gateway. A circularly normalized left stick
+selects a ground-plane direction relative to the persistent modern-camera yaw.
+Only a bounded Q10 turn delta is substituted through the native selected turn
+source for the duration of the original turn call; retail forward motion,
+collision, animation and walk/run actions remain untouched. Large reversals
+turn briefly in place before the existing forward action is asserted. LB and
+native first person deliberately retain explicit side-step movement. Camera
+recentering remains disabled until this control path is gameplay-tested.
+
 ### Phase E: tuning and release
 
 - Expose sensitivity, inversion, pitch limits, shoulder side, distance,

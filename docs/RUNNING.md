@@ -230,10 +230,13 @@ health rises, `game_event selector_tick` on a changed radial sector,
 the startup log before a ranged weapon has been acquired; no pulse is emitted
 until the game later creates an actual projectile.
 
-The default gameplay layout is left-stick forward/backward and tank turning,
-A jump/climb, X operate, RT primary attack, LT parry/block, RB cast spell and
-Start menu. Hold LB to change only the left-stick horizontal axis to the
-retail side-step actions. Version `0.0.114` restores the game's native
+The default third-person layout interprets the circular left-stick vector in
+camera space and turns the character toward it through the game's native
+heading gateway. Position, forward motion, animation, wall collision and
+walk/run selection remain retail-owned. A is jump/climb, X operate, RT primary
+attack, LT parry/block, RB cast spell and Start menu. Hold LB to use the
+explicit retail side-step actions; first person uses the same W/S plus
+side-step scheme. Version `0.0.114` restores the game's native
 Tab-driven first-person view on both physical Tab and R3. R3 toggles the held
 Tab action; while native camera mode 4 is active, the right stick drives retail
 first-person mouse-look and the modern orbit is suspended. SELECT still does
@@ -289,10 +292,13 @@ chalk and consumable selections require A. `SelectorRadius` and
 
 The validated 4:3 center is `SelectorCenterY=316`; the retail UI uses an
 upward-growing Y axis with its origin near the bottom edge, not D3D screen
-coordinates. `MovementThresholdPercent=14` keeps tank turning responsive.
-Running engages at `RunThresholdPercent=50` and disengages only below
-`RunReleaseThresholdPercent=30`; this hysteresis prevents noisy or diagonal
-full-stick samples from interrupting a run with a one-tick walk transition.
+coordinates. `MovementThresholdPercent=14` is applied to the circular left-
+stick magnitude. `CameraRelativeMovement=1` enables the native-heading bridge,
+`MovementTurnDegreesPerTick=12` limits its per-source-tick turn and
+`MovementForwardArcDegrees=85` prevents a sharp reversal from initially
+running in the old direction. Running engages at `RunThresholdPercent=50` and
+disengages only below `RunReleaseThresholdPercent=30`; this hysteresis prevents
+noisy diagonal samples from interrupting a run with a one-tick walk transition.
 
 The ranged and consumable categories never activate on release. Keep their
 D-pad direction held, choose a slot, and press A to equip or use it; B or
