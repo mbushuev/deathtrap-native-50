@@ -942,6 +942,14 @@ stick movement used to select a radial item cannot continue rotating the
 third-person camera. Returning the ordinary gameplay stick to centre remains a
 normal filtered deceleration.
 
+The `0.0.117` runtime disproves `0x44EA0` as a universal heading gateway. It
+remains specific to one locomotion wrapper; turn-in-place and other movement
+states enter through `0x44E90`. Both call the shared canonical mutation at
+`0x44DD0`. Version `0.0.118` hooks that shared function instead, preserving
+the live-player guard and the temporary-source transaction. The surrounding
+state machine, action selection, lean, animation, collision and position
+remain native.
+
 ### Phase E: tuning and release
 
 - Expose sensitivity, inversion, pitch limits, shoulder side, distance,

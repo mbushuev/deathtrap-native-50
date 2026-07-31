@@ -117,13 +117,13 @@ constexpr uintptr_t kUseConsumableRva = 0x0007B9C0u;
 constexpr uintptr_t kUseChalkRva = 0x000458B0u;
 constexpr uintptr_t kInventorySlotDrawRva = 0x000772A0u;
 constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
-// The active walk/run state calls this single player-turn entry at 0x7E5BD.
-// It reads the selected turn source through player+0x154, adds that Q10
-// delta to the native heading at [player+0x10]->+0x1C, and mirrors the
-// result into the engine-owned render/collision orientation.  Supplying a
-// temporary desired delta here keeps position, animation and collision on
-// the retail movement path.
-constexpr uintptr_t kPlayerTurnRva = 0x00044EA0u;
+// Both the lean-producing locomotion wrapper at 0x44EA0 and the heading-only
+// wrapper at 0x44E90 converge here. The latter is used by turn-in-place and
+// most other movement states, so hooking only 0x44EA0 leaves camera-relative
+// steering under the original tank turn. 0x44DD0 reads the selected source
+// through player+0x154, adds that Q10 delta to [player+0x10]->+0x1C, and
+// mirrors the result into the engine-owned render/collision orientation.
+constexpr uintptr_t kPlayerTurnRva = 0x00044DD0u;
 constexpr size_t kPlayerRenderLinkOffset = 0x10u;
 constexpr size_t kPlayerTurnSourcePointerOffset = 0x154u;
 constexpr size_t kPlayerHeadingOffset = 0x1Cu;
@@ -780,7 +780,7 @@ using RangedWeaponLaunchFn = void*(__cdecl*)(void* actor,
                                              void* launch_context,
                                              void* launch_output);
 using UseConsumableFn = void(__cdecl*)(int32_t item_id);
-using PlayerTurnFn = void(__cdecl*)(void* player, int32_t lean_scale);
+using PlayerTurnFn = void(__cdecl*)(void* player);
 using Mode3CameraFn = void(__cdecl*)(void* controller);
 using ConfigureCameraFn = void(__cdecl*)(void* controller, int32_t x,
                                          int32_t y, int32_t z,
@@ -6240,13 +6240,13 @@ void PublishCameraRelativeMovementIntent(bool active, int32_t heading,
   g_xinput_camera_relative_was_active = active;
 }
 
-void __cdecl HookPlayerTurn(void* player, int32_t lean_scale) {
+void __cdecl HookPlayerTurn(void* player) {
   if (!g_original_player_turn) {
     return;
   }
   if (!player ||
       !g_xinput_camera_relative_intent.load(std::memory_order_acquire)) {
-    g_original_player_turn(player, lean_scale);
+    g_original_player_turn(player);
     return;
   }
 
@@ -6263,7 +6263,7 @@ void __cdecl HookPlayerTurn(void* player, int32_t lean_scale) {
       turn_source >= live_player + 0x180u ||
       !SafeReadValue(reinterpret_cast<const void*>(turn_source),
                      &original_turn)) {
-    g_original_player_turn(player, lean_scale);
+    g_original_player_turn(player);
     return;
   }
 
@@ -6282,11 +6282,11 @@ void __cdecl HookPlayerTurn(void* player, int32_t lean_scale) {
   const int32_t turn_delta = std::clamp(error, -maximum_step, maximum_step);
   if (!SafeWrite(reinterpret_cast<void*>(turn_source), &turn_delta,
                  sizeof(turn_delta))) {
-    g_original_player_turn(player, lean_scale);
+    g_original_player_turn(player);
     return;
   }
 
-  g_original_player_turn(player, lean_scale);
+  g_original_player_turn(player);
   SafeWrite(reinterpret_cast<void*>(turn_source), &original_turn,
             sizeof(original_turn));
   ++g_xinput_camera_relative_turn_calls;
@@ -10536,8 +10536,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.117 movement trigger and selector "
-      "ownership with stable v0.0.115 camera, Start dispatch and "
+      "Deathtrap native render overlay 0.0.118 shared native heading and "
+      "selector ownership with stable v0.0.115 camera, Start dispatch and "
       "retail first-person with progressive mesh tangent ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "

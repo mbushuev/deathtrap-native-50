@@ -1042,3 +1042,23 @@ over later source ticks. `0.0.117` treats inactive stick ownership as an
 immediate filter reset. Normal right-stick release still uses the configured
 response curve, while selector and first-person ownership cannot leak an old
 stick impulse into third-person yaw or pitch.
+
+## 0.0.117 result and shared heading gateway in 0.0.118
+
+The `0.0.117` run still contains zero successful `xinput movement heading`
+records. Its synthetic A/D trigger therefore remained an unmodified retail
+tank turn and made the character uncontrollable. The target-heading stream is
+valid; the hook still did not own the native mutation.
+
+Further xref analysis corrects the integration point. `0x44EA0` is reached
+only from the locomotion state at `0x7E530`. Turn-in-place and many other
+states instead call the heading-only wrapper `0x44E90` from RVAs including
+`0x5F6AA`, `0x5F72A`, `0x7E998` and `0x83516`. Both wrappers converge on
+`0x44DD0`, and that function alone reads `player+0x154`, updates
+`[player+0x10]->+0x1C` and mirrors the engine-owned collision/render heading.
+
+Version `0.0.118` moves the temporary selected-source substitution to
+`0x44DD0`. The live-player identity check remains in place, so enemy and other
+actor calls pass through untouched. The complete native heading update remains
+the writer; the hook restores the selected source immediately after it
+returns. The later lean calculation in `0x44EA0` remains retail-owned.
