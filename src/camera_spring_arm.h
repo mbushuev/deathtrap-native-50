@@ -13,24 +13,6 @@ struct CameraSpringArmStep {
   uint32_t blocked_release_ticks = 0;
 };
 
-struct CameraSpringArmRecoveryPolicy {
-  double release_step = 64.0;
-  uint32_t clear_ticks_before_release = 2u;
-  uint32_t blocked_ticks_before_release = 3u;
-};
-
-inline CameraSpringArmRecoveryPolicy SelectCameraSpringArmRecoveryPolicy(
-    bool native_contact_owned, bool player_moving,
-    bool orbit_input_active) {
-  if (native_contact_owned && player_moving && !orbit_input_active) {
-    // A fixed yaw/pitch arm can cross several adjacent BSP/portal faces while
-    // the player runs along a wall. Keep inward collision authoritative, but
-    // do not regrow the arm fast enough to hit every face as a new large snap.
-    return {12.0, 8u, 8u};
-  }
-  return {};
-}
-
 inline bool CameraInitialOverlapBlocks(double start_distance_squared,
                                        double probe_distance_squared) {
   if (!std::isfinite(start_distance_squared) ||
@@ -234,20 +216,18 @@ inline CameraSpringArmStep StepCameraSpringArm(
     double desired_distance, double hard_safe_distance,
     double previous_radius, bool obstruction_present,
     uint32_t previous_clear_ticks,
-    uint32_t previous_blocked_release_ticks,
-    const CameraSpringArmRecoveryPolicy& recovery = {}) {
+    uint32_t previous_blocked_release_ticks) {
   CameraSpringArmStep result;
-  if (!std::isfinite(desired_distance) || desired_distance <= 0.0 ||
-      !std::isfinite(recovery.release_step) ||
-      recovery.release_step <= 0.0 ||
-      recovery.clear_ticks_before_release == 0u ||
-      recovery.blocked_ticks_before_release == 0u) {
+  if (!std::isfinite(desired_distance) || desired_distance <= 0.0) {
     return result;
   }
   const double safe = std::clamp(
       hard_safe_distance, 0.0, desired_distance);
   const double previous = std::clamp(
       previous_radius, 0.0, desired_distance);
+  constexpr double kReleaseStep = 64.0;
+  constexpr uint32_t kClearTicksBeforeRelease = 2u;
+  constexpr uint32_t kBlockedTicksBeforeRelease = 3u;
 
   if (safe + 0.5 < previous) {
     // Pull-in is hard and immediate. No submitted camera point may cross the
@@ -266,10 +246,8 @@ inline CameraSpringArmStep StepCameraSpringArm(
           previous_blocked_release_ticks + 1u, 120u);
     }
     result.radius = previous;
-    if (result.blocked_release_ticks >=
-        recovery.blocked_ticks_before_release) {
-      result.radius = std::min(
-          safe, previous + recovery.release_step);
+    if (result.blocked_release_ticks >= kBlockedTicksBeforeRelease) {
+      result.radius = std::min(safe, previous + kReleaseStep);
     }
     result.clear_ticks = 0;
   } else {
@@ -278,9 +256,8 @@ inline CameraSpringArmStep StepCameraSpringArm(
     result.clear_ticks = std::min(previous_clear_ticks + 1u, 120u);
     result.blocked_release_ticks = 0;
     result.radius = previous;
-    if (result.clear_ticks >= recovery.clear_ticks_before_release) {
-      result.radius = std::min(
-          desired_distance, previous + recovery.release_step);
+    if (result.clear_ticks >= kClearTicksBeforeRelease) {
+      result.radius = std::min(desired_distance, previous + kReleaseStep);
     }
   }
   result.radius = std::clamp(result.radius, 0.0, safe);

@@ -532,11 +532,6 @@ struct ThirdPersonOrbitState {
   // source ticks before the arm follows it. This rejects alternating
   // portal/small-prop samples without delaying hard inward contraction.
   uint32_t collision_blocked_release_ticks = 0;
-  // Remembers that the current contraction came from the native room/portal
-  // volume rather than a qualified render mesh. While the player is running
-  // with idle orbit input, only this owner receives the slower recovery
-  // profile that prevents repeated wall-segment extend/retract jolts.
-  bool native_collision_owned = false;
   uint64_t last_orbit_activity_ms = 0;
   bool motion_active_this_tick = false;
   bool orbit_input_active_this_tick = false;
@@ -3480,7 +3475,6 @@ bool ResolveThirdPersonSpringArm(
     const std::array<int32_t, 3>& desired,
     const std::array<int32_t, 3>& hard_safe_endpoint,
     bool obstruction_present,
-    const CameraSpringArmRecoveryPolicy& recovery,
     std::array<int32_t, 3>* submitted) {
   if (!submitted || !g_third_person_orbit_state.engaged) {
     return false;
@@ -3513,7 +3507,7 @@ bool ResolveThirdPersonSpringArm(
   const CameraSpringArmStep step = StepCameraSpringArm(
       desired_distance, hard_safe_distance, previous_radius,
       obstruction_present, state.collision_clear_ticks,
-      state.collision_blocked_release_ticks, recovery);
+      state.collision_blocked_release_ticks);
   const double next_radius = step.radius;
   state.collision_radius = next_radius;
   state.collision_clear_ticks = step.clear_ticks;
@@ -3531,14 +3525,72 @@ bool ResolveThirdPersonSpringArm(
   if (g_debug_log && std::abs(next_radius - previous_radius) > 1.0) {
     AppendNativeLog(
         "camera_spring desired=%.1f hard=%.1f actual=%.1f->%.1f "
-        "blocked=%u clear_ticks=%u blocked_release_ticks=%u "
-        "recovery=%s/%.1f",
+        "blocked=%u clear_ticks=%u blocked_release_ticks=%u",
         desired_distance, hard_safe_distance, previous_radius, next_radius,
         obstruction_present ? 1u : 0u, state.collision_clear_ticks,
-        state.collision_blocked_release_ticks,
-        recovery.clear_ticks_before_release == 8u ? "native_run"
-                                                  : "normal",
-        recovery.release_step);
+        state.collision_blocked_release_ticks);
+  }
+  return true;
+}
+
+bool RebaseThirdPersonCameraPositionHistory(
+    void* controller, const std::array<int32_t, 3>& previous_focus,
+    const std::array<int32_t, 3>& current_focus) {
+  if (!controller) {
+    return false;
+  }
+  const double focus_motion =
+      CameraPositionDistance(previous_focus, current_focus);
+  if (!std::isfinite(focus_motion) || focus_motion <= 0.0 ||
+      focus_motion > 512.0) {
+    return false;
+  }
+
+  // 0x2F380 smooths camera translation through one cached average followed by
+  // four contiguous position samples. They are absolute world-space points.
+  // Leaving them behind while the orbit focus moves makes an input-idle camera
+  // stick to one room coordinate for several source ticks, then catch up in a
+  // visible jump. Translate the complete ring by the same focus delta before
+  // the one ordinary configure call. Relative camera history is preserved;
+  // 0x2F380 still owns room clipping, floors and orientation.
+  constexpr size_t kHistoryPositionCount =
+      1u + kCameraControllerPositionHistorySampleCount;
+  std::array<int32_t, kHistoryPositionCount * 3u> history{};
+  const uintptr_t history_address =
+      reinterpret_cast<uintptr_t>(controller) +
+      kCameraControllerPositionHistoryAverageOffset;
+  if (!SafeRead(reinterpret_cast<const void*>(history_address),
+                history.data(), sizeof(history))) {
+    AppendNativeLog("camera_history_rebase result=READ_FAILED");
+    return false;
+  }
+
+  for (size_t position = 0; position < kHistoryPositionCount; ++position) {
+    const size_t offset = position * 3u;
+    const std::array<int32_t, 3> point = {
+        history[offset], history[offset + 1u], history[offset + 2u]};
+    const std::array<int32_t, 3> translated =
+        TranslateCameraTargetWithFocus(
+            previous_focus, current_focus, point);
+    std::copy(translated.begin(), translated.end(),
+              history.begin() + offset);
+  }
+  if (!SafeWrite(reinterpret_cast<void*>(history_address),
+                 history.data(), sizeof(history))) {
+    AppendNativeLog("camera_history_rebase result=WRITE_FAILED");
+    return false;
+  }
+
+  static uint64_t rebase_count = 0;
+  ++rebase_count;
+  if (g_debug_log && (rebase_count % 60u) == 1u) {
+    AppendNativeLog(
+        "camera_history_rebase result=OK count=%llu delta=%d/%d/%d "
+        "motion=%.1f",
+        static_cast<unsigned long long>(rebase_count),
+        current_focus[0] - previous_focus[0],
+        current_focus[1] - previous_focus[1],
+        current_focus[2] - previous_focus[2], focus_motion);
   }
   return true;
 }
@@ -3807,7 +3859,6 @@ bool ConfigureCameraWithSceneMeshPushout(
                  constrained_radius);
     g_third_person_orbit_state.collision_clear_ticks = 0;
     g_third_person_orbit_state.collision_blocked_release_ticks = 0;
-    g_third_person_orbit_state.native_collision_owned = false;
   }
   return true;
 }
@@ -4007,16 +4058,6 @@ void __cdecl HookMode3Camera(void* controller) {
     }
   }
   const bool spring_arm_blocked = orbit_blocked || mesh_orbit_blocked;
-  if (mesh_orbit_blocked) {
-    g_third_person_orbit_state.native_collision_owned = false;
-  } else if (orbit_blocked) {
-    g_third_person_orbit_state.native_collision_owned = true;
-  }
-  const CameraSpringArmRecoveryPolicy spring_recovery =
-      SelectCameraSpringArmRecoveryPolicy(
-          g_third_person_orbit_state.native_collision_owned,
-          g_third_person_orbit_state.motion_active_this_tick,
-          g_third_person_orbit_state.orbit_input_active_this_tick);
 
   std::array<int32_t, 3> submitted{};
   if (mesh_orbit_blocked &&
@@ -4032,7 +4073,6 @@ void __cdecl HookMode3Camera(void* controller) {
     g_third_person_orbit_state.collision_radius = pushed_radius;
     g_third_person_orbit_state.collision_clear_ticks = 0;
     g_third_person_orbit_state.collision_blocked_release_ticks = 0;
-    g_third_person_orbit_state.native_collision_owned = false;
     AppendNativeLog(
         "camera_mesh_overlap_pushout target=%d/%d/%d radius=%.1f "
         "resource=%llu overlap=%u escape=%u axis=%llu",
@@ -4046,13 +4086,9 @@ void __cdecl HookMode3Camera(void* controller) {
   } else {
     if (!ResolveThirdPersonSpringArm(
             camera_focus, orbit, hard_safe_endpoint, spring_arm_blocked,
-            spring_recovery,
             &submitted)) {
       AppendNativeLog("camera_native_spring resolve_failed");
       return;
-    }
-    if (!spring_arm_blocked && submitted == orbit) {
-      g_third_person_orbit_state.native_collision_owned = false;
     }
   }
 
@@ -4081,7 +4117,12 @@ void __cdecl HookMode3Camera(void* controller) {
         CameraPositionDistance(camera_focus, submitted);
     g_third_person_orbit_state.collision_clear_ticks = 0;
     g_third_person_orbit_state.collision_blocked_release_ticks = 0;
-    g_third_person_orbit_state.native_collision_owned = true;
+  }
+
+  if (previous_modern_sample_valid &&
+      !g_third_person_orbit_state.orbit_input_active_this_tick) {
+    RebaseThirdPersonCameraPositionHistory(
+        controller, previous_focus, camera_focus);
   }
 
   // First resolve against native rooms/walls/floors, then push the published
@@ -4138,7 +4179,6 @@ void __cdecl HookMode3Camera(void* controller) {
           "mesh=%u/%u/%u exact=%u passes=%u "
           "initial_published=%d/%d/%d radius=%.1f clear_ticks=%u "
           "blocked_release_ticks=%u "
-          "native_owner=%u recovery_step=%.1f "
           "pre_resource=%llu resource=%llu tri=%llu motion=%.1f",
           camera_focus[0], camera_focus[1], camera_focus[2],
           orbit[0], orbit[1], orbit[2],
@@ -4164,8 +4204,6 @@ void __cdecl HookMode3Camera(void* controller) {
           g_third_person_orbit_state.collision_radius,
           g_third_person_orbit_state.collision_clear_ticks,
           g_third_person_orbit_state.collision_blocked_release_ticks,
-          g_third_person_orbit_state.native_collision_owned ? 1u : 0u,
-          spring_recovery.release_step,
           static_cast<unsigned long long>(
               mesh_orbit_diagnostic.resource),
           static_cast<unsigned long long>(
@@ -9156,7 +9194,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.96 native running recovery "
+      "Deathtrap native render overlay 0.0.97 camera history rebase "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
