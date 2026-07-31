@@ -565,6 +565,28 @@ This follows the maintained Tomb-camera separation between room LOS and
 post-room object depenetration without invoking Deathtrap's randomized
 fixed-camera fallback.
 
+The `0.0.93` run proves the initial-overlap pushout is not the cause of the
+new long-lived black/intersecting view. At resource 13676 the pre-configure
+mesh sweep selected the current safe point `-8198/-1540/16942`, but the native
+history still published the older point `-8229/-1646/17607`. The presentation
+latch incorrectly stored that older publication even though no post-native
+mesh contact had validated it. Subsequent source ticks computed progressively
+shorter safe points while every captured camera snapshot remained frozen at
+the old absolute coordinate. Player/focus movement then increased the
+camera-player distance until a later release produced a multi-thousand-unit
+jump. This matches the user-visible internal room intersection and black
+regions that clear after rotating away.
+
+Version `0.0.94` makes the presentation contract follow the collision phase
+that actually proved safety. A pre-configure mesh contact latches the current
+native-volume-validated submitted endpoint; a positive post-native correction
+latches its exactly committed final endpoint. The latch also records the
+camera focus and translates its target by the focus delta during the one
+intentionally tolerated missing-contact sample. It can therefore neither
+retain an unverified history point nor become a stale world-space anchor while
+the player moves. Native walls, floors, orientation, overlap pushout geometry
+and authored-camera arbitration are otherwise unchanged.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

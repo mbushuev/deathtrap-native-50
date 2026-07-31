@@ -620,6 +620,22 @@ checked by Deathtrap's native room-volume resolver, so object depenetration
 cannot authorize wall or floor penetration. Thin geometry is still rejected
 only by the intrinsic two-axis extent test.
 
+The first `0.0.93` run exposed a target-ownership error in the presentation
+latch rather than another collision-classification failure. During a
+pre-configure hit on moving-block resource 13676, the validated submitted
+endpoint changed every source tick, but the latch repeatedly retained the
+unchanged older point emitted by the native history ring. Because that target
+was an absolute world-space coordinate, the rendered camera remained there
+while the player moved and eventually intersected internal room geometry.
+
+Version `0.0.94` distinguishes the two collision phases explicitly. A
+pre-configure arm hit presents the submitted endpoint already validated by the
+native room-volume query. Only a positive post-native mesh correction presents
+the final published/committed endpoint. The one-sample contact grace period
+translates its target with the current camera focus, preserving the relative
+safe pose instead of freezing a world point. This changes neither the
+room/wall/floor resolver nor the oriented overlap-pushout operation.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

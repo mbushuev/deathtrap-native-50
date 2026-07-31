@@ -97,6 +97,33 @@ inline bool PushCameraOutOfExpandedBox(
   return true;
 }
 
+inline std::array<int32_t, 3> SelectCameraMeshPresentationTarget(
+    bool post_native_mesh_contact,
+    const std::array<int32_t, 3>& submitted,
+    const std::array<int32_t, 3>& final_published) {
+  // A pre-configure mesh hit proves the submitted spring-arm point safe, but
+  // the native position-history ring may still publish an older point. Only a
+  // positive post-native mesh correction proves final_published safe.
+  return post_native_mesh_contact ? final_published : submitted;
+}
+
+inline std::array<int32_t, 3> TranslateCameraTargetWithFocus(
+    const std::array<int32_t, 3>& previous_focus,
+    const std::array<int32_t, 3>& current_focus,
+    const std::array<int32_t, 3>& target) {
+  std::array<int32_t, 3> translated{};
+  for (size_t axis = 0; axis < translated.size(); ++axis) {
+    const int64_t value =
+        static_cast<int64_t>(target[axis]) +
+        static_cast<int64_t>(current_focus[axis]) -
+        static_cast<int64_t>(previous_focus[axis]);
+    translated[axis] = static_cast<int32_t>(std::clamp<int64_t>(
+        value, std::numeric_limits<int32_t>::min(),
+        std::numeric_limits<int32_t>::max()));
+  }
+  return translated;
+}
+
 inline CameraSpringArmStep StepCameraSpringArm(
     double desired_distance, double hard_safe_distance,
     double previous_radius, bool obstruction_present,

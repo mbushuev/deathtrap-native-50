@@ -77,6 +77,36 @@ int main() {
     return 1;
   }
 
+  const std::array<int32_t, 3> submitted = {-8198, -1540, 16942};
+  const std::array<int32_t, 3> stale_native = {-8229, -1646, 17607};
+  if (SelectCameraMeshPresentationTarget(
+          false, submitted, stale_native) != submitted) {
+    std::cerr << "pre-native mesh contact retained stale publication\n";
+    return 1;
+  }
+  if (SelectCameraMeshPresentationTarget(
+          true, submitted, stale_native) != stale_native) {
+    std::cerr << "post-native mesh correction was not retained\n";
+    return 1;
+  }
+  const std::array<int32_t, 3> translated =
+      TranslateCameraTargetWithFocus(
+          {-8380, -1400, 16329}, {-8300, -1390, 16400},
+          stale_native);
+  if (translated != std::array<int32_t, 3>{-8149, -1636, 17678}) {
+    std::cerr << "presentation target did not follow camera focus\n";
+    return 1;
+  }
+  const std::array<int32_t, 3> saturated =
+      TranslateCameraTargetWithFocus(
+          {0, 0, 0},
+          {std::numeric_limits<int32_t>::max(), 0, 0},
+          {1, 0, 0});
+  if (saturated[0] != std::numeric_limits<int32_t>::max()) {
+    std::cerr << "presentation target focus translation overflowed\n";
+    return 1;
+  }
+
   auto step = StepCameraSpringArm(1400.0, 420.0, 1400.0, true, 0, 0);
   ExpectNear(step.radius, 420.0, "immediate contraction");
 

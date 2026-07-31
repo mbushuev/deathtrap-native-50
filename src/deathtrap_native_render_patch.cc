@@ -281,6 +281,7 @@ struct CameraMeshPresentationLatch {
   uintptr_t camera_node = 0;
   uintptr_t blocker_node = 0;
   uintptr_t resource = 0;
+  std::array<int32_t, 3> focus{};
   std::array<int32_t, 3> target{};
   uint64_t generation = 0;
   uint64_t history_generation = 0;
@@ -1798,7 +1799,8 @@ void ClearCameraMeshPresentationLatch(const char* reason) {
   }
 }
 
-void ObserveClearCameraMeshPresentationLatch() {
+void ObserveClearCameraMeshPresentationLatch(
+    const std::array<int32_t, 3>& focus) {
   uintptr_t resource = 0;
   bool released = false;
   {
@@ -1809,6 +1811,12 @@ void ObserveClearCameraMeshPresentationLatch() {
     if (!latch.active) {
       return;
     }
+    // One missing mesh sample is intentionally tolerated. Keep that held
+    // endpoint relative to the live camera focus instead of freezing an
+    // absolute world-space point while the player continues to move.
+    latch.target =
+        TranslateCameraTargetWithFocus(latch.focus, focus, latch.target);
+    latch.focus = focus;
     latch.clear_ticks = std::min(latch.clear_ticks + 1u, 120u);
     if (latch.clear_ticks >= 2u) {
       resource = latch.resource;
@@ -1826,6 +1834,7 @@ void ObserveClearCameraMeshPresentationLatch() {
 
 void UpdateCameraMeshPresentationLatch(
     void* controller, const CameraMeshHitDiagnostic& diagnostic,
+    const std::array<int32_t, 3>& focus,
     const std::array<int32_t, 3>& target) {
   const uintptr_t camera_node = ResolveControllerCameraNode(controller);
   if (!camera_node || !diagnostic.node || !diagnostic.resource) {
@@ -1853,6 +1862,7 @@ void UpdateCameraMeshPresentationLatch(
     latch.camera_node = camera_node;
     latch.blocker_node = diagnostic.node;
     latch.resource = diagnostic.resource;
+    latch.focus = focus;
     latch.target = target;
     latch.clear_ticks = 0;
     generation = latch.generation;
@@ -1860,10 +1870,11 @@ void UpdateCameraMeshPresentationLatch(
   if (activated && g_debug_log) {
     AppendNativeLog(
         "camera_mesh_presentation_latch state=ON generation=%llu "
-        "node=%08llX resource=%llu target=%d/%d/%d",
+        "node=%08llX resource=%llu focus=%d/%d/%d target=%d/%d/%d",
         static_cast<unsigned long long>(generation),
         static_cast<unsigned long long>(diagnostic.node),
         static_cast<unsigned long long>(diagnostic.resource),
+        focus[0], focus[1], focus[2],
         target[0], target[1], target[2]);
   }
 }
@@ -3820,6 +3831,13 @@ void __cdecl HookMode3Camera(void* controller) {
             &held_pushout)) {
       return false;
     }
+    if (held_pushout.mesh_contact) {
+      UpdateCameraMeshPresentationLatch(
+          controller, held_pushout.diagnostic, camera_focus,
+          held_pushout.final_published);
+    } else {
+      ObserveClearCameraMeshPresentationLatch(camera_focus);
+    }
     AppendNativeLog(
         "camera_native_spring hold reason=%s target=%d/%d/%d "
         "mesh=%u/%u/%u",
@@ -3965,10 +3983,14 @@ void __cdecl HookMode3Camera(void* controller) {
     const CameraMeshHitDiagnostic& latch_diagnostic =
         mesh_pushout.mesh_contact ? mesh_pushout.diagnostic
                                   : mesh_orbit_diagnostic;
+    const std::array<int32_t, 3> latch_target =
+        SelectCameraMeshPresentationTarget(
+            mesh_pushout.mesh_contact, submitted,
+            mesh_pushout.final_published);
     UpdateCameraMeshPresentationLatch(
-        controller, latch_diagnostic, mesh_pushout.final_published);
+        controller, latch_diagnostic, camera_focus, latch_target);
   } else {
-    ObserveClearCameraMeshPresentationLatch();
+    ObserveClearCameraMeshPresentationLatch(camera_focus);
   }
 
   if (g_debug_log) {
@@ -9014,7 +9036,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.93 pivot overlap pushout "
+      "Deathtrap native render overlay 0.0.94 focus-relative mesh latch "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
