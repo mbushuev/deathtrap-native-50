@@ -402,6 +402,25 @@ camera state and then invokes `0x2DEF0` exactly once. It does not enter the
 shots still use the untouched full dispatcher after the existing interaction
 arbitration accepts ownership.
 
+The first `0.0.84` runtime trace disproved the assumption that bypassing
+`0x2F750` also made `0x2F380` position-deterministic. In 663 of 703 sampled
+modern-camera submissions, the published position differed from the verified
+endpoint. Clear rays moved by an average of roughly 567 world units and up to
+1350; blocked rays moved by up to 3272. The stock position-history stage was
+still pulling the camera toward authored/fixed-camera positions after the
+spring arm had validated a different radial endpoint.
+
+Version `0.0.85` therefore keeps `0x2F380` only for orientation and sector
+bookkeeping, then publishes the exact verified modern-camera endpoint to the
+controller history, live node and published matrix. It also restores the
+read-only static render-mesh sweep as a supplement to `0x30910`, not as a
+replacement for native wall collision. A stable mesh must span the 192-unit
+camera diameter on at least two intrinsic mesh axes before it can block the arm. Solid
+housings, stairs and walls qualify; thin levers and similar small details do
+not become camera traps. Both native and mesh contacts shorten the same
+deterministic radial spring arm, while authored interaction shots retain the
+untouched full dispatcher.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

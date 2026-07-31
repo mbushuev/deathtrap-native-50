@@ -37,6 +37,22 @@ int main() {
     std::cerr << "inward initial overlap was not blocked\n";
     return 1;
   }
+  if (CameraMeshExtentsBlockVolume({24.0, 36.0, 420.0}, 192.0)) {
+    std::cerr << "thin lever was incorrectly classified as a blocker\n";
+    return 1;
+  }
+  if (!CameraMeshExtentsBlockVolume({24.0, 900.0, 1200.0}, 192.0)) {
+    std::cerr << "thin wall was not classified as a blocker\n";
+    return 1;
+  }
+  if (!CameraMeshExtentsBlockVolume({260.0, 340.0, 420.0}, 192.0)) {
+    std::cerr << "solid housing was not classified as a blocker\n";
+    return 1;
+  }
+  if (CameraMeshExtentsBlockVolume({260.0, 340.0, 420.0}, 0.0)) {
+    std::cerr << "invalid camera diameter was accepted\n";
+    return 1;
+  }
 
   auto step = StepCameraSpringArm(1400.0, 420.0, 1400.0, true, 0);
   ExpectNear(step.radius, 420.0, "immediate contraction");
