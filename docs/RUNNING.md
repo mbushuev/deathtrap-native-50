@@ -233,8 +233,12 @@ until the game later creates an actual projectile.
 The default gameplay layout is left-stick forward/backward and tank turning,
 A jump/climb, X operate, RT primary attack, LT parry/block, RB cast spell and
 Start menu. Hold LB to change only the left-stick horizontal axis to the
-retail side-step actions. As of `0.0.61`, R3 and SELECT no longer switch
-gameplay camera modes: one persistent modern third-person rig owns gameplay.
+retail side-step actions. Version `0.0.114` restores the game's native
+Tab-driven first-person view on both physical Tab and R3. R3 toggles the held
+Tab action; while native camera mode 4 is active, the right stick drives retail
+first-person mouse-look and the modern orbit is suspended. SELECT still does
+not switch to the retired custom head/retail camera policies, so one persistent
+modern rig owns third-person gameplay.
 The right stick and physical mouse rotate that rig on both axes. Version
 `0.0.62` uses conventional directions by default; set `Camera/InvertX=1` or
 `Camera/InvertY=1` only to reverse an axis. `Camera/PreferredRadius=1400`

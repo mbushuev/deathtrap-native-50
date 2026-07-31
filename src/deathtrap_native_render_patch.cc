@@ -829,6 +829,18 @@ bool SafeReadValue(const void* address, T* value) {
   return SafeRead(address, value, sizeof(*value));
 }
 
+bool RetailFirstPersonActive() {
+  if (!g_dungeon_base) {
+    return false;
+  }
+  uint8_t mode = 0;
+  return SafeReadValue(
+             g_dungeon_base + kCameraControllerRva +
+                 kCameraControllerActiveModeOffset,
+             &mode) &&
+         mode == 4u;
+}
+
 UiRenderStateSnapshot CaptureUiRenderState() {
   UiRenderStateSnapshot snapshot;
   if (!g_dungeon_base) {
@@ -1304,7 +1316,7 @@ bool g_injected_mouse_right = false;
 bool g_xinput_was_connected = false;
 std::atomic<bool> g_xinput_controller_present{false};
 WORD g_previous_xinput_buttons = 0;
-bool g_xinput_first_person_toggled = false;
+std::atomic<bool> g_xinput_first_person_toggled{false};
 std::atomic<bool> g_xinput_menu_mode{true};
 bool g_xinput_previous_native_gameplay = false;
 bool g_xinput_vibration_enabled = true;
@@ -6108,11 +6120,22 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     // Chalk is dispatched only by the radial selector through the exact
     // retail F2+8 routine. Never synthesize the unrelated C binding here.
     InjectVirtualKey(InjectedKey::kC, false);
-    // There is one gameplay camera owner.  R3 and SELECT no longer enter the
-    // retail/head camera state machines; those transitions left stale mouse
-    // capture and camera endpoints after returning to gameplay.
-    g_xinput_first_person_toggled = false;
-    InjectVirtualKey(InjectedKey::kTab, false);
+    // R3 toggles the game's original Tab-driven first-person mode. Keep this
+    // separate from the retired custom head/retail camera policies: mode 4 is
+    // a complete native gameplay state with its own look and culling path.
+    if (!selector_captures_controls &&
+        (pressed & XINPUT_GAMEPAD_RIGHT_THUMB) != 0) {
+      const bool enabled =
+          !g_xinput_first_person_toggled.load(std::memory_order_acquire);
+      g_xinput_first_person_toggled.store(enabled,
+                                           std::memory_order_release);
+      AppendNativeLog("xinput first_person=%u source=R3",
+                      enabled ? 1u : 0u);
+    }
+    const bool first_person_requested =
+        g_xinput_first_person_toggled.load(std::memory_order_acquire);
+    InjectVirtualKey(InjectedKey::kTab,
+                     !selector_captures_controls && first_person_requested);
     InjectMouseLeft(!selector_captures_controls &&
                     pad.bRightTrigger >= g_xinput_trigger_threshold);
     InjectMouseRight(!selector_captures_controls &&
@@ -6124,9 +6147,18 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     InjectVirtualKey(InjectedKey::kRight, false);
     InjectVirtualKey(InjectedKey::kEnter, false);
 
+    const bool first_person_active =
+        first_person_requested || RetailFirstPersonActive();
+    if (!selector_captures_controls && first_person_active) {
+      InjectRelativeMouseMove(
+          CurvedStick(right_x, g_xinput_right_stick_curve),
+          CurvedStick(right_y, g_xinput_right_stick_curve),
+          g_xinput_first_person_pixels);
+    }
     PublishThirdPersonOrbitInput(
         right_x, right_y,
-        !selector_captures_controls && CustomCameraOwnsMode3());
+        !selector_captures_controls && !first_person_active &&
+            CustomCameraOwnsMode3());
   } else {
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
     g_xinput_first_person_toggled = false;
@@ -6188,7 +6220,9 @@ void ReconcileXInputFrontendOwnership(bool native_gameplay) {
   // of a recent mode-3 gameplay camera callback is the authoritative owner.
   // This also repairs transitions made with a physical mouse: no XInput
   // Start edge is required to return the right stick to cursor duty.
-  const bool menu_mode = !native_gameplay || !RecentMode3CameraCallback();
+  const bool gameplay_camera_active =
+      RecentMode3CameraCallback() || RetailFirstPersonActive();
+  const bool menu_mode = !native_gameplay || !gameplay_camera_active;
   const bool previous =
       g_xinput_menu_mode.exchange(menu_mode, std::memory_order_acq_rel);
   if (previous != menu_mode && g_debug_log) {
@@ -8442,7 +8476,9 @@ void ProbeCameraState(void* context, const SceneSnapshot& scene,
       "ctrl_key=%08X/%08X/%08X/%08X/%08X/%08X/%08X/%08X/%08X "
       "camera_t=%d/%d/%d player_t=%d/%d/%d fields=[",
       static_cast<unsigned long long>(source_tick),
-      g_xinput_first_person_toggled ? 1u : 0u, static_cast<int>(right_x),
+      (g_xinput_first_person_toggled.load(std::memory_order_acquire) ||
+       RetailFirstPersonActive()) ? 1u : 0u,
+      static_cast<int>(right_x),
       static_cast<int>(right_y), owner_changes, manager_changes, node_changes,
       controller_changes, published_changes, current.controller_flags,
       static_cast<unsigned>(current.controller_mode),
@@ -10213,8 +10249,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.113 progressive mesh tangent "
-      "ownership "
+      "Deathtrap native render overlay 0.0.114 retail first-person restore "
+      "with progressive mesh tangent ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
@@ -10370,6 +10406,13 @@ bool DeathtrapModernCameraConsumesMouse() {
   if (!g_third_person_orbit_enabled ||
       (g_controller_selector_overlay.load(std::memory_order_acquire) & 1u) !=
           0u) {
+    return false;
+  }
+  // Tab and R3 both enter the retail mode-4 camera. Hand physical mouse axes
+  // back immediately; the mode-3 watchdog alone would delay native look and
+  // cannot identify an R3 request before the controller mode flips.
+  if (g_xinput_first_person_toggled.load(std::memory_order_acquire) ||
+      RetailFirstPersonActive()) {
     return false;
   }
   if (!DeathtrapGameplayReady(false)) {

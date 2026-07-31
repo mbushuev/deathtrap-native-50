@@ -116,8 +116,10 @@ D3D11 settings, first-run verification and troubleshooting.
   original forward/backward and tank-turn actions; hold LB to change its
   horizontal axis to the game's native side-step actions. A jumps/climbs, X
   operates, RT attacks, LT blocks, RB casts, and Start opens the menu. Gameplay
-  uses one persistent modern third-person camera; R3 and SELECT no longer
-  switch to separate retail/head camera state machines.
+  uses one persistent modern third-person camera. Tab enters the game's native
+  first-person view, and R3 toggles that same Tab-driven mode; the right stick
+  becomes native first-person look until R3 returns to third person. SELECT no
+  longer switches to the retired custom head/retail camera policies.
   `Camera/InvertX=1` and `Camera/InvertY=1` reverse the conventional default
   camera axes. `Camera/PreferredRadius=1400` controls the unobstructed camera
   distance; the native collision resolver may pull it closer near geometry.

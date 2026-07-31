@@ -898,6 +898,14 @@ the previous clear arm. Thus the camera walks along the constraint surface
 without a full-arm side flip. The previous point remains a fail-closed fallback
 when the incremental target is rejected by either mesh or native geometry.
 
+Version `0.0.114` restores native first-person as a separate, complete camera
+state. Tab and R3 both drive the retail `ACTION_1ST_PERSON_VIEW`; mode byte 4
+keeps gameplay input ownership even though the mode-3 callback is absent.
+Physical mouse and right-stick relative deltas go to the native first-person
+look path, while the modern third-person orbit is suspended and receives no
+look input. This does not re-enable the discarded custom head camera or SELECT
+camera-policy cycle.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

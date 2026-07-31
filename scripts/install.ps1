@@ -138,6 +138,7 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
         @('ACTION_TURN_FAST_RIGHT', 'KEY_LSHIFT + MOUSE_HORIZ_RIGHT'),
         @('ACTION_ATTACK_1', 'MOUSE_LBUTTON'),
         @('ACTION_PARRY', 'MOUSE_RBUTTON'),
+        @('ACTION_1ST_PERSON_VIEW', 'KEY_TAB'),
         @('ACTION_LEFT_SIDESTEP', 'KEY_J'),
         @('ACTION_RIGHT_SIDESTEP', 'KEY_K')
     )) {

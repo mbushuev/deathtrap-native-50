@@ -964,6 +964,16 @@ must pass both a complete scene-mesh arm sweep and the native seven-trace
 volume query. If it fails either test, the already verified previous point is
 the fallback; first contact retains the `0.0.112` continuity projection.
 
+Version `0.0.114` restores the verified retail first-person transition rather
+than reviving the rejected custom head camera. Physical Tab remains bound to
+`ACTION_1ST_PERSON_VIEW`; R3 toggles an injected Tab-down state. The
+authoritative controller mode at `controller+0x27C == 4` is now recognized as
+gameplay by the XInput camera watchdog, so it cannot be mistaken for a menu
+after mode-3 callbacks stop. While mode 4 is active (or an R3 transition is
+pending), the DirectInput proxy returns physical mouse axes to the game, the
+right stick supplies bounded native relative-mouse deltas, and modern orbit
+input is zero. Returning to mode 3 resumes the preserved modern orbit.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
