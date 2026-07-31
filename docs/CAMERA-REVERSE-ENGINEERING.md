@@ -871,6 +871,25 @@ route it back through the box and falls back to the preceding supporting-face
 slide. Native room validation and the requested-arm distance bound remain
 unchanged.
 
+The final `0.0.108` trace exposes a separate delayed-publication loop at
+resource 12613. With focus and orbit stationary, the camera repeatedly follows
+the same three-source-tick sequence: post-native contact commits the safe
+`-580/400/14804` point; two apparently clear samples release the presentation
+latch and expand the spring from 140 to 204 units; then the already queued
+raw desired position `-371/400/14830` is published inside the resource and
+reacquires the latch. The trace contains 107 acquisitions and 104 clear-ray
+releases. The pre-native requested arm remains clear throughout, so this is
+not a ray-exit or object-classification failure.
+
+Version `0.0.109` validates every pending native position before treating a
+post-configure tick as clear: the raw desired point, resolved point, cached
+history average and all four position-history samples. If any of them still
+intersects a qualified scene mesh, the existing focus-relative safe latch
+target is retained and committed back to the complete native history. This
+keeps spring state, exact publication and presentation on one endpoint until
+`0x2F380` naturally produces a fully clear pending path. The existing clear
+release then resumes; no extra timing threshold is introduced.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

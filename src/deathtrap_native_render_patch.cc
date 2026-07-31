@@ -1837,10 +1837,11 @@ void ClearCameraMeshPresentationLatch(const char* reason) {
   }
 }
 
-void ObserveClearCameraMeshPresentationLatch(
+bool ObserveClearCameraMeshPresentationLatch(
     void* controller, const std::array<int32_t, 3>& focus,
     bool native_candidate_mesh_blocked,
-    const CameraMeshHitDiagnostic* native_candidate_diagnostic) {
+    const CameraMeshHitDiagnostic* native_candidate_diagnostic,
+    std::array<int32_t, 3>* retained_target = nullptr) {
   if (native_candidate_mesh_blocked) {
     CameraMeshPresentationLatch previous;
     {
@@ -1849,7 +1850,7 @@ void ObserveClearCameraMeshPresentationLatch(
       previous = g_camera_mesh_presentation_latch;
     }
     if (!previous.active) {
-      return;
+      return false;
     }
 
     // A contact-only exact commit can leave the published matrix at the safe
@@ -1872,7 +1873,7 @@ void ObserveClearCameraMeshPresentationLatch(
         CameraEndpointClearOfSceneObjects(retained);
     if (!retained_safe) {
       ClearCameraMeshPresentationLatch("pending_candidate_target_invalid");
-      return;
+      return false;
     }
 
     bool held = false;
@@ -1906,7 +1907,10 @@ void ObserveClearCameraMeshPresentationLatch(
                   : 0u),
           retained[0], retained[1], retained[2]);
     }
-    return;
+    if (held && retained_target) {
+      *retained_target = retained;
+    }
+    return held;
   }
 
   uintptr_t resource = 0;
@@ -1917,7 +1921,7 @@ void ObserveClearCameraMeshPresentationLatch(
     CameraMeshPresentationLatch& latch =
         g_camera_mesh_presentation_latch;
     if (!latch.active) {
-      return;
+      return false;
     }
     // One missing mesh sample is intentionally tolerated. Keep that held
     // endpoint relative to the live camera focus instead of freezing an
@@ -1941,6 +1945,7 @@ void ObserveClearCameraMeshPresentationLatch(
         "resource=%llu",
         static_cast<unsigned long long>(resource));
   }
+  return false;
 }
 
 void UpdateCameraMeshPresentationLatch(
@@ -4241,16 +4246,136 @@ bool ConfigureCameraWithSceneMeshPushout(
   return true;
 }
 
-bool NativeResolvedCameraCandidateIntersectsSceneMesh(
-    const std::array<int32_t, 3>& focus,
+struct NativeCameraPendingMeshCollision {
+  bool desired_read_valid = false;
+  bool history_read_valid = false;
+  size_t position_index = 0;
+  std::array<int32_t, 3> position{};
+  CameraMeshHitDiagnostic diagnostic;
+};
+
+bool NativeCameraPendingPositionsIntersectSceneMesh(
+    void* controller, const std::array<int32_t, 3>& focus,
     const CameraMeshPushoutResult& pushout,
-    CameraMeshHitDiagnostic* diagnostic) {
-  if (!pushout.native_resolved_valid) {
+    NativeCameraPendingMeshCollision* collision) {
+  if (!controller || !collision) {
     return false;
   }
-  std::array<int32_t, 3> mesh_safe = pushout.native_resolved;
-  return ClipThirdPersonOrbitAgainstSceneObjects(
-      focus, pushout.native_resolved, &mesh_safe, diagnostic);
+  *collision = {};
+
+  // 0x2F380 publishes from a cached average backed by four position samples.
+  // Looking only at controller+0x1DC is insufficient: after an exact mesh
+  // correction that resolved point can remain safe while a newly queued raw
+  // sample already lies inside the same prop. It becomes visible only after
+  // the presentation latch has been released. Inspect every position that can
+  // feed the resolver before accepting a clear sample.
+  constexpr size_t kPendingHistoryPositionCount =
+      1u + kCameraControllerPositionHistorySampleCount;
+  std::array<int32_t, kPendingHistoryPositionCount * 3u> history{};
+  const uintptr_t history_address =
+      reinterpret_cast<uintptr_t>(controller) +
+      kCameraControllerPositionHistoryAverageOffset;
+  collision->history_read_valid = SafeRead(
+      reinterpret_cast<const void*>(history_address), history.data(),
+      sizeof(history));
+  std::array<int32_t, 3> desired{};
+  collision->desired_read_valid = SafeRead(
+      reinterpret_cast<const uint8_t*>(controller) +
+          kCameraControllerDesiredPositionOffset,
+      desired.data(), sizeof(desired));
+
+  auto position_intersects = [&](const std::array<int32_t, 3>& position,
+                                 size_t position_index) {
+    std::array<int32_t, 3> mesh_safe = position;
+    CameraMeshHitDiagnostic diagnostic;
+    if (!ClipThirdPersonOrbitAgainstSceneObjects(
+            focus, position, &mesh_safe, &diagnostic)) {
+      return false;
+    }
+    collision->position_index = position_index;
+    collision->position = position;
+    collision->diagnostic = diagnostic;
+    return true;
+  };
+
+  // Index zero is the current resolved candidate, index one is the raw
+  // desired point, index two is the cached average and indices three through
+  // six are the complete four-sample ring.
+  if (pushout.native_resolved_valid &&
+      position_intersects(pushout.native_resolved, 0u)) {
+    return true;
+  }
+  if (!collision->desired_read_valid || !collision->history_read_valid) {
+    // An active mesh latch must fail closed if the history cannot be read. A
+    // transient read failure is not evidence that the pending path is clear.
+    collision->position_index = std::numeric_limits<size_t>::max();
+    return true;
+  }
+  if (position_intersects(desired, 1u)) {
+    return true;
+  }
+  for (size_t index = 0; index < kPendingHistoryPositionCount; ++index) {
+    const size_t offset = index * 3u;
+    const std::array<int32_t, 3> position = {
+        history[offset], history[offset + 1u], history[offset + 2u]};
+    if (position_intersects(position, index + 2u)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void ReconcileCameraMeshPresentationLatchAfterClearConfigure(
+    void* controller, const std::array<int32_t, 3>& focus,
+    const CameraMeshPushoutResult& pushout) {
+  if (!CameraMeshPresentationLatchActive()) {
+    return;
+  }
+
+  NativeCameraPendingMeshCollision pending;
+  const bool pending_mesh_blocked =
+      NativeCameraPendingPositionsIntersectSceneMesh(
+          controller, focus, pushout, &pending);
+  std::array<int32_t, 3> retained{};
+  const bool held = ObserveClearCameraMeshPresentationLatch(
+      controller, focus, pending_mesh_blocked,
+      pending_mesh_blocked ? &pending.diagnostic : nullptr, &retained);
+  if (!pending_mesh_blocked || !held) {
+    return;
+  }
+
+  // Keep the resolver, its complete history and the published matrices on
+  // the same already-validated endpoint. This is not another collision
+  // solution: it merely prevents a queued pre-correction sample from becoming
+  // visible one tick after the latch releases. Once 0x2F380 naturally queues a
+  // fully clear path, this branch stops committing and the ordinary two-sample
+  // release proceeds.
+  std::array<int32_t, 3> committed{};
+  const bool committed_ok = CommitImmediateSpringArmContraction(
+      controller, focus, retained, true, &committed);
+  if (committed_ok) {
+    const double committed_radius = CameraPositionDistance(focus, committed);
+    if (std::isfinite(committed_radius)) {
+      g_third_person_orbit_state.collision_radius = committed_radius;
+      g_third_person_orbit_state.collision_clear_ticks = 0;
+      g_third_person_orbit_state.collision_blocked_release_ticks = 0;
+      g_third_person_orbit_state.collision_constrained_this_tick = true;
+    }
+  }
+  if (g_debug_log) {
+    AppendNativeLog(
+        "camera_mesh_history_hold result=%s desired_valid=%u "
+        "history_valid=%u "
+        "position_index=%llu pending=%d/%d/%d target=%d/%d/%d "
+        "resource=%llu",
+        committed_ok ? "OK" : "FAILED",
+        pending.desired_read_valid ? 1u : 0u,
+        pending.history_read_valid ? 1u : 0u,
+        static_cast<unsigned long long>(pending.position_index),
+        pending.position[0], pending.position[1], pending.position[2],
+        retained[0], retained[1], retained[2],
+        static_cast<unsigned long long>(pending.diagnostic.resource));
+  }
 }
 
 void __cdecl HookMode3Camera(void* controller) {
@@ -4375,17 +4500,8 @@ void __cdecl HookMode3Camera(void* controller) {
           controller, held_pushout.diagnostic, camera_focus,
           held_pushout.final_published);
     } else {
-      CameraMeshHitDiagnostic native_candidate_diagnostic;
-      const bool native_candidate_mesh_blocked =
-          CameraMeshPresentationLatchActive() &&
-          NativeResolvedCameraCandidateIntersectsSceneMesh(
-              camera_focus, held_pushout,
-              &native_candidate_diagnostic);
-      ObserveClearCameraMeshPresentationLatch(
-          controller, camera_focus, native_candidate_mesh_blocked,
-          native_candidate_mesh_blocked
-              ? &native_candidate_diagnostic
-              : nullptr);
+      ReconcileCameraMeshPresentationLatchAfterClearConfigure(
+          controller, camera_focus, held_pushout);
     }
     AppendNativeLog(
         "camera_native_spring hold reason=%s target=%d/%d/%d "
@@ -4610,17 +4726,8 @@ void __cdecl HookMode3Camera(void* controller) {
         controller, latch_diagnostic, camera_focus, latch_target,
         continuous_submitted_owned);
   } else {
-    CameraMeshHitDiagnostic native_candidate_diagnostic;
-    const bool native_candidate_mesh_blocked =
-        CameraMeshPresentationLatchActive() &&
-        NativeResolvedCameraCandidateIntersectsSceneMesh(
-            camera_focus, mesh_pushout,
-            &native_candidate_diagnostic);
-    ObserveClearCameraMeshPresentationLatch(
-        controller, camera_focus, native_candidate_mesh_blocked,
-        native_candidate_mesh_blocked
-            ? &native_candidate_diagnostic
-            : nullptr);
+    ReconcileCameraMeshPresentationLatchAfterClearConfigure(
+        controller, camera_focus, mesh_pushout);
   }
 
   if (g_debug_log) {
@@ -9878,7 +9985,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.108 continuous mesh ray-exit "
+      "Deathtrap native render overlay 0.0.109 pending-history mesh hold "
       "ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "

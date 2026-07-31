@@ -854,6 +854,15 @@ across a face and through shared corners instead of either sticking or jumping
 to an unrelated face-normal point. An already-outside pivot retains the safe
 supporting-face fallback so no path is allowed back through the obstacle.
 
+Version `0.0.109` closes the delayed native-history release path. A mesh latch
+may count a clear sample only when the configured raw desired point, resolved
+point, cached average and each of the four position-history samples are all
+clear of qualified scene meshes. A pending blocked position keeps the current
+focus-relative latch target authoritative and synchronizes the resolver's
+complete history to it. This uses the known native history topology instead of
+lengthening a grace timer: release remains responsive as soon as the complete
+future publication path is actually clear.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
