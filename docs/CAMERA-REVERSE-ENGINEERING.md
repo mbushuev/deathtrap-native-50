@@ -626,6 +626,24 @@ stationary recovery and render-mesh blockers retain the normal 2/3-tick,
 64-unit profile. Thus the change cannot allow a new wall crossing: only the
 already-clear outward direction is delayed.
 
+The `0.0.96` run rejects that policy. Its one-tick locomotion classification
+switches the recovery step between 12 and 64 units 20 times in 313 spring
+records. The slower profile also keeps low negative-pitch contractions alive
+long enough for the published point to reach 73 units below the player root.
+Most importantly, the trace shows `0x2F380` repeatedly publishing one exact
+world coordinate while focus and submitted move. Its average at `+0x20C` and
+four samples at `+0x218` are an absolute-world history ring, not offsets from
+the live focus. This explains the apparent fixed-camera catches without any
+script takeover or orbit input.
+
+Version `0.0.97` restores the 0.0.95 spring timing. Before the one normal
+`0x2F380` call, an input-idle modern-camera tick translates that complete
+contiguous history ring by the exact current-minus-previous focus delta.
+Translation is limited to ordinary deltas at or below 512 units; teleports and
+manual orbit do not use it. No published matrix is forced. Native room, floor,
+sector and orientation processing therefore remains downstream and
+authoritative while its smoothing state becomes focus-relative.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

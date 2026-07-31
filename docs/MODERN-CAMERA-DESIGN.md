@@ -675,6 +675,21 @@ This is conservative hysteresis rather than another collision threshold. It
 never accepts an endpoint rejected by the native predicate and never changes
 the dynamic-block OBB escape or scripted-camera arbitration.
 
+The runtime result disproves this design. A single-tick movement predicate is
+not stable enough to select spring timing, and reducing the outward step
+prolongs bad low-radius native publications. The actual locomotion hitch is
+one layer later: the retail configure routine smooths absolute camera
+positions, so its four-sample history can remain anchored to the room while the
+modern orbit focus moves.
+
+Version `0.0.97` moves stabilization to that ownership boundary. With no orbit
+input, the cached average and all four position-history samples are translated
+by the same bounded focus delta before the sole retail configure call. This
+preserves their relative shape and lets the native routine continue resolving
+walls, floors, sectors and orientation. Manual orbit bypasses rebasing, the
+normal 0.0.95 spring timing is restored, and no clear-space or native-wall
+frame is directly published by the patch.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
