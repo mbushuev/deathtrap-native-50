@@ -18,6 +18,45 @@ struct CameraMeshPresentationLatchClearStep {
   bool release = false;
 };
 
+struct CameraFloorLimit {
+  int32_t minimum_y = 0;
+  bool player_root_used = false;
+};
+
+inline CameraFloorLimit ResolveCameraFloorLimit(
+    const std::array<int32_t, 3>& focus,
+    const std::array<int32_t, 3>& player_root,
+    bool player_root_valid) {
+  constexpr int64_t kMaximumDropBelowFocus = 240;
+  constexpr int64_t kPlayerRootClearance = 96;
+  const auto saturate = [](int64_t value) {
+    return static_cast<int32_t>(std::clamp<int64_t>(
+        value, std::numeric_limits<int32_t>::min(),
+        std::numeric_limits<int32_t>::max()));
+  };
+
+  CameraFloorLimit result;
+  result.minimum_y =
+      saturate(static_cast<int64_t>(focus[1]) - kMaximumDropBelowFocus);
+  const auto axis_delta = [](int32_t a, int32_t b) {
+    return std::abs(static_cast<int64_t>(a) -
+                    static_cast<int64_t>(b));
+  };
+  const bool player_matches_focus =
+      player_root_valid &&
+      axis_delta(player_root[0], focus[0]) <= 256 &&
+      axis_delta(player_root[1], focus[1]) <= 800 &&
+      axis_delta(player_root[2], focus[2]) <= 256;
+  if (player_matches_focus) {
+    result.minimum_y = std::max(
+        result.minimum_y,
+        saturate(static_cast<int64_t>(player_root[1]) +
+                 kPlayerRootClearance));
+    result.player_root_used = true;
+  }
+  return result;
+}
+
 inline CameraMeshPresentationLatchClearStep
 StepCameraMeshPresentationLatchClear(
     uint32_t previous_clear_ticks,

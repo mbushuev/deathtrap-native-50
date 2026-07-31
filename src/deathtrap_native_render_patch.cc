@@ -2506,11 +2506,25 @@ bool BuildThirdPersonOrbitPosition(void* controller,
                             std::cos(g_third_person_orbit_state.pitch);
   const int32_t orbit_x = focus[0] + static_cast<int32_t>(std::lround(
       std::sin(g_third_person_orbit_state.yaw) * horizontal));
-  const int32_t orbit_y = focus[1] + static_cast<int32_t>(std::lround(
-      std::sin(g_third_person_orbit_state.pitch) *
-      active_radius));
+  const int32_t requested_orbit_y =
+      focus[1] + static_cast<int32_t>(std::lround(
+                     std::sin(g_third_person_orbit_state.pitch) *
+                     active_radius));
+  const CameraFloorLimit floor_limit = ResolveCameraFloorLimit(
+      focus, g_previous_snapshot.player_position,
+      g_previous_snapshot.player_position_valid);
+  const int32_t orbit_y =
+      std::max(requested_orbit_y, floor_limit.minimum_y);
   const int32_t orbit_z = focus[2] + static_cast<int32_t>(std::lround(
       std::cos(g_third_person_orbit_state.yaw) * horizontal));
+  if (g_debug_log && orbit_y != requested_orbit_y) {
+    AppendNativeLog(
+        "camera_floor_guard requested_y=%d safe_y=%d focus_y=%d "
+        "player_root_y=%d player_root_used=%u",
+        requested_orbit_y, orbit_y, focus[1],
+        g_previous_snapshot.player_position[1],
+        floor_limit.player_root_used ? 1u : 0u);
+  }
   g_third_person_orbit_state.requested_position = {
       orbit_x, orbit_y, orbit_z};
   g_third_person_orbit_state.requested_position_valid = true;
@@ -7550,8 +7564,6 @@ SceneSnapshot CaptureScene(void* context) {
     }
   }
 
-  ApplyCameraMeshPresentationLatch(&snapshot);
-
   snapshot.player = ResolvePlayerRenderNode(snapshot);
   if (snapshot.player) {
     snapshot.player_position_valid = SafeRead(
@@ -9224,10 +9236,26 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   }
 
   SceneSnapshot current = CaptureScene(context);
+  const bool scene_history_boundary =
+      current.nodes.empty() || g_previous_snapshot.nodes.empty() ||
+      current.root == 0 || current.root != g_previous_snapshot.root;
+  if (scene_history_boundary) {
+    // A render-only camera target belongs to the scene snapshot that produced
+    // it. Never seed a new location with a retained mesh endpoint or follow
+    // position from the old root: that would contaminate the following
+    // synthetic history with an old-room camera.
+    ClearCameraMeshPresentationLatch("scene_history_boundary");
+    g_camera_presentation_follow = {};
+  } else {
+    ApplyCameraMeshPresentationLatch(&current);
+  }
   const bool modern_follow_target =
+      !scene_history_boundary &&
       ApplyModernCameraPresentationFollow(&current);
-  const bool custom_head_target = ApplyCustomHeadViewTarget(&current);
-  const bool custom_camera_transition = ApplyCustomCameraTransition(&current);
+  const bool custom_head_target =
+      !scene_history_boundary && ApplyCustomHeadViewTarget(&current);
+  const bool custom_camera_transition =
+      !scene_history_boundary && ApplyCustomCameraTransition(&current);
   if (modern_follow_target || custom_head_target ||
       custom_camera_transition) {
     // The transition is render-only. Native controller state remains mode 3;
@@ -9241,8 +9269,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
       g_source_ticks.fetch_add(1, std::memory_order_relaxed) + 1;
   ProbeCameraState(context, current, source_tick);
   SampleUiEligibility();
-  if (current.nodes.empty() || g_previous_snapshot.nodes.empty() ||
-      current.root == 0 || current.root != g_previous_snapshot.root) {
+  if (scene_history_boundary) {
     CallOriginalRenderPresentWait(context, wait);
     g_older_snapshot = {};
     g_previous_snapshot = std::move(current);
@@ -9736,7 +9763,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.101 predictive mesh-latch release "
+      "Deathtrap native render overlay 0.0.102 floor envelope and "
+      "scene-boundary reset "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "

@@ -759,6 +759,14 @@ and pending native endpoints are both clear. This changes neither the spring
 radius nor ordinary native wall/floor publication and performs no new direct
 camera commit.
 
+Version `0.0.102` adds two ownership boundaries without changing collision
+thresholds. First, the desired orbit is clamped to a player-relative floor
+envelope before native room and mesh validation, because the verified
+room-volume predicate accepted the `0.0.101` endpoint below the player root.
+Second, a scene-root change is detected before any render-only mesh latch,
+follow target, head target or transition is applied. The first frame of a new
+root is exact native state and becomes clean interpolation history.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

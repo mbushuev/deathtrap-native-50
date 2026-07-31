@@ -733,6 +733,31 @@ Only two samples for which both the current publication and pending native
 candidate are clear may release the latch. A pure state test covers the
 observed clear/unsafe/clear sequence.
 
+The first `0.0.101` run did not exercise the new predictive HOLD path, but it
+did isolate a separate floor failure. At the end of the run the player root
+was `Y=-1800`, while the desired orbit reached `Y=-1913` and the accepted
+native/mesh publication remained at `Y=-1836` (with a worst observed sample of
+`Y=-1872`). Both collision layers therefore accepted a camera centre below
+the actor's floor contact. This is not a mesh-latch release failure: the
+desired spring arm itself has no lower safety envelope.
+
+Version `0.0.102` restores that invariant before either collision query. The
+desired endpoint may fall at most 240 units below the controller focus and,
+when the preceding render snapshot belongs to the same nearby player, remains
+at least 96 units above the captured player root. The clamped desired endpoint
+still passes through the complete native room predicate, deterministic
+spring-arm resolver and scene-mesh sweep; no final camera matrix is written
+directly.
+
+The same review found a scene-boundary ordering defect. `CaptureScene`
+previously applied the old mesh presentation latch before
+`HookRenderPresentWait` compared scene roots. On a root change, that modified
+snapshot became the new interpolation history even though the exact native
+frame was rendered, allowing the first synthetic frame in the new location to
+inherit an old-room camera. Version `0.0.102` captures raw state, detects the
+boundary first, clears render-only latch/follow state and seeds the new history
+without applying any custom camera transform.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

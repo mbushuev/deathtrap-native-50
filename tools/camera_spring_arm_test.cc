@@ -25,6 +25,27 @@ void ExpectTicks(uint32_t actual, uint32_t expected, const char* label) {
 }  // namespace
 
 int main() {
+  const CameraFloorLimit matched_floor = ResolveCameraFloorLimit(
+      {-9103, -1400, 14999}, {-9103, -1800, 14999}, true);
+  if (matched_floor.minimum_y != -1640 ||
+      !matched_floor.player_root_used) {
+    std::cerr << "matched player floor limit was not enforced\n";
+    return 1;
+  }
+  const CameraFloorLimit root_dominates = ResolveCameraFloorLimit(
+      {100, 1000, 100}, {100, 950, 100}, true);
+  if (root_dominates.minimum_y != 1046 ||
+      !root_dominates.player_root_used) {
+    std::cerr << "player-root camera clearance was not enforced\n";
+    return 1;
+  }
+  const CameraFloorLimit stale_root = ResolveCameraFloorLimit(
+      {0, 1000, 0}, {1000, 950, 0}, true);
+  if (stale_root.minimum_y != 760 || stale_root.player_root_used) {
+    std::cerr << "stale player snapshot changed the focus floor limit\n";
+    return 1;
+  }
+
   if (CameraInitialOverlapBlocks(100.0, 121.0)) {
     std::cerr << "outward initial overlap was incorrectly blocked\n";
     return 1;
