@@ -808,6 +808,24 @@ adjacent nodes, while continuing to suppress translation-only latch rendering
 during the gesture. This is a contact-manifold state fix, not additional
 damping or a new collision threshold.
 
+The next pillar trace shows that pinning only the clear half is insufficient.
+The complete desired-arm sweep selects resource 11432, but the legacy history
+resolver sometimes shifts the result into resource 12613. Post-native
+depenetration then chooses a second safe position and shortens the spring,
+while the render latch may keep that 12613 face after exact publication has
+returned to the 11432 solution. This is one physical contact represented by
+two independently valid camera owners.
+
+Version `0.0.106` gives the already validated pre-native submitted endpoint
+single authority after contact has been established. The same endpoint now
+owns exact publication, spring state and presentation latch even when the
+post-native pass reports an adjacent mesh. An authoritative latch transfer
+updates the current contact generation instead of retaining the preceding
+face or normalizing presentation history. The temporal chord guard remains
+responsible for unsafe synthetic interpolation between consecutive safe
+endpoints. No collision distance, object-size classifier, native wall/floor
+query or authored-camera rule changes.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

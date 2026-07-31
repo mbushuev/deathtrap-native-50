@@ -198,23 +198,25 @@ int main() {
     return 1;
   }
   if (!CameraMeshLatchRetainsPreviousTarget(
-          true, true, true, false) ||
+          true, true, true, false, false) ||
       CameraMeshLatchRetainsPreviousTarget(
-          true, true, true, true) ||
+          true, true, true, true, false) ||
+      CameraMeshLatchRetainsPreviousTarget(
+          true, true, true, false, true) ||
       !CameraMeshLatchRetainsPreviousTarget(
-          true, false, false, true)) {
+          true, false, false, true, false)) {
     std::cerr << "manual orbit did not own a usable latch retarget\n";
     return 1;
   }
-  if (!CameraContinuousMeshContactNeedsCommit(
-          true, false, true, true, true) ||
-      CameraContinuousMeshContactNeedsCommit(
-          true, true, true, true, true) ||
-      CameraContinuousMeshContactNeedsCommit(
-          true, false, false, true, true) ||
-      CameraContinuousMeshContactNeedsCommit(
-          true, false, true, true, false)) {
-    std::cerr << "continuous mesh-contact commit ownership was invalid\n";
+  if (!CameraContinuousMeshContactOwnsSubmittedTarget(
+          true, true, true, true) ||
+      CameraContinuousMeshContactOwnsSubmittedTarget(
+          true, false, true, true) ||
+      CameraContinuousMeshContactOwnsSubmittedTarget(
+          false, true, true, true) ||
+      CameraContinuousMeshContactOwnsSubmittedTarget(
+          true, true, true, false)) {
+    std::cerr << "continuous mesh-contact target ownership was invalid\n";
     return 1;
   }
   if (CameraTargetMeetsMinimumDistance(

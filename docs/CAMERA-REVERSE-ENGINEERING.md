@@ -813,6 +813,28 @@ is still not rendered until input grace ends. Native walls/floors, first
 contact without an established latch, unsafe endpoints and authored cameras
 do not enter this pin path.
 
+The `0.0.105` pillar run confirms that the clear-half pin works, but exposes
+the other half of the same ownership cycle. The pre-native complete-arm sweep
+continuously selects resource 11432, while the position emitted by `0x2F380`
+periodically intersects adjacent resource 12613. The post-native phase then
+commits a different valid escape on 12613 and contracts the spring to that
+second solution. On later ticks the pre-native 11432 endpoint is pinned, but
+the presentation latch retains the older 12613 target as an independently
+clear adjacent-node face. The exact camera and visible camera consequently
+have different owners; as the player moves, the latch remains stuck to the
+pillar-side target.
+
+Version `0.0.106` makes the established pre-native contact authoritative for
+the complete continuous-contact transaction. Its submitted endpoint has
+already passed the full requested-arm mesh sweep and native room validation.
+It is therefore committed on both post-native-clear and post-native-contact
+ticks. If the post phase temporarily selected another mesh escape, spring
+radius and release state are restored to the submitted endpoint too. The
+presentation latch transfers to that same pre-native resource and endpoint
+inside the existing contact generation, so the switch neither retains the
+wrong face nor creates a history-normalizing cut. First contact, native-only
+walls/floors, unsafe endpoints and authored cameras retain their prior paths.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

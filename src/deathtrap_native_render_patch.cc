@@ -1946,7 +1946,8 @@ void ObserveClearCameraMeshPresentationLatch(
 void UpdateCameraMeshPresentationLatch(
     void* controller, const CameraMeshHitDiagnostic& diagnostic,
     const std::array<int32_t, 3>& focus,
-    const std::array<int32_t, 3>& target) {
+    const std::array<int32_t, 3>& target,
+    bool authoritative_incoming = false) {
   const uintptr_t camera_node = ResolveControllerCameraNode(controller);
   if (!camera_node || !diagnostic.node || !diagnostic.resource) {
     return;
@@ -1970,7 +1971,7 @@ void UpdateCameraMeshPresentationLatch(
       ManualOrbitOwnsPresentation(GetTickCount64());
   if (CameraMeshLatchRetainsPreviousTarget(
           same_camera, owner_changed, incoming_usable,
-          manual_orbit_owned)) {
+          manual_orbit_owned, authoritative_incoming)) {
     const std::array<int32_t, 3> retained =
         TranslateCameraTargetWithFocus(
             previous.focus, focus, previous.target);
@@ -2033,10 +2034,14 @@ void UpdateCameraMeshPresentationLatch(
         g_camera_mesh_presentation_latch_mutex);
     CameraMeshPresentationLatch& latch =
         g_camera_mesh_presentation_latch;
+    const bool authoritative_manifold_transfer =
+        authoritative_incoming && latch.active &&
+        latch.camera_node == camera_node;
     activated = !latch.active ||
                 latch.camera_node != camera_node ||
-                latch.blocker_node != diagnostic.node ||
-                latch.resource != diagnostic.resource;
+                (!authoritative_manifold_transfer &&
+                 (latch.blocker_node != diagnostic.node ||
+                  latch.resource != diagnostic.resource));
     if (activated) {
       const uint64_t next_generation =
           std::max<uint64_t>(1u, latch.generation + 1u);
@@ -4532,10 +4537,10 @@ void __cdecl HookMode3Camera(void* controller) {
           camera_focus, submitted, kThirdPersonMinimumCameraDistance);
   const bool submitted_endpoint_clear =
       submitted_usable && CameraEndpointClearOfSceneObjects(submitted);
-  if (CameraContinuousMeshContactNeedsCommit(
-          mesh_orbit_blocked, mesh_pushout.mesh_contact,
-          latch_active_before_update, submitted_usable,
-          submitted_endpoint_clear)) {
+  bool continuous_submitted_owned = false;
+  if (CameraContinuousMeshContactOwnsSubmittedTarget(
+          mesh_orbit_blocked, latch_active_before_update,
+          submitted_usable, submitted_endpoint_clear)) {
     std::array<int32_t, 3> committed{};
     if (CommitImmediateSpringArmContraction(
             controller, camera_focus, submitted, true, &committed)) {
@@ -4543,11 +4548,25 @@ void __cdecl HookMode3Camera(void* controller) {
       mesh_pushout.exact_committed = true;
       mesh_pushout.final_published = committed;
       mesh_pushout.accepted_target = committed;
+      continuous_submitted_owned = true;
+      const double committed_radius =
+          CameraPositionDistance(camera_focus, committed);
+      if (std::isfinite(committed_radius)) {
+        // The post-native mesh phase may have selected a second valid escape
+        // and contracted the spring to that competing solution. Keep spring
+        // state on the pre-native submitted point that now owns this complete
+        // continuous contact, not merely the exact published matrix.
+        g_third_person_orbit_state.collision_radius = committed_radius;
+        g_third_person_orbit_state.collision_clear_ticks = 0;
+        g_third_person_orbit_state.collision_blocked_release_ticks = 0;
+      }
       AppendNativeLog(
           "camera_mesh_contact_pin result=OK resource=%llu "
+          "post_contact=%u "
           "target=%d/%d/%d",
           static_cast<unsigned long long>(
               mesh_orbit_diagnostic.resource),
+          mesh_pushout.mesh_contact ? 1u : 0u,
           committed[0], committed[1], committed[2]);
     } else {
       AppendNativeLog(
@@ -4561,14 +4580,19 @@ void __cdecl HookMode3Camera(void* controller) {
 
   if (mesh_orbit_blocked || mesh_pushout.mesh_contact) {
     const CameraMeshHitDiagnostic& latch_diagnostic =
-        mesh_pushout.mesh_contact ? mesh_pushout.diagnostic
-                                  : mesh_orbit_diagnostic;
+        continuous_submitted_owned
+            ? mesh_orbit_diagnostic
+            : (mesh_pushout.mesh_contact ? mesh_pushout.diagnostic
+                                         : mesh_orbit_diagnostic);
     const std::array<int32_t, 3> latch_target =
-        SelectCameraMeshPresentationTarget(
-            mesh_pushout.mesh_contact, submitted,
-            mesh_pushout.final_published);
+        continuous_submitted_owned
+            ? mesh_pushout.final_published
+            : SelectCameraMeshPresentationTarget(
+                  mesh_pushout.mesh_contact, submitted,
+                  mesh_pushout.final_published);
     UpdateCameraMeshPresentationLatch(
-        controller, latch_diagnostic, camera_focus, latch_target);
+        controller, latch_diagnostic, camera_focus, latch_target,
+        continuous_submitted_owned);
   } else {
     CameraMeshHitDiagnostic native_candidate_diagnostic;
     const bool native_candidate_mesh_blocked =
@@ -9838,7 +9862,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.105 continuous mesh-contact "
+      "Deathtrap native render overlay 0.0.106 single mesh-contact "
       "ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "

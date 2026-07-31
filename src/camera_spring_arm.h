@@ -25,26 +25,28 @@ struct CameraFloorLimit {
 
 inline bool CameraMeshLatchRetainsPreviousTarget(
     bool same_camera, bool owner_changed, bool incoming_usable,
-    bool manual_orbit_owned) {
+    bool manual_orbit_owned, bool authoritative_incoming) {
   // Stable contact normally keeps the preceding face across adjacent mesh
   // nodes. During a manual orbit, however, a usable incoming target is the
   // user's current side of the obstruction; retaining the old face makes the
   // latch jump back as soon as input grace expires.
   return same_camera && (owner_changed || !incoming_usable) &&
+         !authoritative_incoming &&
          !(manual_orbit_owned && incoming_usable);
 }
 
-inline bool CameraContinuousMeshContactNeedsCommit(
-    bool pre_native_mesh_contact, bool post_native_mesh_contact,
-    bool presentation_latch_active, bool submitted_usable,
-    bool submitted_endpoint_clear) {
-  // Once a qualified mesh contact owns the spring arm, pin the already
-  // validated submitted endpoint on a tick where the native history happens
-  // to publish a clear intermediate. Otherwise the next history sample can
-  // re-enter the same mesh and create a clear/contact two-cycle.
-  return pre_native_mesh_contact && !post_native_mesh_contact &&
-         presentation_latch_active && submitted_usable &&
-         submitted_endpoint_clear;
+inline bool CameraContinuousMeshContactOwnsSubmittedTarget(
+    bool pre_native_mesh_contact, bool presentation_latch_active,
+    bool submitted_usable, bool submitted_endpoint_clear) {
+  // Once a qualified pre-native mesh contact has established ownership, its
+  // submitted endpoint is the one position proved safe on the requested arm.
+  // Keep that authority even if the legacy history resolver shifts the
+  // publication into a different mesh and the post-native pass finds another
+  // valid escape. Alternating those two independently safe solutions creates
+  // a multi-mesh contact cycle and can leave presentation latched to the
+  // wrong face.
+  return pre_native_mesh_contact && presentation_latch_active &&
+         submitted_usable && submitted_endpoint_clear;
 }
 
 inline CameraFloorLimit ResolveCameraFloorLimit(
