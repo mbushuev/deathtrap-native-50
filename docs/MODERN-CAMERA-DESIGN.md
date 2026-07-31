@@ -863,6 +863,14 @@ complete history to it. This uses the known native history topology instead of
 lengthening a grace timer: release remains responsive as soon as the complete
 future publication path is actually clear.
 
+Version `0.0.110` also treats a verified clear submitted arm as authoritative
+during an established post-only mesh contact. This prevents a corrected
+near-pivot history sample from becoming a permanent world-space camera anchor
+while yaw continues to change. Authority is granted only after the whole
+submitted arm passes the scene-mesh sweep and its endpoint has already passed
+the native room-volume query; blocked arms and first-contact escape selection
+remain unchanged.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

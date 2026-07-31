@@ -4667,12 +4667,19 @@ void __cdecl HookMode3Camera(void* controller) {
   const bool submitted_usable =
       CameraTargetMeetsMinimumDistance(
           camera_focus, submitted, kThirdPersonMinimumCameraDistance);
-  const bool submitted_endpoint_clear =
-      submitted_usable && CameraEndpointClearOfSceneObjects(submitted);
+  std::array<int32_t, 3> submitted_mesh_safe = submitted;
+  CameraMeshHitDiagnostic submitted_arm_diagnostic;
+  const bool submitted_arm_clear =
+      submitted_usable && latch_active_before_update &&
+      (mesh_orbit_blocked || mesh_pushout.mesh_contact) &&
+      !ClipThirdPersonOrbitAgainstSceneObjects(
+          camera_focus, submitted, &submitted_mesh_safe,
+          &submitted_arm_diagnostic);
   bool continuous_submitted_owned = false;
   if (CameraContinuousMeshContactOwnsSubmittedTarget(
-          mesh_orbit_blocked, latch_active_before_update,
-          submitted_usable, submitted_endpoint_clear)) {
+          mesh_orbit_blocked, mesh_pushout.mesh_contact,
+          latch_active_before_update, submitted_usable,
+          submitted_arm_clear)) {
     std::array<int32_t, 3> committed{};
     if (CommitImmediateSpringArmContraction(
             controller, camera_focus, submitted, true, &committed)) {
@@ -4694,17 +4701,22 @@ void __cdecl HookMode3Camera(void* controller) {
       }
       AppendNativeLog(
           "camera_mesh_contact_pin result=OK resource=%llu "
-          "post_contact=%u "
+          "pre_contact=%u post_contact=%u "
           "target=%d/%d/%d",
           static_cast<unsigned long long>(
-              mesh_orbit_diagnostic.resource),
+              mesh_orbit_blocked
+                  ? mesh_orbit_diagnostic.resource
+                  : mesh_pushout.diagnostic.resource),
+          mesh_orbit_blocked ? 1u : 0u,
           mesh_pushout.mesh_contact ? 1u : 0u,
           committed[0], committed[1], committed[2]);
     } else {
       AppendNativeLog(
           "camera_mesh_contact_pin result=FAILED resource=%llu",
           static_cast<unsigned long long>(
-              mesh_orbit_diagnostic.resource));
+              mesh_orbit_blocked
+                  ? mesh_orbit_diagnostic.resource
+                  : mesh_pushout.diagnostic.resource));
     }
   }
   g_third_person_orbit_state.collision_constrained_this_tick |=
@@ -4713,7 +4725,8 @@ void __cdecl HookMode3Camera(void* controller) {
   if (mesh_orbit_blocked || mesh_pushout.mesh_contact) {
     const CameraMeshHitDiagnostic& latch_diagnostic =
         continuous_submitted_owned
-            ? mesh_orbit_diagnostic
+            ? (mesh_orbit_blocked ? mesh_orbit_diagnostic
+                                  : mesh_pushout.diagnostic)
             : (mesh_pushout.mesh_contact ? mesh_pushout.diagnostic
                                          : mesh_orbit_diagnostic);
     const std::array<int32_t, 3> latch_target =
@@ -9985,7 +9998,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.109 pending-history mesh hold "
+      "Deathtrap native render overlay 0.0.110 post-contact depenetration "
       "ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "

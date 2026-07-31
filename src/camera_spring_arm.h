@@ -36,17 +36,18 @@ inline bool CameraMeshLatchRetainsPreviousTarget(
 }
 
 inline bool CameraContinuousMeshContactOwnsSubmittedTarget(
-    bool pre_native_mesh_contact, bool presentation_latch_active,
-    bool submitted_usable, bool submitted_endpoint_clear) {
-  // Once a qualified pre-native mesh contact has established ownership, its
-  // submitted endpoint is the one position proved safe on the requested arm.
-  // Keep that authority even if the legacy history resolver shifts the
-  // publication into a different mesh and the post-native pass finds another
-  // valid escape. Alternating those two independently safe solutions creates
-  // a multi-mesh contact cycle and can leave presentation latched to the
-  // wrong face.
-  return pre_native_mesh_contact && presentation_latch_active &&
-         submitted_usable && submitted_endpoint_clear;
+    bool pre_native_mesh_contact, bool post_native_mesh_contact,
+    bool presentation_latch_active, bool submitted_usable,
+    bool submitted_arm_clear) {
+  // Once either collision phase has established a qualified mesh latch, the
+  // submitted endpoint is authoritative whenever its complete focus-to-camera
+  // arm is currently clear. This includes the post-only stale-history case:
+  // the requested arm is already leaving the prop, but 0x2F380 republishes the
+  // preceding near-pivot point and the post pass would otherwise commit that
+  // same point forever. First contact still uses the collision-derived target.
+  return (pre_native_mesh_contact || post_native_mesh_contact) &&
+         presentation_latch_active && submitted_usable &&
+         submitted_arm_clear;
 }
 
 inline CameraFloorLimit ResolveCameraFloorLimit(

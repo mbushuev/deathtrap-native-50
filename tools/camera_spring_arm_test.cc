@@ -244,13 +244,15 @@ int main() {
     return 1;
   }
   if (!CameraContinuousMeshContactOwnsSubmittedTarget(
-          true, true, true, true) ||
+          true, false, true, true, true) ||
+      !CameraContinuousMeshContactOwnsSubmittedTarget(
+          false, true, true, true, true) ||
       CameraContinuousMeshContactOwnsSubmittedTarget(
-          true, false, true, true) ||
+          true, false, false, true, true) ||
       CameraContinuousMeshContactOwnsSubmittedTarget(
-          false, true, true, true) ||
+          false, false, true, true, true) ||
       CameraContinuousMeshContactOwnsSubmittedTarget(
-          true, true, true, false)) {
+          false, true, true, true, false)) {
     std::cerr << "continuous mesh-contact target ownership was invalid\n";
     return 1;
   }

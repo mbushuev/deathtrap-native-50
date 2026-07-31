@@ -890,6 +890,23 @@ keeps spring state, exact publication and presentation on one endpoint until
 `0x2F380` naturally produces a fully clear pending path. The existing clear
 release then resumes; no extra timing threshold is introduced.
 
+The final `0.0.109` trace identifies a different persistent post-only contact.
+At focus `-657/400/14859`, the requested orbit and contracted submitted point
+move continuously around the player and the complete pre-native mesh sweep
+reports no blocker. Nevertheless, the native resolver republishes its old
+near-pivot point `-401/400/14814`; the post-native pass classifies it against
+resource 12613 and commits that exact same point on every source tick. Camera
+translation is therefore fixed while orientation follows the changing orbit,
+which appears as rotation around an invisible off-player centre.
+
+Version `0.0.110` extends established continuous-contact ownership to this
+post-only stale-history case. After first contact creates a qualified latch,
+the final submitted point is rechecked with a complete focus-to-camera mesh
+sweep. If that arm is clear and the point already passed native room-volume
+validation, it replaces the stale post-native point in exact publication,
+spring state and presentation. First contact still uses the collision-derived
+escape, and a genuinely blocked submitted arm cannot take ownership.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
