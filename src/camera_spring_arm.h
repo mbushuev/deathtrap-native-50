@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 struct CameraSpringArmStep {
   double radius = 0.0;
@@ -45,17 +47,54 @@ inline bool CameraMeshExtentsBlockVolume(
   return sorted[1] >= camera_diameter;
 }
 
-inline bool CameraMeshBoundsBlockVolume(double bounds_radius,
-                                        double camera_diameter) {
-  if (!std::isfinite(bounds_radius) || !std::isfinite(camera_diameter) ||
-      bounds_radius < 0.0 || camera_diameter <= 0.0) {
+inline bool PushCameraOutOfExpandedBox(
+    const std::array<double, 3>& point,
+    const std::array<double, 3>& reference,
+    const std::array<double, 3>& half_extents,
+    size_t excluded_axis, double margin,
+    std::array<double, 3>* pushed, size_t* pushed_axis = nullptr) {
+  if (!pushed || excluded_axis >= point.size() ||
+      !std::isfinite(margin) || margin < 0.0) {
     return false;
   }
-  // Props smaller than one complete camera diameter in bounding-sphere radius
-  // cannot form a wall-like occluder around the spring arm. Their enlarged
-  // swept sphere otherwise fills the entire player-to-prop gap and traps the
-  // camera against lever handles and compact housings.
-  return bounds_radius >= camera_diameter;
+  for (size_t axis = 0; axis < point.size(); ++axis) {
+    if (!std::isfinite(point[axis]) || !std::isfinite(reference[axis]) ||
+        !std::isfinite(half_extents[axis]) || half_extents[axis] <= 0.0 ||
+        std::abs(point[axis]) >= half_extents[axis]) {
+      return false;
+    }
+  }
+
+  size_t nearest_axis = point.size();
+  double nearest_face = std::numeric_limits<double>::infinity();
+  for (size_t axis = 0; axis < point.size(); ++axis) {
+    if (axis == excluded_axis) {
+      continue;
+    }
+    const double face_distance =
+        half_extents[axis] - std::abs(point[axis]);
+    if (face_distance < nearest_face) {
+      nearest_face = face_distance;
+      nearest_axis = axis;
+    }
+  }
+  if (nearest_axis >= point.size()) {
+    return false;
+  }
+
+  double sign = point[nearest_axis] < 0.0 ? -1.0 : 1.0;
+  constexpr double kSideEpsilon = 1.0e-6;
+  if (std::abs(point[nearest_axis]) <= kSideEpsilon &&
+      std::abs(reference[nearest_axis]) > kSideEpsilon) {
+    sign = reference[nearest_axis] < 0.0 ? -1.0 : 1.0;
+  }
+  *pushed = point;
+  (*pushed)[nearest_axis] =
+      sign * (half_extents[nearest_axis] + margin);
+  if (pushed_axis) {
+    *pushed_axis = nearest_axis;
+  }
+  return true;
 }
 
 inline CameraSpringArmStep StepCameraSpringArm(

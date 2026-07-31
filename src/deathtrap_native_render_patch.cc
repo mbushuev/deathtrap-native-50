@@ -270,6 +270,9 @@ struct CameraMeshHitDiagnostic {
   std::array<int32_t, 3> bounds_center{};
   int32_t bounds_radius = 0;
   double bounds_motion = 0.0;
+  bool initial_overlap = false;
+  bool overlap_pushout = false;
+  size_t pushout_axis = std::numeric_limits<size_t>::max();
   bool valid = false;
 };
 
@@ -541,7 +544,6 @@ std::mutex g_camera_collision_mesh_mutex;
 std::unordered_map<uintptr_t, CameraCollisionMesh>
     g_camera_collision_meshes;
 std::unordered_set<uintptr_t> g_camera_nonblocking_meshes_logged;
-std::unordered_set<uintptr_t> g_camera_small_bounds_logged;
 uint64_t g_camera_mesh_cache_hits = 0;
 uint64_t g_camera_mesh_cache_misses = 0;
 uint64_t g_camera_mesh_sweeps = 0;
@@ -2571,17 +2573,6 @@ void LogNonblockingCameraMesh(uintptr_t handle,
   }
 }
 
-void LogSmallCameraMeshBounds(uintptr_t handle, int32_t bounds_radius) {
-  if (g_debug_log &&
-      g_camera_small_bounds_logged.insert(handle).second) {
-    AppendNativeLog(
-        "camera_mesh_small_bounds resource=%llu radius=%d "
-        "required_radius=%.1f",
-        static_cast<unsigned long long>(handle), bounds_radius,
-        kCameraCollisionSphereRadius * 2.0);
-  }
-}
-
 double CameraVectorDot(const Vec3& a, const Vec3& b) {
   return a.x * b.x + a.y * b.y + a.z * b.z;
 }
@@ -2602,6 +2593,86 @@ Vec3 CameraVectorCross(const Vec3& a, const Vec3& b) {
   return {a.y * b.z - a.z * b.y,
           a.z * b.x - a.x * b.z,
           a.x * b.y - a.y * b.x};
+}
+
+bool CameraMeshInitialOverlapPushout(
+    const CameraCollisionMesh& mesh, const Matrix3x4& world,
+    const Vec3& point, const Vec3& reference, double radius,
+    double margin, Vec3* pushed, size_t* pushed_axis = nullptr) {
+  if (!pushed || !mesh.local_bounds_valid ||
+      !std::isfinite(radius) || radius <= 0.0) {
+    return false;
+  }
+
+  constexpr double kMatrixScale = 1.0 / 16384.0;
+  std::array<Vec3, 3> axes{};
+  std::array<double, 3> point_coordinates{};
+  std::array<double, 3> reference_coordinates{};
+  std::array<double, 3> half_extents{};
+  Vec3 center{
+      static_cast<double>(world.values[9]),
+      static_cast<double>(world.values[10]),
+      static_cast<double>(world.values[11])};
+  for (size_t axis = 0; axis < axes.size(); ++axis) {
+    const size_t basis = axis * 3u;
+    const Vec3 scaled_axis{
+        static_cast<double>(world.values[basis]) * kMatrixScale,
+        static_cast<double>(world.values[basis + 1u]) * kMatrixScale,
+        static_cast<double>(world.values[basis + 2u]) * kMatrixScale};
+    const double axis_length = std::sqrt(
+        CameraVectorDot(scaled_axis, scaled_axis));
+    if (!std::isfinite(axis_length) || axis_length < 1.0e-6) {
+      return false;
+    }
+    axes[axis] = CameraVectorScale(scaled_axis, 1.0 / axis_length);
+    const double local_center =
+        (static_cast<double>(mesh.local_min[axis]) +
+         static_cast<double>(mesh.local_max[axis])) * 0.5;
+    center = CameraVectorAdd(
+        center, CameraVectorScale(scaled_axis, local_center));
+    const double local_span =
+        static_cast<double>(
+            static_cast<int64_t>(mesh.local_max[axis]) -
+            static_cast<int64_t>(mesh.local_min[axis]));
+    half_extents[axis] =
+        std::abs(local_span) * axis_length * 0.5 + radius;
+  }
+
+  const Vec3 point_offset = CameraVectorSubtract(point, center);
+  const Vec3 reference_offset = CameraVectorSubtract(reference, center);
+  size_t vertical_axis = 0;
+  double vertical_alignment = -1.0;
+  for (size_t axis = 0; axis < axes.size(); ++axis) {
+    point_coordinates[axis] =
+        CameraVectorDot(point_offset, axes[axis]);
+    reference_coordinates[axis] =
+        CameraVectorDot(reference_offset, axes[axis]);
+    const double alignment = std::abs(axes[axis].y);
+    if (alignment > vertical_alignment) {
+      vertical_alignment = alignment;
+      vertical_axis = axis;
+    }
+  }
+
+  std::array<double, 3> pushed_coordinates{};
+  size_t selected_axis = axes.size();
+  if (!PushCameraOutOfExpandedBox(
+          point_coordinates, reference_coordinates, half_extents,
+          vertical_axis, margin, &pushed_coordinates, &selected_axis)) {
+    return false;
+  }
+
+  Vec3 result = center;
+  for (size_t axis = 0; axis < axes.size(); ++axis) {
+    result = CameraVectorAdd(
+        result,
+        CameraVectorScale(axes[axis], pushed_coordinates[axis]));
+  }
+  *pushed = result;
+  if (pushed_axis) {
+    *pushed_axis = selected_axis;
+  }
+  return true;
 }
 
 double CameraPointTriangleDistanceSquared(const Vec3& point, const Vec3& a,
@@ -2931,13 +3002,6 @@ bool CameraTemporalChordIntersectsSceneObjects(
         current.bounds_radius > kCameraCollisionMaximumObjectRadius) {
       continue;
     }
-    if (!CameraMeshBoundsBlockVolume(
-            static_cast<double>(current.bounds_radius),
-            kCameraCollisionSphereRadius * 2.0)) {
-      LogSmallCameraMeshBounds(
-          current.render_resource_handle, current.bounds_radius);
-      continue;
-    }
     if (SceneNodeDescendsFrom(scene, node, scene.player) ||
         SceneNodeDescendsFrom(scene, scene.player, node)) {
       continue;
@@ -3079,11 +3143,25 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   double nearest_object_radius = 0.0;
   size_t nearest_triangle_count = 0;
   bool nearest_initial_overlap = false;
+  bool nearest_overlap_pushout = false;
+  std::array<int32_t, 3> nearest_target = requested;
   CameraMeshHitDiagnostic nearest_diagnostic;
   const Vec3 origin{static_cast<double>(focus[0]),
                     static_cast<double>(focus[1]),
                     static_cast<double>(focus[2])};
   const Vec3 ray_direction{direction[0], direction[1], direction[2]};
+  Vec3 overlap_reference{
+      static_cast<double>(requested[0]),
+      static_cast<double>(requested[1]),
+      static_cast<double>(requested[2])};
+  const auto previous_camera =
+      g_previous_snapshot.nodes.find(g_previous_snapshot.camera);
+  if (previous_camera != g_previous_snapshot.nodes.end()) {
+    overlap_reference = {
+        static_cast<double>(previous_camera->second.world.values[9]),
+        static_cast<double>(previous_camera->second.world.values[10]),
+        static_cast<double>(previous_camera->second.world.values[11])};
+  }
   std::lock_guard<std::mutex> mesh_lock(g_camera_collision_mesh_mutex);
   for (const auto& entry : g_previous_snapshot.nodes) {
     const uintptr_t node = entry.first;
@@ -3092,13 +3170,6 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
         node == g_previous_snapshot.camera ||
         !current.render_resource_handle || !current.bounds_valid ||
         current.bounds_radius > kCameraCollisionMaximumObjectRadius) {
-      continue;
-    }
-    if (!CameraMeshBoundsBlockVolume(
-            static_cast<double>(current.bounds_radius),
-            kCameraCollisionSphereRadius * 2.0)) {
-      LogSmallCameraMeshBounds(
-          current.render_resource_handle, current.bounds_radius);
       continue;
     }
 
@@ -3178,14 +3249,69 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
                                scaled_extents);
       continue;
     }
-    // Lara and her ancestors were excluded above, so an overlap at the native
-    // focus is real scene geometry, not the owner collider. It must retract to
-    // the pivot instead of being ignored: skipping it let the camera cross the
-    // lever block and remain in the black back side of its polygons.
+    candidate_diagnostic.initial_overlap = mesh_initial_overlap;
+    if (mesh_initial_overlap) {
+      // A radial spring has no valid inward endpoint when the expanded object
+      // already contains the player-side pivot. Collapsing to radius zero puts
+      // the near plane on the same polygons and produces the observed black
+      // texture. Resolve this exceptional topology like the maintained Tomb
+      // camera: push the camera volume through the nearest horizontal face of
+      // the object's oriented bounds, choosing the side of the previous
+      // camera for continuity. Room collision validates the result later.
+      constexpr double kOverlapPushoutMargin = 8.0;
+      Vec3 pushed{};
+      size_t pushout_axis = std::numeric_limits<size_t>::max();
+      if (!CameraMeshInitialOverlapPushout(
+              *mesh, current.world, origin, overlap_reference,
+              kCameraCollisionSphereRadius, kOverlapPushoutMargin,
+              &pushed, &pushout_axis)) {
+        continue;
+      }
+      const double push_distance = std::sqrt(
+          CameraVectorDot(CameraVectorSubtract(pushed, origin),
+                          CameraVectorSubtract(pushed, origin)));
+      if (!std::isfinite(push_distance) ||
+          (nearest_overlap_pushout &&
+           push_distance >= nearest_distance)) {
+        continue;
+      }
+      nearest_distance = push_distance;
+      nearest_target = {
+          static_cast<int32_t>(std::lround(pushed.x)),
+          static_cast<int32_t>(std::lround(pushed.y)),
+          static_cast<int32_t>(std::lround(pushed.z))};
+      nearest_node = node;
+      nearest_resource = current.render_resource_handle;
+      nearest_object_radius = static_cast<double>(current.bounds_radius);
+      nearest_triangle_count = mesh->triangles.size();
+      nearest_initial_overlap = true;
+      nearest_overlap_pushout = true;
+      nearest_diagnostic = candidate_diagnostic;
+      nearest_diagnostic.node = node;
+      nearest_diagnostic.resource = current.render_resource_handle;
+      nearest_diagnostic.bounds_center = current.bounds_center;
+      nearest_diagnostic.bounds_radius = current.bounds_radius;
+      nearest_diagnostic.bounds_motion = bounds_motion;
+      nearest_diagnostic.initial_overlap = true;
+      nearest_diagnostic.overlap_pushout = true;
+      nearest_diagnostic.pushout_axis = pushout_axis;
+      continue;
+    }
+    if (nearest_overlap_pushout) {
+      continue;
+    }
+
     const double safe_distance =
         std::max(0.0, surface_distance - kContactBackoff);
     nearest_distance = std::min(nearest_distance, safe_distance);
     nearest_surface_distance = surface_distance;
+    nearest_target = {
+        focus[0] + static_cast<int32_t>(
+                        std::lround(direction[0] * nearest_distance)),
+        focus[1] + static_cast<int32_t>(
+                        std::lround(direction[1] * nearest_distance)),
+        focus[2] + static_cast<int32_t>(
+                        std::lround(direction[2] * nearest_distance))};
     nearest_node = node;
     nearest_resource = current.render_resource_handle;
     nearest_object_radius = static_cast<double>(current.bounds_radius);
@@ -3197,18 +3323,14 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     nearest_diagnostic.bounds_center = current.bounds_center;
     nearest_diagnostic.bounds_radius = current.bounds_radius;
     nearest_diagnostic.bounds_motion = bounds_motion;
+    nearest_diagnostic.initial_overlap = false;
+    nearest_diagnostic.overlap_pushout = false;
   }
 
   if (!nearest_node) {
     return false;
   }
-  *clipped = {
-      focus[0] + static_cast<int32_t>(
-                      std::lround(direction[0] * nearest_distance)),
-      focus[1] + static_cast<int32_t>(
-                      std::lround(direction[1] * nearest_distance)),
-      focus[2] + static_cast<int32_t>(
-                      std::lround(direction[2] * nearest_distance))};
+  *clipped = nearest_target;
   if (hit_diagnostic) {
     *hit_diagnostic = nearest_diagnostic;
   }
@@ -3216,13 +3338,17 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     AppendNativeLog(
         "camera_mesh_sweep node=%08llX resource=%llu triangles=%llu "
         "object_radius=%.1f contact=%.1f sphere=%.1f camera_radius=%.1f "
-        "requested=%.1f overlap=%u motion=%.1f",
+        "requested=%.1f overlap=%u pushout=%u axis=%lld motion=%.1f",
         static_cast<unsigned long long>(nearest_node),
         static_cast<unsigned long long>(nearest_resource),
         static_cast<unsigned long long>(nearest_triangle_count),
         nearest_object_radius, nearest_surface_distance,
         kCameraCollisionSphereRadius, nearest_distance, requested_distance,
         nearest_initial_overlap ? 1u : 0u,
+        nearest_overlap_pushout ? 1u : 0u,
+        nearest_overlap_pushout
+            ? static_cast<long long>(nearest_diagnostic.pushout_axis)
+            : -1ll,
         nearest_diagnostic.bounds_motion);
     if (nearest_diagnostic.valid) {
       AppendNativeLog(
@@ -3339,9 +3465,9 @@ bool CommitImmediateSpringArmContraction(
   // positive swept-sphere contact with a qualified scene mesh. It must never
   // be used for ordinary walls, floors, clear tracking or the complete
   // contracted/release lifetime: runtime 0.0.85 proved that doing so breaks
-  // native wall/floor/orientation ownership. The endpoint here is a prefix of
-  // the already published native focus-to-camera segment, clipped against the
-  // render mesh that the retail BSP cannot see.
+  // native wall/floor/orientation ownership. The endpoint is either a prefix
+  // of the already published native focus-to-camera segment or a native-
+  // validated nearest-face depenetration from a pivot-containing scene object.
   const std::array<int32_t, 3>& target = submitted;
 
   bool written = SafeWrite(
@@ -3507,26 +3633,56 @@ bool ConfigureCameraWithSceneMeshPushout(
 
   result->mesh_contact = true;
   result->diagnostic = diagnostic;
+  if (diagnostic.overlap_pushout) {
+    bool room_blocked = true;
+    if (!NativeCameraVolumeBlocked(
+            controller, focus, mesh_safe, &room_blocked)) {
+      result->exhausted = true;
+      AppendNativeLog(
+          "camera_mesh_overlap_pushout validation=unavailable "
+          "resource=%llu",
+          static_cast<unsigned long long>(diagnostic.resource));
+      return true;
+    }
+    if (room_blocked) {
+      std::array<int32_t, 3> room_safe{};
+      if (!ClipThirdPersonOrbitAgainstNativeWorld(
+              controller, focus, mesh_safe, &room_safe)) {
+        result->exhausted = true;
+        AppendNativeLog(
+            "camera_mesh_overlap_pushout validation=failed resource=%llu",
+            static_cast<unsigned long long>(diagnostic.resource));
+        return true;
+      }
+      mesh_safe = room_safe;
+      AppendNativeLog(
+          "camera_mesh_overlap_pushout validation=clipped "
+          "resource=%llu target=%d/%d/%d",
+          static_cast<unsigned long long>(diagnostic.resource),
+          mesh_safe[0], mesh_safe[1], mesh_safe[2]);
+    }
+  }
   if (g_debug_log) {
     AppendNativeLog(
         "camera_post_native_mesh published=%d/%d/%d "
         "safe_target=%d/%d/%d node=%08llX resource=%llu tri=%llu "
-        "motion=%.1f",
+        "overlap_pushout=%u motion=%.1f",
         result->initial_published[0], result->initial_published[1],
         result->initial_published[2], mesh_safe[0], mesh_safe[1],
         mesh_safe[2], static_cast<unsigned long long>(diagnostic.node),
         static_cast<unsigned long long>(diagnostic.resource),
         static_cast<unsigned long long>(diagnostic.triangle_index),
+        diagnostic.overlap_pushout ? 1u : 0u,
         diagnostic.bounds_motion);
   }
 
-  // This is the object-collision phase after the native room/LOS phase. The
-  // direct write is allowed only because the published camera is positively
-  // intersecting a qualified scene mesh and mesh_safe is a shorter point on
-  // that already native-resolved focus-to-camera segment. Clear ticks,
-  // authored shots, walls/floors and recovery points that pass the sweep never
-  // enter this path. This is the contact-only boundary used successfully in
-  // 0.0.78, not the rejected global exact publication from 0.0.85.
+  // This is the object-collision phase after the native room/LOS phase. A
+  // normal contact remains a shorter point on the native-resolved segment. If
+  // the expanded object contains the pivot, radial contraction is undefined;
+  // the target is instead the deterministic nearest horizontal OBB face and
+  // has passed the native room-volume validation above. Clear ticks, authored
+  // shots and ordinary room geometry that pass the mesh sweep never enter this
+  // direct publication path.
   result->accepted_target = mesh_safe;
   std::array<int32_t, 3> committed{};
   if (!CommitImmediateSpringArmContraction(
@@ -3717,24 +3873,53 @@ void __cdecl HookMode3Camera(void* controller) {
           camera_focus, orbit, &mesh_safe_endpoint,
           &mesh_orbit_diagnostic);
   if (mesh_orbit_blocked) {
-    const double native_safe_radius =
-        CameraPositionDistance(camera_focus, hard_safe_endpoint);
-    const double mesh_safe_radius =
-        CameraPositionDistance(camera_focus, mesh_safe_endpoint);
-    if (std::isfinite(mesh_safe_radius) &&
-        (!std::isfinite(native_safe_radius) ||
-         mesh_safe_radius < native_safe_radius)) {
+    if (mesh_orbit_diagnostic.overlap_pushout) {
+      // A pivot-containing object has no meaningful radial "near side".
+      // Preserve the deterministic nearest-face pushout and let the native
+      // room-volume validation below reject or clip it if necessary.
       hard_safe_endpoint = mesh_safe_endpoint;
+    } else {
+      const double native_safe_radius =
+          CameraPositionDistance(camera_focus, hard_safe_endpoint);
+      const double mesh_safe_radius =
+          CameraPositionDistance(camera_focus, mesh_safe_endpoint);
+      if (std::isfinite(mesh_safe_radius) &&
+          (!std::isfinite(native_safe_radius) ||
+           mesh_safe_radius < native_safe_radius)) {
+        hard_safe_endpoint = mesh_safe_endpoint;
+      }
     }
   }
   const bool spring_arm_blocked = orbit_blocked || mesh_orbit_blocked;
 
   std::array<int32_t, 3> submitted{};
-  if (!ResolveThirdPersonSpringArm(
-          camera_focus, orbit, hard_safe_endpoint, spring_arm_blocked,
-          &submitted)) {
-    AppendNativeLog("camera_native_spring resolve_failed");
-    return;
+  if (mesh_orbit_blocked &&
+      mesh_orbit_diagnostic.overlap_pushout) {
+    submitted = hard_safe_endpoint;
+    const double pushed_radius =
+        CameraPositionDistance(camera_focus, submitted);
+    if (!std::isfinite(pushed_radius)) {
+      AppendNativeLog("camera_mesh_overlap_pushout invalid");
+      return;
+    }
+    g_third_person_orbit_state.collision_radius = pushed_radius;
+    g_third_person_orbit_state.collision_clear_ticks = 0;
+    g_third_person_orbit_state.collision_blocked_release_ticks = 0;
+    AppendNativeLog(
+        "camera_mesh_overlap_pushout target=%d/%d/%d radius=%.1f "
+        "resource=%llu axis=%llu",
+        submitted[0], submitted[1], submitted[2], pushed_radius,
+        static_cast<unsigned long long>(
+            mesh_orbit_diagnostic.resource),
+        static_cast<unsigned long long>(
+            mesh_orbit_diagnostic.pushout_axis));
+  } else {
+    if (!ResolveThirdPersonSpringArm(
+            camera_focus, orbit, hard_safe_endpoint, spring_arm_blocked,
+            &submitted)) {
+      AppendNativeLog("camera_native_spring resolve_failed");
+      return;
+    }
   }
 
   // Release candidates are generated from a previously contracted radius.
@@ -8829,7 +9014,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.92 mesh presentation latch "
+      "Deathtrap native render overlay 0.0.93 pivot overlap pushout "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "

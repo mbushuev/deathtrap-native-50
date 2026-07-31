@@ -543,6 +543,28 @@ the current safe target to every newly captured camera snapshot. It persists
 through one missing sample, clears after two complete clear rays, and clears
 immediately for scripted cameras or scene-history resets.
 
+The `0.0.92` run rejects the bounds-radius rule. It excluded the intended
+lever housing resource 12708, but also excluded 106 other resources, including
+visible geometry with bounds radii 185 and 190. The run ended with static-block
+penetration and 93 D3D11 black-phase rejections. Resource 9997 exposed the
+second, independent defect: its qualified 257-unit mesh twice reported an
+initial swept-sphere overlap (`contact=0`). The radial spring interpreted that
+topology as a safe radius of zero and published the camera at the focus,
+placing the near plane on the blocking polygons.
+
+Version `0.0.93` removes the bounds-radius exclusion and returns to the
+intrinsic two-axis extent classification. Ordinary render-mesh contacts still
+shorten the complete pivot-to-camera arm. An inward contact that already
+contains the pivot is no longer represented as a zero-length radial arm.
+Instead, the pivot is transformed into the mesh's oriented local bounds,
+expanded by the 96-unit camera radius, and pushed through the nearest
+horizontal face. Ties select the side of the previous camera endpoint for
+continuity. The resulting non-radial point must pass the native room-volume
+query before the contact-only publication and presentation latch may use it.
+This follows the maintained Tomb-camera separation between room LOS and
+post-room object depenetration without invoking Deathtrap's randomized
+fixed-camera fallback.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

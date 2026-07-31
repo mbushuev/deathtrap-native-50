@@ -602,6 +602,24 @@ Version `0.0.92` adds the missing presentation contract:
 This prevents a native/mesh A-B-A presentation loop without restoring the
 rejected global exact-camera ownership of `0.0.85`.
 
+The `0.0.92` run demonstrates why object size cannot replace collision
+resolution. The one-diameter bounds-radius test removed 107 resources from
+camera collision and reintroduced visible static-block penetration. At the
+same time, a qualified resource 9997 produced `contact=0`; contracting a
+radial spring to that contact placed the camera exactly at the player-side
+pivot and generated black near-plane frames.
+
+Version `0.0.93` adopts a separate initial-overlap operation, modelled on the
+maintained TombEngine camera's room-then-object sequence. Normal contacts are
+unchanged and remain radial. If a qualified object's expanded oriented bounds
+already contain the pivot while the requested ray moves deeper into it, the
+camera volume is translated to the nearest horizontal face instead of being
+collapsed to zero. The previous camera chooses the side only when the pivot is
+centred on an axis; it does not supply a stale endpoint. The candidate is then
+checked by Deathtrap's native room-volume resolver, so object depenetration
+cannot authorize wall or floor penetration. Thin geometry is still rejected
+only by the intrinsic two-axis extent test.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

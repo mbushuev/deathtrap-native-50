@@ -49,13 +49,31 @@ int main() {
     std::cerr << "solid housing was not classified as a blocker\n";
     return 1;
   }
-  if (CameraMeshBoundsBlockVolume(180.0, 192.0)) {
-    std::cerr << "compact lever housing was incorrectly classified as a wall\n";
+  std::array<double, 3> pushed{};
+  size_t pushed_axis = 3;
+  if (!PushCameraOutOfExpandedBox(
+          {0.0, 0.0, 0.0}, {50.0, 0.0, 0.0},
+          {100.0, 200.0, 300.0}, 1, 8.0, &pushed, &pushed_axis)) {
+    std::cerr << "center overlap was not pushed out\n";
     return 1;
   }
-  if (!CameraMeshBoundsBlockVolume(310.0, 192.0) ||
-      !CameraMeshBoundsBlockVolume(1136.0, 192.0)) {
-    std::cerr << "large scene blocker was incorrectly ignored\n";
+  ExpectNear(pushed[0], 108.0, "reference selects stable overlap side");
+  ExpectNear(pushed[1], 0.0, "vertical axis remains unchanged");
+  if (pushed_axis != 0) {
+    std::cerr << "wrong overlap pushout axis\n";
+    return 1;
+  }
+  if (!PushCameraOutOfExpandedBox(
+          {-90.0, 0.0, 0.0}, {50.0, 0.0, 0.0},
+          {100.0, 200.0, 300.0}, 1, 8.0, &pushed, &pushed_axis)) {
+    std::cerr << "near-face overlap was not pushed out\n";
+    return 1;
+  }
+  ExpectNear(pushed[0], -108.0, "nearest side beats reference side");
+  if (PushCameraOutOfExpandedBox(
+          {101.0, 0.0, 0.0}, {50.0, 0.0, 0.0},
+          {100.0, 200.0, 300.0}, 1, 8.0, &pushed, &pushed_axis)) {
+    std::cerr << "clear point was incorrectly pushed\n";
     return 1;
   }
 
