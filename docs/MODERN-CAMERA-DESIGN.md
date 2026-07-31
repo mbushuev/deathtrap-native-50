@@ -783,6 +783,15 @@ that modern-camera collision owner is active. These are ownership decisions;
 mesh qualification, spring radius, native room tests, contact margin, release
 thresholds and authored-camera arbitration are unchanged.
 
+Runtime establishes that presentation is not allowed to veto an exact frame:
+the `0.0.103` collision-conditioned guard rejected 276 exact frames, with a
+near-continuous rejection streak at a stair contact. The result looks like a
+whole-game render freeze because the swap chain retains the previous image
+while simulation proceeds. Version `0.0.104` restores the stronger invariant
+that native exact presentation always fails open. Only synthetic midpoint
+phases may be rejected. Manual-orbit latch arbitration and collision-owned
+follow bypass remain unchanged; the first run recorded no follow hard cuts.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

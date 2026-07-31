@@ -9800,8 +9800,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.103 collision/presentation "
-      "ownership "
+      "Deathtrap native render overlay 0.0.104 exact-frame fail-open "
+      "presentation "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
@@ -9996,18 +9996,6 @@ DeathtrapNativePresentationStage GetDeathtrapNativePresentationStage() {
 
 uint64_t GetDeathtrapNativePresentationTick() {
   return g_active_presentation_trace.tick;
-}
-
-bool DeathtrapModernCameraCollisionPresentationGuardActive() {
-  if (!g_third_person_orbit_state.engaged ||
-      g_third_person_orbit_state.suspended ||
-      g_scripted_camera_override_active.load(std::memory_order_acquire)) {
-    return false;
-  }
-  if (g_third_person_orbit_state.collision_constrained_this_tick) {
-    return true;
-  }
-  return CameraMeshPresentationLatchActive();
 }
 
 DeathtrapControllerSelectorStatus GetDeathtrapControllerSelectorStatus() {

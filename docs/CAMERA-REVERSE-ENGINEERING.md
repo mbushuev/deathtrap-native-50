@@ -778,6 +778,16 @@ an active modern-camera collision; loading screens, authored reveals and
 ordinary dark rooms remain exact native presentation. Present diagnostics now
 include the source tick and distinguish `midpoint` from `exact_camera`.
 
+The `0.0.103` runtime disproves exact-frame rejection as a safe presentation
+strategy. It rejected 276 native exact frames and 564 midpoint phases. Near the
+stair contact, `exact_camera` rejection became nearly continuous through tick
+1531, visibly freezing the complete rendered game even though simulation and
+camera updates continued. Version `0.0.104` removes exact rejection entirely.
+The corruption detector is again fail-open for every native exact frame and
+may suppress only synthetic midpoint phases. Source-tick correlation remains
+in midpoint diagnostics. The two independent `0.0.103` ownership changes are
+retained; notably, the same run recorded zero presentation-follow hard cuts.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
