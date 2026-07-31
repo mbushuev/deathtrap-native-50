@@ -239,6 +239,10 @@ Tab action; while native camera mode 4 is active, the right stick drives retail
 first-person mouse-look and the modern orbit is suspended. SELECT still does
 not switch to the retired custom head/retail camera policies, so one persistent
 modern rig owns third-person gameplay.
+Start is delivered to the retail menu action as Escape before frontend
+ownership changes. The camera watchdog then transfers the controller only
+after the game actually leaves its gameplay camera; this prevents Start from
+being consumed by the bridge without opening the pause menu.
 The right stick and physical mouse rotate that rig on both axes. Version
 `0.0.62` uses conventional directions by default; set `Camera/InvertX=1` or
 `Camera/InvertY=1` only to reverse an axis. `Camera/PreferredRadius=1400`

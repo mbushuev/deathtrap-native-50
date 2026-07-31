@@ -6261,15 +6261,6 @@ void UpdateDeathtrapXInput() {
   const WORD newly_pressed =
       state.Gamepad.wButtons & ~g_previous_xinput_buttons;
   ReconcileXInputFrontendOwnership(native_gameplay);
-  if (native_gameplay && (newly_pressed & XINPUT_GAMEPAD_START)) {
-    // The pause/options menus retain the live player pointer, so the native
-    // gameplay test alone cannot identify them. Start is the authoritative
-    // transition used by the retail game and by this controller bridge.
-    const bool menu_mode =
-        !g_xinput_menu_mode.load(std::memory_order_acquire);
-    g_xinput_menu_mode.store(menu_mode, std::memory_order_release);
-    AppendNativeLog("xinput menu mode=%u", menu_mode ? 1u : 0u);
-  }
   g_xinput_previous_native_gameplay = native_gameplay;
   const bool gameplay =
       native_gameplay && !g_xinput_menu_mode.load(std::memory_order_acquire);
@@ -6279,6 +6270,9 @@ void UpdateDeathtrapXInput() {
   if (!gameplay) {
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
     return;
+  }
+  if ((newly_pressed & XINPUT_GAMEPAD_START) != 0) {
+    AppendNativeLog("xinput menu request=START dispatch=ESCAPE");
   }
   UpdateControllerSelector(state.Gamepad, gameplay);
   const bool selector_captures_controls =
@@ -10249,8 +10243,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.114 retail first-person restore "
-      "with progressive mesh tangent ownership "
+      "Deathtrap native render overlay 0.0.115 native Start dispatch and "
+      "retail first-person with progressive mesh tangent ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
