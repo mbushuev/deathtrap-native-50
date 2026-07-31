@@ -1016,3 +1016,29 @@ collision solver and action table are never written. The hook validates the
 live UI owner and restricts the source pointer to the player object's bounded
 input-field range; any failed validation falls back to the preceding tank
 mapping.
+
+## 0.0.116 runtime result and 0.0.117
+
+The first gameplay run calculated camera-relative target headings correctly,
+but logged zero successful `xinput movement heading` calls. The symptom was
+that only one left-stick direction moved forward: that direction happened to
+already match the character's current heading. The other directions released
+both retail turn actions while also withholding forward movement outside the
+configured arc. Consequently the player never entered the locomotion state at
+`0x7E530`, and the unconditional call from that state to the hooked `0x44EA0`
+gateway could not occur.
+
+Version `0.0.117` keeps exactly one native turn action asserted according to
+the sign of the desired-heading error until the target is reached. The
+camera-relative intent is published before those actions. Once the locomotion
+state calls `0x44EA0`, the existing hook still substitutes only the bounded
+Q10 turn source for the duration of the complete native heading-and-lean call;
+position, animation, collision and action storage remain retail-owned.
+
+The same run showed right-stick camera motion after the controller selector
+opened. Selector routing already published inactive/zero orbit input, but the
+orbit response filter retained its preceding angular velocity and decayed it
+over later source ticks. `0.0.117` treats inactive stick ownership as an
+immediate filter reset. Normal right-stick release still uses the configured
+response curve, while selector and first-person ownership cannot leak an old
+stick impulse into third-person yaw or pitch.

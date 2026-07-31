@@ -928,6 +928,20 @@ turn briefly in place before the existing forward action is asserted. LB and
 native first person deliberately retain explicit side-step movement. Camera
 recentering remains disabled until this control path is gameplay-tested.
 
+The first `0.0.116` run exposed a state-entry omission rather than a coordinate
+mapping error. Outside the forward arc the bridge released W, A and D
+together, so the character remained in an idle state and never reached the
+hooked turn gateway. Version `0.0.117` asserts one native turn side from the
+sign of the wrapped target error, solely to enter and retain the ordinary
+locomotion state. The hook continues to replace that selected source with the
+exact bounded camera-relative delta during the original native call.
+
+`0.0.117` also makes selector ownership immediate at the orbit filter. An
+inactive right-stick owner clears accumulated filtered angular velocity, so a
+stick movement used to select a radial item cannot continue rotating the
+third-person camera. Returning the ordinary gameplay stick to centre remains a
+normal filtered deceleration.
+
 ### Phase E: tuning and release
 
 - Expose sensitivity, inversion, pitch limits, shoulder side, distance,

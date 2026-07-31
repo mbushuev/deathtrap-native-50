@@ -2457,6 +2457,8 @@ bool BuildThirdPersonOrbitPosition(void* controller,
   const double input_y = static_cast<double>(
       g_third_person_orbit_input_y.load(std::memory_order_relaxed)) /
       kInputScale;
+  const bool stick_input_active =
+      g_third_person_orbit_input_active.load(std::memory_order_acquire);
   const int32_t mouse_delta_x = std::clamp(
       g_third_person_mouse_delta_x.exchange(0, std::memory_order_acq_rel),
       -2048, 2048);
@@ -2506,6 +2508,15 @@ bool BuildThirdPersonOrbitPosition(void* controller,
                     g_third_person_orbit_state.radius);
   }
 
+  if (!stick_input_active) {
+    // Selector and first-person ownership must be an immediate input cut, not
+    // merely a zero target for the response filter. Otherwise the filtered
+    // right-stick velocity keeps rotating the third-person camera for several
+    // source ticks while the radial selector is visibly open.
+    g_third_person_orbit_state.filtered_input_x = 0.0;
+    g_third_person_orbit_state.filtered_input_y = 0.0;
+  }
+
   if (input_sequence != g_third_person_orbit_state.last_input_sequence) {
     const uint64_t now_ms = GetTickCount64();
     const double elapsed_seconds = std::clamp(
@@ -2515,10 +2526,12 @@ bool BuildThirdPersonOrbitPosition(void* controller,
         0.010, 0.100);
     const double response = 1.0 - std::exp(
         -elapsed_seconds / g_third_person_orbit_response_seconds);
-    g_third_person_orbit_state.filtered_input_x +=
-        (input_x - g_third_person_orbit_state.filtered_input_x) * response;
-    g_third_person_orbit_state.filtered_input_y +=
-        (input_y - g_third_person_orbit_state.filtered_input_y) * response;
+    if (stick_input_active) {
+      g_third_person_orbit_state.filtered_input_x +=
+          (input_x - g_third_person_orbit_state.filtered_input_x) * response;
+      g_third_person_orbit_state.filtered_input_y +=
+          (input_y - g_third_person_orbit_state.filtered_input_y) * response;
+    }
     // XInput reports right/up as positive. Keep the default preset aligned
     // with modern third-person controls; the INI flags reverse each axis only
     // when explicitly requested.
@@ -6335,15 +6348,19 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
       // Large reversals turn in place briefly; once within the configurable
       // forward arc, the original forward action produces a smooth native
       // curve with unchanged animation, speed and collision response.
+      // The active locomotion state is also what reaches the hooked 0x44EA0
+      // gateway. Keep exactly one retail turn action asserted until the
+      // desired heading is reached; the hook replaces its selected source
+      // value with the bounded camera-relative delta for that native call.
+      PublishCameraRelativeMovementIntent(
+          true, desired_heading, movement_stick.magnitude);
       InjectVirtualKey(InjectedKey::kW,
                        std::abs(heading_error) <= forward_arc);
       InjectVirtualKey(InjectedKey::kS, false);
-      InjectVirtualKey(InjectedKey::kA, false);
-      InjectVirtualKey(InjectedKey::kD, false);
+      InjectVirtualKey(InjectedKey::kA, heading_error < 0);
+      InjectVirtualKey(InjectedKey::kD, heading_error > 0);
       InjectVirtualKey(InjectedKey::kJ, false);
       InjectVirtualKey(InjectedKey::kK, false);
-      PublishCameraRelativeMovementIntent(
-          true, desired_heading, movement_stick.magnitude);
     } else {
       PublishCameraRelativeMovementIntent(false, desired_heading,
                                           movement_stick.magnitude);
@@ -10519,8 +10536,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.116 camera-relative native "
-      "player heading with stable v0.0.115 camera, Start dispatch and "
+      "Deathtrap native render overlay 0.0.117 movement trigger and selector "
+      "ownership with stable v0.0.115 camera, Start dispatch and "
       "retail first-person with progressive mesh tangent ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
