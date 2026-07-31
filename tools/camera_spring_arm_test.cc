@@ -187,6 +187,51 @@ int main() {
   ExpectTicks(step.blocked_release_ticks, 0,
               "alternating boundary resets confirmation");
 
+  const CameraSpringArmRecoveryPolicy native_run_recovery =
+      SelectCameraSpringArmRecoveryPolicy(true, true, false);
+  ExpectNear(native_run_recovery.release_step, 12.0,
+             "running native recovery step");
+  ExpectTicks(native_run_recovery.clear_ticks_before_release, 8,
+              "running native clear delay");
+  ExpectTicks(native_run_recovery.blocked_ticks_before_release, 8,
+              "running native boundary delay");
+  const CameraSpringArmRecoveryPolicy input_recovery =
+      SelectCameraSpringArmRecoveryPolicy(true, true, true);
+  ExpectNear(input_recovery.release_step, 64.0,
+             "orbit input restores responsive recovery");
+
+  step = StepCameraSpringArm(1400.0, 420.0, 1400.0, true, 0, 0,
+                             native_run_recovery);
+  ExpectNear(step.radius, 420.0,
+             "running native collision still contracts immediately");
+  for (uint32_t tick = 1; tick < 8; ++tick) {
+    step = StepCameraSpringArm(
+        1400.0, 1400.0, step.radius, false, step.clear_ticks,
+        step.blocked_release_ticks, native_run_recovery);
+    ExpectNear(step.radius, 420.0,
+               "running native clear gap holds contracted radius");
+  }
+  step = StepCameraSpringArm(
+      1400.0, 1400.0, step.radius, false, step.clear_ticks,
+      step.blocked_release_ticks, native_run_recovery);
+  ExpectNear(step.radius, 432.0,
+             "confirmed running clear path recovers slowly");
+
+  step = StepCameraSpringArm(1400.0, 500.0, 420.0, true, 0, 0,
+                             native_run_recovery);
+  for (uint32_t tick = 2; tick < 8; ++tick) {
+    step = StepCameraSpringArm(
+        1400.0, 500.0, step.radius, true, step.clear_ticks,
+        step.blocked_release_ticks, native_run_recovery);
+    ExpectNear(step.radius, 420.0,
+               "outward running boundary remains stable");
+  }
+  step = StepCameraSpringArm(
+      1400.0, 500.0, step.radius, true, step.clear_ticks,
+      step.blocked_release_ticks, native_run_recovery);
+  ExpectNear(step.radius, 432.0,
+             "confirmed outward running boundary recovers slowly");
+
   std::cout << "camera spring-arm state tests passed\n";
   return 0;
 }

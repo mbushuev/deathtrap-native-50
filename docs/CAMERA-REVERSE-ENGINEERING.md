@@ -606,6 +606,26 @@ outside of the box. A contained pivot selects the requested-side face directly.
 The endpoint must remain within the requested arm and still passes the native
 room-volume validation before publication.
 
+The complete `0.0.95` run confirms that the old near-pivot collapse is gone,
+and the user accepted the remaining block behavior as an adequate checkpoint.
+Its final no-mouse running trace exposes an independent native-room recovery
+cycle. Orbit input is exactly zero and yaw/pitch remain fixed at
+`-46.49/33.60`, while the native volume repeatedly contracts the arm from
+about 1400 units to 762, 553, 542 and 665 units. The arm then regrows by 64
+units on each source tick and reaches the next adjacent wall/BSP segment at
+full length, producing another immediate contraction. This is neither a
+retail-camera takeover nor a focus-anchor error; it is a safe but overly fast
+native-only extend/retract sawtooth.
+
+Version `0.0.96` preserves the authoritative immediate inward result. It
+records whether the current contraction is owned only by the native
+room/portal query or by an exact render-mesh contact. While the player is
+moving and orbit input is idle, native-owned outward samples require eight
+consistent source ticks and then recover by 12 units per tick. Manual orbit,
+stationary recovery and render-mesh blockers retain the normal 2/3-tick,
+64-unit profile. Thus the change cannot allow a new wall crossing: only the
+already-clear outward direction is delayed.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

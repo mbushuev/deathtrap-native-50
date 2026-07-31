@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.95` (near-pivot block-edge escape).
+Current development version: `0.0.96` (native running recovery stabilization).
 
 The `modern-third-person-camera` branch contains the first opt-in native orbit
 prototype. It takes ownership at the mode-3 dispatcher before the retail

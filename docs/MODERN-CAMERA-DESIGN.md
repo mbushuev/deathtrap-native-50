@@ -652,6 +652,29 @@ it. The candidate remains bounded by the desired arm and is revalidated by the
 native room-volume query. Ordinary radial contacts at 120 units or more,
 walls/floors, presentation ownership and authored shots are unchanged.
 
+The complete `0.0.95` trace leaves one locomotion-specific oscillation. During
+the user's final straight run, mouse and stick orbit input are zero and
+yaw/pitch are constant. Native room clipping nevertheless alternates between
+large inward contacts and clear/outward samples as the same diagonal arm
+crosses adjacent BSP or portal faces. Immediate pull-in is correct, but the
+64-unit-per-source-tick return reaches full radius quickly enough to collide
+with each following face as a separate visible jolt.
+
+Version `0.0.96` makes recovery policy depend on collision ownership and
+locomotion state:
+
+1. Every newly nearer native or mesh endpoint still contracts immediately.
+2. Exact render-mesh contacts keep the normal responsive recovery.
+3. Manual camera input also keeps normal recovery, so rotating away never
+   feels stuck.
+4. Only a native-owned contraction while the player moves with idle orbit
+   input uses an eight-tick confirmation and a 12-unit outward step.
+5. Reaching the complete clear orbit releases native ownership.
+
+This is conservative hysteresis rather than another collision threshold. It
+never accepts an endpoint rejected by the native predicate and never changes
+the dynamic-block OBB escape or scripted-camera arbitration.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

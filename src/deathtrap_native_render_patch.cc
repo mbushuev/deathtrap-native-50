@@ -532,6 +532,11 @@ struct ThirdPersonOrbitState {
   // source ticks before the arm follows it. This rejects alternating
   // portal/small-prop samples without delaying hard inward contraction.
   uint32_t collision_blocked_release_ticks = 0;
+  // Remembers that the current contraction came from the native room/portal
+  // volume rather than a qualified render mesh. While the player is running
+  // with idle orbit input, only this owner receives the slower recovery
+  // profile that prevents repeated wall-segment extend/retract jolts.
+  bool native_collision_owned = false;
   uint64_t last_orbit_activity_ms = 0;
   bool motion_active_this_tick = false;
   bool orbit_input_active_this_tick = false;
@@ -3474,7 +3479,9 @@ bool ResolveThirdPersonSpringArm(
     const std::array<int32_t, 3>& focus,
     const std::array<int32_t, 3>& desired,
     const std::array<int32_t, 3>& hard_safe_endpoint,
-    bool obstruction_present, std::array<int32_t, 3>* submitted) {
+    bool obstruction_present,
+    const CameraSpringArmRecoveryPolicy& recovery,
+    std::array<int32_t, 3>* submitted) {
   if (!submitted || !g_third_person_orbit_state.engaged) {
     return false;
   }
@@ -3506,7 +3513,7 @@ bool ResolveThirdPersonSpringArm(
   const CameraSpringArmStep step = StepCameraSpringArm(
       desired_distance, hard_safe_distance, previous_radius,
       obstruction_present, state.collision_clear_ticks,
-      state.collision_blocked_release_ticks);
+      state.collision_blocked_release_ticks, recovery);
   const double next_radius = step.radius;
   state.collision_radius = next_radius;
   state.collision_clear_ticks = step.clear_ticks;
@@ -3524,10 +3531,14 @@ bool ResolveThirdPersonSpringArm(
   if (g_debug_log && std::abs(next_radius - previous_radius) > 1.0) {
     AppendNativeLog(
         "camera_spring desired=%.1f hard=%.1f actual=%.1f->%.1f "
-        "blocked=%u clear_ticks=%u blocked_release_ticks=%u",
+        "blocked=%u clear_ticks=%u blocked_release_ticks=%u "
+        "recovery=%s/%.1f",
         desired_distance, hard_safe_distance, previous_radius, next_radius,
         obstruction_present ? 1u : 0u, state.collision_clear_ticks,
-        state.collision_blocked_release_ticks);
+        state.collision_blocked_release_ticks,
+        recovery.clear_ticks_before_release == 8u ? "native_run"
+                                                  : "normal",
+        recovery.release_step);
   }
   return true;
 }
@@ -3796,6 +3807,7 @@ bool ConfigureCameraWithSceneMeshPushout(
                  constrained_radius);
     g_third_person_orbit_state.collision_clear_ticks = 0;
     g_third_person_orbit_state.collision_blocked_release_ticks = 0;
+    g_third_person_orbit_state.native_collision_owned = false;
   }
   return true;
 }
@@ -3995,6 +4007,16 @@ void __cdecl HookMode3Camera(void* controller) {
     }
   }
   const bool spring_arm_blocked = orbit_blocked || mesh_orbit_blocked;
+  if (mesh_orbit_blocked) {
+    g_third_person_orbit_state.native_collision_owned = false;
+  } else if (orbit_blocked) {
+    g_third_person_orbit_state.native_collision_owned = true;
+  }
+  const CameraSpringArmRecoveryPolicy spring_recovery =
+      SelectCameraSpringArmRecoveryPolicy(
+          g_third_person_orbit_state.native_collision_owned,
+          g_third_person_orbit_state.motion_active_this_tick,
+          g_third_person_orbit_state.orbit_input_active_this_tick);
 
   std::array<int32_t, 3> submitted{};
   if (mesh_orbit_blocked &&
@@ -4010,6 +4032,7 @@ void __cdecl HookMode3Camera(void* controller) {
     g_third_person_orbit_state.collision_radius = pushed_radius;
     g_third_person_orbit_state.collision_clear_ticks = 0;
     g_third_person_orbit_state.collision_blocked_release_ticks = 0;
+    g_third_person_orbit_state.native_collision_owned = false;
     AppendNativeLog(
         "camera_mesh_overlap_pushout target=%d/%d/%d radius=%.1f "
         "resource=%llu overlap=%u escape=%u axis=%llu",
@@ -4023,9 +4046,13 @@ void __cdecl HookMode3Camera(void* controller) {
   } else {
     if (!ResolveThirdPersonSpringArm(
             camera_focus, orbit, hard_safe_endpoint, spring_arm_blocked,
+            spring_recovery,
             &submitted)) {
       AppendNativeLog("camera_native_spring resolve_failed");
       return;
+    }
+    if (!spring_arm_blocked && submitted == orbit) {
+      g_third_person_orbit_state.native_collision_owned = false;
     }
   }
 
@@ -4054,6 +4081,7 @@ void __cdecl HookMode3Camera(void* controller) {
         CameraPositionDistance(camera_focus, submitted);
     g_third_person_orbit_state.collision_clear_ticks = 0;
     g_third_person_orbit_state.collision_blocked_release_ticks = 0;
+    g_third_person_orbit_state.native_collision_owned = true;
   }
 
   // First resolve against native rooms/walls/floors, then push the published
@@ -4110,6 +4138,7 @@ void __cdecl HookMode3Camera(void* controller) {
           "mesh=%u/%u/%u exact=%u passes=%u "
           "initial_published=%d/%d/%d radius=%.1f clear_ticks=%u "
           "blocked_release_ticks=%u "
+          "native_owner=%u recovery_step=%.1f "
           "pre_resource=%llu resource=%llu tri=%llu motion=%.1f",
           camera_focus[0], camera_focus[1], camera_focus[2],
           orbit[0], orbit[1], orbit[2],
@@ -4135,6 +4164,8 @@ void __cdecl HookMode3Camera(void* controller) {
           g_third_person_orbit_state.collision_radius,
           g_third_person_orbit_state.collision_clear_ticks,
           g_third_person_orbit_state.collision_blocked_release_ticks,
+          g_third_person_orbit_state.native_collision_owned ? 1u : 0u,
+          spring_recovery.release_step,
           static_cast<unsigned long long>(
               mesh_orbit_diagnostic.resource),
           static_cast<unsigned long long>(
@@ -9125,7 +9156,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.95 near-pivot block escape "
+      "Deathtrap native render overlay 0.0.96 native running recovery "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
