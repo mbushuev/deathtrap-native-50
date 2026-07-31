@@ -712,7 +712,7 @@ int32_t g_xinput_selector_center_y = 316;
 double g_xinput_movement_threshold = 0.14;
 double g_xinput_run_threshold = 0.50;
 double g_xinput_run_release_threshold = 0.30;
-bool g_xinput_camera_relative_movement = true;
+bool g_xinput_camera_relative_movement = false;
 bool g_xinput_camera_relative_invert_y = true;
 double g_xinput_movement_turn_degrees_per_tick = 12.0;
 bool g_xinput_run_active = false;
@@ -10523,7 +10523,7 @@ void InitializePatchState() {
         std::max(0.20, g_xinput_run_threshold - 0.12);
   }
   g_xinput_camera_relative_movement =
-      ConfiguredInteger(L"XInput", L"CameraRelativeMovement", 1) != 0;
+      ConfiguredInteger(L"XInput", L"CameraRelativeMovement", 0) != 0;
   g_xinput_camera_relative_invert_y =
       ConfiguredInteger(L"XInput", L"CameraRelativeInvertY", 1) != 0;
   g_xinput_movement_turn_degrees_per_tick =
@@ -10566,10 +10566,9 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.122 unified bounded "
-      "camera-relative locomotion without unbounded retail turn-in-place "
-      "states, with corrected left-stick Y and validated movement-controller "
-      "identity, "
+      "Deathtrap native render overlay 0.0.123 restored stable native tank "
+      "movement after sustained locomotion disproved recurring 0x44DD0 "
+      "camera-relative steering, "
       "stable selector ownership, v0.0.115 camera, Start dispatch and "
       "retail first-person with progressive mesh tangent ownership "
       "(complete native wall/floor/orientation result plus transactional "

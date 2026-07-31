@@ -1126,3 +1126,20 @@ substitution, clamps each source-tick delta to `MovementTurnDegreesPerTick`,
 and stops naturally when the wrapped desired-heading error reaches zero.
 Position, root motion, animation, collision, walk/run state and action storage
 remain native-owned.
+
+## 0.0.123 runtime invalidation and stable fallback
+
+The `0.0.122` run disproved the premise that asserting W makes `0x44DD0` a
+recurring per-source-tick steering gateway. Across fourteen separate
+camera-relative activations, the log recorded only the initial sparse hook
+traffic; sustained native root motion continued without repeated controlled
+heading calls. Since A/D was deliberately released, every requested stick
+direction consequently ran along the actor's existing forward heading.
+
+Version `0.0.123` restores `CameraRelativeMovement=0` in both the shipped INI
+and compiled default. This returns the previously verified native tank mapping
+without changing the modern camera, Start dispatch, R3 first person, selector
+ownership or vibration. The experimental hook is not installed while the
+option is disabled. Further camera-relative work is gated on read-only
+identification of the recurring sustained-locomotion heading writer rather
+than another synthetic key-state build.

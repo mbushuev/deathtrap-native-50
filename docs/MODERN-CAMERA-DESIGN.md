@@ -994,6 +994,17 @@ direction asserts W with A/D released and therefore reaches
 now the sole steering writer for both small and large heading errors. Native
 root motion, animation, collision and run selection remain unchanged.
 
+The `0.0.122` run invalidated the assumption behind that bridge. Fourteen
+separate camera-relative activations produced only the initial sparse
+`0x44DD0` hook traffic; once native locomotion was established, sustained root
+motion did not revisit the gateway on every source tick. With W held and A/D
+released, the character therefore continued along the existing heading for
+every requested stick direction. Version `0.0.123` disables the experiment and
+restores the known-good native tank mapping. A future camera-relative design
+must first identify the recurring engine-owned heading writer used throughout
+sustained locomotion; neither another input threshold nor another synthetic
+A/D/W combination is an acceptable substitute.
+
 ### Phase E: tuning and release
 
 - Expose sensitivity, inversion, pitch limits, shoulder side, distance,
