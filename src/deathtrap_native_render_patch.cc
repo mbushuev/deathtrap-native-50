@@ -709,7 +709,7 @@ int32_t g_xinput_selector_center_y = 316;
 double g_xinput_movement_threshold = 0.14;
 double g_xinput_run_threshold = 0.50;
 double g_xinput_run_release_threshold = 0.30;
-bool g_xinput_camera_relative_movement = true;
+bool g_xinput_camera_relative_movement = false;
 double g_xinput_movement_turn_degrees_per_tick = 12.0;
 double g_xinput_movement_forward_arc_degrees = 85.0;
 bool g_xinput_run_active = false;
@@ -10491,7 +10491,7 @@ void InitializePatchState() {
         std::max(0.20, g_xinput_run_threshold - 0.12);
   }
   g_xinput_camera_relative_movement =
-      ConfiguredInteger(L"XInput", L"CameraRelativeMovement", 1) != 0;
+      ConfiguredInteger(L"XInput", L"CameraRelativeMovement", 0) != 0;
   g_xinput_movement_turn_degrees_per_tick =
       static_cast<double>(std::clamp(
           ConfiguredInteger(L"XInput", L"MovementTurnDegreesPerTick", 12),
@@ -10536,7 +10536,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.118 shared native heading and "
+      "Deathtrap native render overlay 0.0.119 stable controller fallback and "
       "selector ownership with stable v0.0.115 camera, Start dispatch and "
       "retail first-person with progressive mesh tangent ownership "
       "(complete native wall/floor/orientation result plus transactional "
@@ -10814,10 +10814,10 @@ bool InstallDeathtrapNativeRenderHooks() {
     }
   }
 
-  // Optional gamepad-only movement modernization. Static analysis proves
-  // that 0x44EA0 has one gameplay caller (0x7E5BD) and is the native
-  // desired-turn gateway, so this hook changes neither position nor the
-  // action table. Failure is non-fatal and leaves the preceding tank mapping.
+  // Optional gamepad-only movement experiment. Runtime 0.0.116--0.0.118 did
+  // not validate ownership of the live player heading, so the shipped preset
+  // keeps this disabled and does not install the hook. Failure is non-fatal
+  // and leaves the stable retail tank mapping.
   if (g_third_person_orbit_enabled &&
       g_xinput_camera_relative_movement) {
     void* const player_turn_target = g_dungeon_base + kPlayerTurnRva;

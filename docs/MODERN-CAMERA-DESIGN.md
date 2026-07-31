@@ -950,6 +950,14 @@ the live-player guard and the temporary-source transaction. The surrounding
 state machine, action selection, lean, animation, collision and position
 remain native.
 
+The `0.0.118` runtime still records no successful player-heading substitution
+and leaves the synthetic A/D trigger as competing tank input. Version
+`0.0.119` therefore returns the shipped preset to `CameraRelativeMovement=0`
+and does not install the experimental hook. Camera-relative movement remains a
+design objective, not a release claim, until a read-only diagnostic proves the
+live player identity and exact native call lifetime. The stable camera and
+selector right-stick ownership fix remain enabled.
+
 ### Phase E: tuning and release
 
 - Expose sensitivity, inversion, pitch limits, shoulder side, distance,

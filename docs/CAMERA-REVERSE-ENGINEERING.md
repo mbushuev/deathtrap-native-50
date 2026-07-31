@@ -1062,3 +1062,11 @@ Version `0.0.118` moves the temporary selected-source substitution to
 actor calls pass through untouched. The complete native heading update remains
 the writer; the hook restores the selected source immediately after it
 returns. The later lean calculation in `0x44EA0` remains retail-owned.
+
+The `0.0.118` gameplay run again contains zero successful heading records.
+The camera-relative target stream is active, but the validated substitution
+never owns the player call. The asserted A/D actions consequently remain
+ordinary tank steering and produce the reported zigzag. Version `0.0.119`
+disables `CameraRelativeMovement` in both the shipped INI and compiled default;
+the heading hook is not installed. This restores the stable `0.0.115` left-
+stick mapping while retaining the independent selector orbit-filter fix.
