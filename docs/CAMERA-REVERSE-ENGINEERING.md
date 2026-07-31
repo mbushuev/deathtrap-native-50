@@ -435,6 +435,33 @@ qualified mesh after the bounded history replacement, the original snapshot
 and ordinary `0.0.84` result are restored. The path still performs no direct
 writes to controller history, the camera node or the published matrix.
 
+The `0.0.87` runtime rejected that mechanism as well. Across 714 exhausted
+contacts, all five publications within each source tick were identical.
+`0x2F380` does not progress the visible camera history when repeated before
+the engine/source tick changes.
+
+The user then identified the missing semantic distinction: the remaining
+offending blocks translate or extend during gameplay, while stable static
+blocks are handled reasonably. The render-mesh path had required own-object
+bounds motion of at most 16 units between adjacent scene snapshots. A moving
+trap could therefore be present in the render tree and still be excluded
+before its triangles were tested.
+
+Version `0.0.88` recognizes a large kinematic mesh by invariant render
+resource, stable bounds radius and basis, plus equal world-matrix and
+own-bounds translation. Motion beyond two integer units excludes snapshot
+rounding noise. The existing two-axis 192-unit span rule continues to reject
+thin levers. Once observed, the node/resource pair remains kinematic until a
+scene reset, including after the block reaches its final stationary position.
+
+Static meshes and native room geometry continue to keep the untouched single
+`0x2F380` result. A positive swept-sphere contact with a latched kinematic
+block is the sole exception: the shorter point is on a prefix of the already
+native-resolved focus-to-camera segment and is committed in the same source
+tick so the block can depenetrate the camera. This is not the rejected
+`0.0.85` global publication model; clear tracking, static contacts, recovery
+and authored shots never enter the direct-write path.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

@@ -503,6 +503,27 @@ pre-contact samples. The complete native resolver remains the only writer of
 walls, floors, sectors, orientation, history and publication. Failure rolls
 the entire transaction back to the ordinary result.
 
+Runtime `0.0.87` showed that removing the intermediate restores was still not
+enough: one ordinary plus four constrained calls in the same source tick
+published an identical camera point in all 714 exhausted contact sequences.
+The remaining user-reported obstacles were then identified as trap blocks that
+translate or extend over time, not the stable static blocks already handled
+reasonably. Those nodes had been intentionally removed by the old animated-
+bounds filter before their triangles reached the camera sweep.
+
+Version `0.0.88` adds a separate kinematic-block class. A large render mesh is
+latched only after an adjacent snapshot pair proves rigid translation: stable
+resource and radius, unchanged 3x3 basis, and matching world/bounds movement.
+The two-axis camera-diameter test still excludes thin levers. The latch
+survives after the block stops, until the scene resets.
+
+The ordinary path again calls `0x2F380` once and leaves its complete result
+untouched. Only an actual swept-sphere hit on a latched kinematic block may
+commit a shorter point on the already native-safe radial segment in the same
+source tick. Thus a moving block can push the camera out, while static walls,
+floors, unobstructed tracking, spring-arm recovery and authored reveals never
+use the exact-write exception.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

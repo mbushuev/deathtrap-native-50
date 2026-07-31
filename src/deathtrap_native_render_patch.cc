@@ -271,6 +271,8 @@ struct CameraMeshHitDiagnostic {
   Matrix3x4 world{};
   std::array<int32_t, 3> bounds_center{};
   int32_t bounds_radius = 0;
+  double bounds_motion = 0.0;
+  bool kinematic = false;
   bool valid = false;
 };
 
@@ -527,6 +529,7 @@ std::mutex g_camera_collision_mesh_mutex;
 std::unordered_map<uintptr_t, CameraCollisionMesh>
     g_camera_collision_meshes;
 std::unordered_set<uintptr_t> g_camera_nonblocking_meshes_logged;
+std::unordered_map<uintptr_t, uintptr_t> g_camera_kinematic_nodes;
 uint64_t g_camera_mesh_cache_hits = 0;
 uint64_t g_camera_mesh_cache_misses = 0;
 uint64_t g_camera_mesh_sweeps = 0;
@@ -2332,6 +2335,96 @@ void LogNonblockingCameraMesh(uintptr_t handle,
   }
 }
 
+bool CameraNodeHasRigidTranslation(const NodeTransform& current,
+                                   const NodeTransform& previous,
+                                   double bounds_motion) {
+  // Integer scene coordinates may fluctuate by one or two units while a
+  // nominally static node is rebuilt. Require motion beyond that representable
+  // noise before granting the persistent kinematic identity.
+  if (!std::isfinite(bounds_motion) || bounds_motion <= 2.0 ||
+      std::abs(static_cast<double>(current.bounds_radius) -
+               static_cast<double>(previous.bounds_radius)) >
+          kCameraCollisionRadiusMotionTolerance) {
+    return false;
+  }
+
+  // A translating trap block keeps its render basis and moves its world
+  // translation and own-object bounds by the same delta. Animated characters
+  // and deforming effects normally fail at least one of these invariants.
+  constexpr int64_t kBasisTolerance = 8;
+  constexpr int64_t kTranslationDeltaTolerance = 2;
+  for (size_t index = 0; index < 9u; ++index) {
+    const int64_t delta =
+        static_cast<int64_t>(current.world.values[index]) -
+        static_cast<int64_t>(previous.world.values[index]);
+    if (std::abs(delta) > kBasisTolerance) {
+      return false;
+    }
+  }
+  for (size_t axis = 0; axis < 3u; ++axis) {
+    const int64_t world_delta =
+        static_cast<int64_t>(current.world.values[9u + axis]) -
+        static_cast<int64_t>(previous.world.values[9u + axis]);
+    const int64_t bounds_delta =
+        static_cast<int64_t>(current.bounds_center[axis]) -
+        static_cast<int64_t>(previous.bounds_center[axis]);
+    if (std::abs(world_delta - bounds_delta) >
+        kTranslationDeltaTolerance) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Called while g_camera_collision_mesh_mutex is held. Once a large render
+// mesh has been observed translating rigidly, retain that identity for the
+// rest of the scene. This matters after an extending block stops: it must
+// still be able to depenetrate a camera that the motion engulfed.
+bool UpdateCameraKinematicClassification(
+    uintptr_t node, const NodeTransform& current,
+    const NodeTransform& previous, double bounds_motion,
+    const CameraCollisionMesh** resolved_mesh = nullptr) {
+  const auto existing = g_camera_kinematic_nodes.find(node);
+  if (existing != g_camera_kinematic_nodes.end()) {
+    if (existing->second == current.render_resource_handle) {
+      return true;
+    }
+    g_camera_kinematic_nodes.erase(existing);
+  }
+  if (!CameraNodeHasRigidTranslation(current, previous, bounds_motion)) {
+    return false;
+  }
+
+  const CameraCollisionMesh* mesh =
+      ResolveCameraCollisionMesh(current.render_resource_handle);
+  if (!mesh) {
+    return false;
+  }
+  std::array<double, 3> scaled_extents{};
+  if (!CameraCollisionMeshBlocksCameraVolume(
+          *mesh, current.world, &scaled_extents)) {
+    LogNonblockingCameraMesh(current.render_resource_handle,
+                             scaled_extents);
+    return false;
+  }
+
+  g_camera_kinematic_nodes[node] = current.render_resource_handle;
+  if (resolved_mesh) {
+    *resolved_mesh = mesh;
+  }
+  if (g_debug_log) {
+    AppendNativeLog(
+        "camera_mesh_kinematic node=%08llX resource=%llu motion=%.1f "
+        "bounds=%d/%d/%d/r%d extents=%.1f/%.1f/%.1f",
+        static_cast<unsigned long long>(node),
+        static_cast<unsigned long long>(current.render_resource_handle),
+        bounds_motion, current.bounds_center[0], current.bounds_center[1],
+        current.bounds_center[2], current.bounds_radius, scaled_extents[0],
+        scaled_extents[1], scaled_extents[2]);
+  }
+  return true;
+}
+
 double CameraVectorDot(const Vec3& a, const Vec3& b) {
   return a.x * b.x + a.y * b.y + a.z * b.z;
 }
@@ -2696,11 +2789,18 @@ bool CameraTemporalChordIntersectsSceneObjects(
     }
     const double bounds_motion = CameraPositionDistance(
         current.bounds_center, stable->second.bounds_center);
-    if (!std::isfinite(bounds_motion) ||
-        bounds_motion > kCameraCollisionBoundsMotionTolerance ||
+    const double radius_motion =
         std::abs(static_cast<double>(current.bounds_radius) -
-                 static_cast<double>(stable->second.bounds_radius)) >
-            kCameraCollisionRadiusMotionTolerance) {
+                 static_cast<double>(stable->second.bounds_radius));
+    if (!std::isfinite(bounds_motion) ||
+        radius_motion > kCameraCollisionRadiusMotionTolerance) {
+      continue;
+    }
+    const CameraCollisionMesh* mesh = nullptr;
+    const bool kinematic = UpdateCameraKinematicClassification(
+        node, current, stable->second, bounds_motion, &mesh);
+    if (!kinematic &&
+        bounds_motion > kCameraCollisionBoundsMotionTolerance) {
       continue;
     }
 
@@ -2727,8 +2827,9 @@ bool CameraTemporalChordIntersectsSceneObjects(
       continue;
     }
 
-    const CameraCollisionMesh* mesh =
-        ResolveCameraCollisionMesh(current.render_resource_handle);
+    if (!mesh) {
+      mesh = ResolveCameraCollisionMesh(current.render_resource_handle);
+    }
     if (!mesh) {
       continue;
     }
@@ -2753,6 +2854,8 @@ bool CameraTemporalChordIntersectsSceneObjects(
     nearest_diagnostic.resource = current.render_resource_handle;
     nearest_diagnostic.bounds_center = current.bounds_center;
     nearest_diagnostic.bounds_radius = current.bounds_radius;
+    nearest_diagnostic.bounds_motion = bounds_motion;
+    nearest_diagnostic.kinematic = kinematic;
     found = true;
   }
 
@@ -2858,11 +2961,18 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     }
     const double bounds_motion = CameraPositionDistance(
         current.bounds_center, older->second.bounds_center);
-    if (!std::isfinite(bounds_motion) ||
-        bounds_motion > kCameraCollisionBoundsMotionTolerance ||
+    const double radius_motion =
         std::abs(static_cast<double>(current.bounds_radius) -
-                 static_cast<double>(older->second.bounds_radius)) >
-            kCameraCollisionRadiusMotionTolerance) {
+                 static_cast<double>(older->second.bounds_radius));
+    if (!std::isfinite(bounds_motion) ||
+        radius_motion > kCameraCollisionRadiusMotionTolerance) {
+      continue;
+    }
+    const CameraCollisionMesh* mesh = nullptr;
+    const bool kinematic = UpdateCameraKinematicClassification(
+        node, current, older->second, bounds_motion, &mesh);
+    if (!kinematic &&
+        bounds_motion > kCameraCollisionBoundsMotionTolerance) {
       continue;
     }
 
@@ -2893,8 +3003,9 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
       continue;
     }
 
-    const CameraCollisionMesh* mesh =
-        ResolveCameraCollisionMesh(current.render_resource_handle);
+    if (!mesh) {
+      mesh = ResolveCameraCollisionMesh(current.render_resource_handle);
+    }
     if (!mesh) {
       continue;
     }
@@ -2933,6 +3044,8 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     nearest_diagnostic.resource = current.render_resource_handle;
     nearest_diagnostic.bounds_center = current.bounds_center;
     nearest_diagnostic.bounds_radius = current.bounds_radius;
+    nearest_diagnostic.bounds_motion = bounds_motion;
+    nearest_diagnostic.kinematic = kinematic;
   }
 
   if (!nearest_node) {
@@ -2952,13 +3065,15 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     AppendNativeLog(
         "camera_mesh_sweep node=%08llX resource=%llu triangles=%llu "
         "object_radius=%.1f contact=%.1f sphere=%.1f camera_radius=%.1f "
-        "requested=%.1f overlap=%u",
+        "requested=%.1f overlap=%u kinematic=%u motion=%.1f",
         static_cast<unsigned long long>(nearest_node),
         static_cast<unsigned long long>(nearest_resource),
         static_cast<unsigned long long>(nearest_triangle_count),
         nearest_object_radius, nearest_surface_distance,
         kCameraCollisionSphereRadius, nearest_distance, requested_distance,
-        nearest_initial_overlap ? 1u : 0u);
+        nearest_initial_overlap ? 1u : 0u,
+        nearest_diagnostic.kinematic ? 1u : 0u,
+        nearest_diagnostic.bounds_motion);
     if (nearest_diagnostic.valid) {
       AppendNativeLog(
           "camera_mesh_hit node=%08llX resource=%llu tri=%llu "
@@ -3067,11 +3182,13 @@ bool CommitImmediateSpringArmContraction(
     return false;
   }
 
-  // The endpoint from the swept sphere is safe on the exact pivot-to-camera
-  // segment that was tested. Never substitute controller+0x1F4 here merely
-  // because its radial distance is shorter: 0x2F380 may shift that point
-  // vertically and laterally, off the tested segment and back inside a prop.
-  // The v0.0.77 trace captured precisely that failure on resource 12708.
+  // This direct publication is deliberately restricted by the caller to a
+  // positively identified large rigidly translating mesh. It must never be
+  // used for ordinary static walls, floors, clear tracking or the complete
+  // contracted/release lifetime: runtime 0.0.85 proved that doing so breaks
+  // native wall/floor/orientation ownership. The endpoint here is a prefix of
+  // the already published native focus-to-camera segment, clipped against the
+  // moving mesh that the retail BSP cannot see.
   const std::array<int32_t, 3>& target = submitted;
 
   bool written = SafeWrite(
@@ -3152,7 +3269,7 @@ bool CommitImmediateSpringArmContraction(
   }
   if (g_debug_log) {
     AppendNativeLog(
-        "camera_collision_commit result=%s resolved_radius=%.1f "
+        "camera_kinematic_commit result=%s resolved_radius=%.1f "
         "safe_radius=%.1f target=%d/%d/%d node=%08llX",
         written ? "OK" : "PARTIAL", resolved_radius, submitted_radius,
         target[0], target[1], target[2],
@@ -3164,8 +3281,9 @@ bool CommitImmediateSpringArmContraction(
 struct CameraPropVetoResult {
   bool configured = false;
   bool mesh_contact = false;
+  bool kinematic_contact = false;
   bool correction_applied = false;
-  bool baseline_restored = false;
+  bool exact_committed = false;
   bool exhausted = false;
   uint32_t passes = 0;
   std::array<int32_t, 3> initial_published{};
@@ -3215,102 +3333,68 @@ bool ConfigureCameraWithStaticPropVeto(
   *result = {};
   result->accepted_target = submitted;
 
-  // Snapshot exactly the same resolver/history block used by the authored-
-  // camera transaction. A confirmed prop contact advances the native
-  // configure path without restoring between retries. Static disassembly of
-  // 0x2DEF0/0x2DE30 proves that controller+0x204 is a four-sample ring: the
-  // rejected 0.0.86 path restored that ring before every retry, so every pass
-  // necessarily republished the same obstructed average. One ordinary pass
-  // plus four prop-safe passes is sufficient to evict every stale sample
-  // while keeping native wall, floor, sector and orientation ownership.
-  // If that bounded sequence still does not converge, restore this snapshot
-  // and execute the ordinary target once; no partial retry state survives the
-  // source tick.
-  RetailCameraProbeSnapshot baseline{};
-  const bool baseline_valid =
-      CaptureRetailCameraProbeState(controller, &baseline);
-  std::array<int32_t, 3> candidate = submitted;
-  constexpr uint32_t kMaximumConfigurePasses =
-      1u + static_cast<uint32_t>(
-               kCameraControllerPositionHistorySampleCount);
-
-  for (uint32_t pass = 0; pass < kMaximumConfigurePasses; ++pass) {
-    if (!CallConfigureCamera(controller, candidate, room_or_sector)) {
-      return false;
-    }
-    result->configured = true;
-    result->passes = pass + 1u;
-    std::array<int32_t, 3> published{};
-    if (!ReadPublishedCameraPosition(&published)) {
-      return false;
-    }
-    if (pass == 0u) {
-      result->initial_published = published;
-    }
-    result->final_published = published;
-
-    std::array<int32_t, 3> mesh_safe = published;
-    CameraMeshHitDiagnostic diagnostic;
-    if (!ClipThirdPersonOrbitAgainstSceneObjects(
-            focus, published, &mesh_safe, &diagnostic)) {
-      result->accepted_target = candidate;
-      result->correction_applied = pass != 0u;
-      if (result->correction_applied) {
-        const double constrained_radius =
-            CameraPositionDistance(focus, candidate);
-        if (std::isfinite(constrained_radius)) {
-          g_third_person_orbit_state.collision_radius =
-              std::min(g_third_person_orbit_state.collision_radius,
-                       constrained_radius);
-          g_third_person_orbit_state.collision_clear_ticks = 0;
-        }
-      }
-      return true;
-    }
-
-    result->mesh_contact = true;
-    result->diagnostic = diagnostic;
-    if (g_debug_log) {
-      AppendNativeLog(
-          "camera_prop_veto pass=%u published=%d/%d/%d "
-          "safe_target=%d/%d/%d resource=%llu tri=%llu",
-          pass + 1u, published[0], published[1], published[2],
-          mesh_safe[0], mesh_safe[1], mesh_safe[2],
-          static_cast<unsigned long long>(diagnostic.resource),
-          static_cast<unsigned long long>(diagnostic.triangle_index));
-    }
-
-    if (!baseline_valid || pass + 1u >= kMaximumConfigurePasses) {
-      break;
-    }
-    candidate = mesh_safe;
+  // Runtime 0.0.87 proved that repeated 0x2F380 calls inside one source tick
+  // do not advance this controller: all five passes republished the same
+  // point. Configure exactly once and preserve that complete native result for
+  // ordinary static geometry.
+  if (!CallConfigureCamera(controller, submitted, room_or_sector)) {
+    return false;
   }
+  result->configured = true;
+  result->passes = 1u;
+  if (!ReadPublishedCameraPosition(&result->initial_published)) {
+    return false;
+  }
+  result->final_published = result->initial_published;
 
-  // Never leave a partially replaced camera when the bounded prop constraint
-  // cannot converge. Restore the ordinary 0.0.84 path and accept its complete
-  // native wall/floor/orientation result. This is deliberately fail-open for
-  // the supplemental prop layer and fail-closed for native camera ownership.
-  result->exhausted = true;
-  if (baseline_valid &&
-      RestoreRetailCameraProbeState(controller, baseline) &&
-      CallConfigureCamera(controller, submitted, room_or_sector) &&
-      ReadPublishedCameraPosition(&result->final_published)) {
-    result->baseline_restored = true;
-    result->configured = true;
-    result->accepted_target = submitted;
-    if (g_debug_log) {
-      AppendNativeLog(
-          "camera_prop_veto exhausted passes=%u baseline_restored=1 "
-          "native_published=%d/%d/%d resource=%llu tri=%llu",
-          result->passes, result->final_published[0],
-          result->final_published[1], result->final_published[2],
-          static_cast<unsigned long long>(result->diagnostic.resource),
-          static_cast<unsigned long long>(
-              result->diagnostic.triangle_index));
-    }
+  std::array<int32_t, 3> mesh_safe = result->initial_published;
+  CameraMeshHitDiagnostic diagnostic;
+  if (!ClipThirdPersonOrbitAgainstSceneObjects(
+          focus, result->initial_published, &mesh_safe, &diagnostic)) {
     return true;
   }
-  return result->configured;
+
+  result->mesh_contact = true;
+  result->kinematic_contact = diagnostic.kinematic;
+  result->diagnostic = diagnostic;
+  if (g_debug_log) {
+    AppendNativeLog(
+        "camera_prop_guard published=%d/%d/%d safe_target=%d/%d/%d "
+        "node=%08llX resource=%llu tri=%llu kinematic=%u motion=%.1f",
+        result->initial_published[0], result->initial_published[1],
+        result->initial_published[2], mesh_safe[0], mesh_safe[1],
+        mesh_safe[2], static_cast<unsigned long long>(diagnostic.node),
+        static_cast<unsigned long long>(diagnostic.resource),
+        static_cast<unsigned long long>(diagnostic.triangle_index),
+        diagnostic.kinematic ? 1u : 0u, diagnostic.bounds_motion);
+  }
+
+  // Static geometry keeps the unmodified native result. Only a latched
+  // kinematic block may force same-tick depenetration; otherwise the old
+  // global exact-publication regression would return.
+  if (!diagnostic.kinematic) {
+    result->exhausted = true;
+    return true;
+  }
+
+  result->accepted_target = mesh_safe;
+  std::array<int32_t, 3> committed{};
+  if (!CommitImmediateSpringArmContraction(
+          controller, focus, mesh_safe, true, &committed)) {
+    result->exhausted = true;
+    return true;
+  }
+  result->correction_applied = true;
+  result->exact_committed = true;
+  result->final_published = committed;
+  const double constrained_radius = CameraPositionDistance(focus, committed);
+  if (std::isfinite(constrained_radius)) {
+    g_third_person_orbit_state.collision_radius =
+        std::min(g_third_person_orbit_state.collision_radius,
+                 constrained_radius);
+    g_third_person_orbit_state.collision_clear_ticks = 0;
+  }
+  return true;
 }
 
 void __cdecl HookMode3Camera(void* controller) {
@@ -3461,11 +3545,10 @@ void __cdecl HookMode3Camera(void* controller) {
 
   // 0x2F380 remains the final owner of position, orientation, wall/floor
   // resolution, sector bookkeeping and history. The supplemental render-mesh
-  // layer only vetoes a native result that actually intersects a qualified
-  // large static prop. A shorter target advances through enough bounded
-  // complete native configure passes to replace the verified four-sample
-  // position history. Failure restores the original resolver/history snapshot
-  // and executes the ordinary target once.
+  // layer observes large static meshes without replacing that native result.
+  // Only a mesh previously observed as a rigidly translating trap block may
+  // force a same-tick radial depenetration; this narrow exception prevents the
+  // rejected 0.0.85 global publication path from affecting walls and floors.
   CameraPropVetoResult prop_veto;
   if (!ConfigureCameraWithStaticPropVeto(
           controller, camera_focus, submitted, room_or_sector, &prop_veto)) {
@@ -3497,8 +3580,9 @@ void __cdecl HookMode3Camera(void* controller) {
           "safe=%d/%d/%d submitted=%d/%d/%d "
           "after_desired=%d/%d/%d after_resolved=%d/%d/%d "
           "published=%d/%d/%d valid=%u/%u/%u blocked=%u "
-          "prop=%u/%u/%u passes=%u initial_published=%d/%d/%d "
-          "radius=%.1f clear_ticks=%u resource=%llu tri=%llu",
+          "prop=%u/%u/%u kinematic=%u exact=%u passes=%u "
+          "initial_published=%d/%d/%d radius=%.1f clear_ticks=%u "
+          "resource=%llu tri=%llu motion=%.1f",
           camera_focus[0], camera_focus[1], camera_focus[2],
           orbit[0], orbit[1], orbit[2],
           hard_safe_endpoint[0], hard_safe_endpoint[1],
@@ -3514,6 +3598,8 @@ void __cdecl HookMode3Camera(void* controller) {
           prop_veto.mesh_contact ? 1u : 0u,
           prop_veto.correction_applied ? 1u : 0u,
           prop_veto.exhausted ? 1u : 0u,
+          prop_veto.kinematic_contact ? 1u : 0u,
+          prop_veto.exact_committed ? 1u : 0u,
           prop_veto.passes,
           prop_veto.initial_published[0],
           prop_veto.initial_published[1],
@@ -3523,7 +3609,8 @@ void __cdecl HookMode3Camera(void* controller) {
           static_cast<unsigned long long>(
               prop_veto.diagnostic.resource),
           static_cast<unsigned long long>(
-              prop_veto.diagnostic.triangle_index));
+              prop_veto.diagnostic.triangle_index),
+          prop_veto.diagnostic.bounds_motion);
     }
   }
 }
@@ -7218,13 +7305,16 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
           AppendNativeLog(
               "camera_temporal_chord_guard tick=%llu phase=%.3f "
               "node=%08llX resource=%llu tri=%llu hit=%.1f "
+              "kinematic=%u motion=%.1f "
               "from=%.0f/%.0f/%.0f to=%.0f/%.0f/%.0f "
               "selected=%s total=%llu",
               static_cast<unsigned long long>(source_tick), phase,
               static_cast<unsigned long long>(diagnostic.node),
               static_cast<unsigned long long>(diagnostic.resource),
               static_cast<unsigned long long>(diagnostic.triangle_index),
-              hit_distance, previous_position.x, previous_position.y,
+              hit_distance, diagnostic.kinematic ? 1u : 0u,
+              diagnostic.bounds_motion, previous_position.x,
+              previous_position.y,
               previous_position.z, current_position.x, current_position.y,
               current_position.z, phase < 0.5 ? "previous" : "current",
               static_cast<unsigned long long>(
@@ -7773,6 +7863,10 @@ void ResetSceneHistory() {
   g_player_contact_correction_length = 0.0;
   g_matrix_axis_return_bins = {};
   g_raw_axis_return_bins = {};
+  {
+    std::lock_guard<std::mutex> lock(g_camera_collision_mesh_mutex);
+    g_camera_kinematic_nodes.clear();
+  }
   {
     std::lock_guard<std::mutex> lock(g_contact_projection_mutex);
     g_pending_contact_projection = {};
@@ -8502,7 +8596,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.87 native prop convergence "
+      "Deathtrap native render overlay 0.0.88 kinematic block depenetration "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
