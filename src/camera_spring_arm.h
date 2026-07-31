@@ -259,6 +259,21 @@ inline bool CameraPresentationFollowInputIdle(
   return now_ms - last_input_ms >= grace_ms;
 }
 
+inline bool CameraTargetMeetsMinimumDistance(
+    const std::array<int32_t, 3>& focus,
+    const std::array<int32_t, 3>& target,
+    double minimum_distance) {
+  if (!std::isfinite(minimum_distance) || minimum_distance <= 0.0) {
+    return false;
+  }
+  const double dx = static_cast<double>(target[0]) - focus[0];
+  const double dy = static_cast<double>(target[1]) - focus[1];
+  const double dz = static_cast<double>(target[2]) - focus[2];
+  const double distance = std::hypot(std::hypot(dx, dz), dy);
+  return std::isfinite(distance) &&
+         distance + 0.5 >= minimum_distance;
+}
+
 inline CameraSpringArmStep StepCameraSpringArm(
     double desired_distance, double hard_safe_distance,
     double previous_radius, bool obstruction_present,

@@ -1798,6 +1798,9 @@ uintptr_t ResolveControllerCameraNode(void* controller) {
       : 0;
 }
 
+bool CameraEndpointClearOfSceneObjects(
+    const std::array<int32_t, 3>& endpoint);
+
 void ClearCameraMeshPresentationLatch(const char* reason) {
   uintptr_t resource = 0;
   bool was_active = false;
@@ -1855,6 +1858,77 @@ void UpdateCameraMeshPresentationLatch(
     const std::array<int32_t, 3>& target) {
   const uintptr_t camera_node = ResolveControllerCameraNode(controller);
   if (!camera_node || !diagnostic.node || !diagnostic.resource) {
+    return;
+  }
+  CameraMeshPresentationLatch previous;
+  {
+    std::lock_guard<std::mutex> lock(
+        g_camera_mesh_presentation_latch_mutex);
+    previous = g_camera_mesh_presentation_latch;
+  }
+  const bool same_camera =
+      previous.active && previous.camera_node == camera_node;
+  const bool owner_changed =
+      same_camera &&
+      (previous.blocker_node != diagnostic.node ||
+       previous.resource != diagnostic.resource);
+  const bool incoming_usable =
+      CameraTargetMeetsMinimumDistance(
+          focus, target, kThirdPersonMinimumCameraDistance);
+  if (same_camera && (owner_changed || !incoming_usable)) {
+    const std::array<int32_t, 3> retained =
+        TranslateCameraTargetWithFocus(
+            previous.focus, focus, previous.target);
+    bool native_blocked = true;
+    const bool retained_safe =
+        CameraTargetMeetsMinimumDistance(
+            focus, retained, kThirdPersonMinimumCameraDistance) &&
+        NativeCameraVolumeBlocked(
+            controller, focus, retained, &native_blocked) &&
+        !native_blocked &&
+        CameraEndpointClearOfSceneObjects(retained);
+    if (retained_safe) {
+      bool retained_current = false;
+      {
+        std::lock_guard<std::mutex> lock(
+            g_camera_mesh_presentation_latch_mutex);
+        CameraMeshPresentationLatch& latch =
+            g_camera_mesh_presentation_latch;
+        if (latch.active &&
+            latch.camera_node == previous.camera_node &&
+            latch.generation == previous.generation) {
+          latch.focus = focus;
+          latch.target = retained;
+          latch.clear_ticks = 0;
+          retained_current = true;
+        }
+      }
+      if (retained_current) {
+        if (g_debug_log) {
+          AppendNativeLog(
+              "camera_mesh_presentation_latch state=RETAIN "
+              "generation=%llu resource=%llu rejected_resource=%llu "
+              "reason=%s target=%d/%d/%d",
+              static_cast<unsigned long long>(previous.generation),
+              static_cast<unsigned long long>(previous.resource),
+              static_cast<unsigned long long>(diagnostic.resource),
+              incoming_usable ? "owner_switch" : "near_pivot",
+              retained[0], retained[1], retained[2]);
+        }
+        return;
+      }
+    }
+  }
+  if (!incoming_usable) {
+    if (g_debug_log) {
+      AppendNativeLog(
+          "camera_mesh_presentation_latch state=REJECT "
+          "reason=near_pivot resource=%llu focus=%d/%d/%d "
+          "target=%d/%d/%d",
+          static_cast<unsigned long long>(diagnostic.resource),
+          focus[0], focus[1], focus[2],
+          target[0], target[1], target[2]);
+    }
     return;
   }
   bool activated = false;
@@ -3126,6 +3200,99 @@ bool CameraTemporalChordIntersectsSceneObjects(
   return true;
 }
 
+bool CameraEndpointClearOfSceneObjects(
+    const std::array<int32_t, 3>& endpoint) {
+  if (g_previous_snapshot.nodes.empty() ||
+      g_older_snapshot.nodes.empty() ||
+      !g_previous_snapshot.player ||
+      g_previous_snapshot.root != g_older_snapshot.root) {
+    return false;
+  }
+
+  const Vec3 point{
+      static_cast<double>(endpoint[0]),
+      static_cast<double>(endpoint[1]),
+      static_cast<double>(endpoint[2])};
+  constexpr double kRadiusSquared =
+      kCameraCollisionSphereRadius * kCameraCollisionSphereRadius;
+  std::lock_guard<std::mutex> mesh_lock(g_camera_collision_mesh_mutex);
+  for (const auto& entry : g_previous_snapshot.nodes) {
+    const uintptr_t node = entry.first;
+    const NodeTransform& current = entry.second;
+    if (!node || node == g_previous_snapshot.root ||
+        node == g_previous_snapshot.camera ||
+        !current.render_resource_handle || !current.bounds_valid ||
+        current.bounds_radius > kCameraCollisionMaximumObjectRadius) {
+      continue;
+    }
+    if (SceneNodeDescendsFrom(
+            g_previous_snapshot, node, g_previous_snapshot.player) ||
+        SceneNodeDescendsFrom(
+            g_previous_snapshot, g_previous_snapshot.player, node)) {
+      continue;
+    }
+
+    const auto older = g_older_snapshot.nodes.find(node);
+    if (older == g_older_snapshot.nodes.end() ||
+        !older->second.bounds_valid ||
+        older->second.render_resource_handle !=
+            current.render_resource_handle) {
+      continue;
+    }
+    const double radius_motion =
+        std::abs(static_cast<double>(current.bounds_radius) -
+                 static_cast<double>(older->second.bounds_radius));
+    if (radius_motion > kCameraCollisionRadiusMotionTolerance) {
+      continue;
+    }
+
+    const Vec3 bounds_delta{
+        point.x - current.bounds_center[0],
+        point.y - current.bounds_center[1],
+        point.z - current.bounds_center[2]};
+    const double inflated_radius =
+        static_cast<double>(current.bounds_radius) +
+        kCameraCollisionSphereRadius;
+    if (CameraVectorDot(bounds_delta, bounds_delta) >
+        inflated_radius * inflated_radius) {
+      continue;
+    }
+
+    const CameraCollisionMesh* mesh =
+        ResolveCameraCollisionMesh(current.render_resource_handle);
+    if (!mesh) {
+      continue;
+    }
+    std::array<double, 3> scaled_extents{};
+    if (!CameraCollisionMeshBlocksCameraVolume(
+            *mesh, current.world, &scaled_extents)) {
+      continue;
+    }
+
+    // A camera centre can be deep inside a closed mesh while farther than one
+    // camera radius from every individual triangle. Treat containment in the
+    // conservative expanded object OBB as occupied as well as direct
+    // sphere-to-triangle overlap.
+    Vec3 ignored_pushout{};
+    if (CameraMeshExpandedBoundsPushout(
+            *mesh, current.world, point, point,
+            kCameraCollisionSphereRadius, 0.0, 0.0,
+            &ignored_pushout)) {
+      return false;
+    }
+    for (const CameraMeshTriangle& triangle : mesh->triangles) {
+      const Vec3 a = CameraMeshPointToWorld(current.world, triangle.a);
+      const Vec3 b = CameraMeshPointToWorld(current.world, triangle.b);
+      const Vec3 c = CameraMeshPointToWorld(current.world, triangle.c);
+      if (CameraPointTriangleDistanceSquared(point, a, b, c) <=
+          kRadiusSquared) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 bool ClipThirdPersonOrbitAgainstSceneObjects(
     const std::array<int32_t, 3>& focus,
     const std::array<int32_t, 3>& requested,
@@ -3736,6 +3903,7 @@ struct CameraMeshPushoutResult {
   bool mesh_contact = false;
   bool correction_applied = false;
   bool exact_committed = false;
+  bool minimum_distance_restored = false;
   bool exhausted = false;
   uint32_t passes = 0;
   std::array<int32_t, 3> initial_published{};
@@ -3837,6 +4005,43 @@ bool ConfigureCameraWithSceneMeshPushout(
           mesh_safe[0], mesh_safe[1], mesh_safe[2]);
     }
   }
+
+  // The post-native pass observes a position already shifted by the retail
+  // history resolver. In a multi-block squeeze that shifted segment can be
+  // shorter than the usable expanded-OBB escape selected before 0x2F380.
+  // Never turn that secondary contact into a 0--119 unit exact commit at the
+  // player pivot. The original submitted point has already passed both the
+  // complete scene-mesh arm query and the native room-volume validation in
+  // the caller, so restore it as the contact-only publication target.
+  if (!CameraTargetMeetsMinimumDistance(
+          focus, mesh_safe, kThirdPersonMinimumCameraDistance)) {
+    bool submitted_native_blocked = true;
+    const bool submitted_usable =
+        CameraTargetMeetsMinimumDistance(
+            focus, submitted, kThirdPersonMinimumCameraDistance) &&
+        NativeCameraVolumeBlocked(
+            controller, focus, submitted, &submitted_native_blocked) &&
+        !submitted_native_blocked &&
+        CameraEndpointClearOfSceneObjects(submitted);
+    if (!submitted_usable) {
+      result->exhausted = true;
+      AppendNativeLog(
+          "camera_mesh_minimum_restore result=REJECTED "
+          "resource=%llu unsafe=%d/%d/%d submitted=%d/%d/%d",
+          static_cast<unsigned long long>(diagnostic.resource),
+          mesh_safe[0], mesh_safe[1], mesh_safe[2],
+          submitted[0], submitted[1], submitted[2]);
+      return true;
+    }
+    AppendNativeLog(
+        "camera_mesh_minimum_restore result=OK resource=%llu "
+        "unsafe=%d/%d/%d restored=%d/%d/%d",
+        static_cast<unsigned long long>(diagnostic.resource),
+        mesh_safe[0], mesh_safe[1], mesh_safe[2],
+        submitted[0], submitted[1], submitted[2]);
+    mesh_safe = submitted;
+    result->minimum_distance_restored = true;
+  }
   if (g_debug_log) {
     AppendNativeLog(
         "camera_post_native_mesh published=%d/%d/%d "
@@ -3871,9 +4076,14 @@ bool ConfigureCameraWithSceneMeshPushout(
   result->final_published = committed;
   const double constrained_radius = CameraPositionDistance(focus, committed);
   if (std::isfinite(constrained_radius)) {
-    g_third_person_orbit_state.collision_radius =
-        std::min(g_third_person_orbit_state.collision_radius,
-                 constrained_radius);
+    if (result->minimum_distance_restored) {
+      g_third_person_orbit_state.collision_radius =
+          constrained_radius;
+    } else {
+      g_third_person_orbit_state.collision_radius =
+          std::min(g_third_person_orbit_state.collision_radius,
+                   constrained_radius);
+    }
     g_third_person_orbit_state.collision_clear_ticks = 0;
     g_third_person_orbit_state.collision_blocked_release_ticks = 0;
   }
@@ -9403,7 +9613,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.99 manual-orbit-safe follow "
+      "Deathtrap native render overlay 0.0.100 stable multi-mesh contact "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "

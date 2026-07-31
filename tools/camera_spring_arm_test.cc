@@ -176,6 +176,18 @@ int main() {
     std::cerr << "presentation follow accepted invalid input timing\n";
     return 1;
   }
+  if (CameraTargetMeetsMinimumDistance(
+          {0, 0, 0}, {10, 0, 0}, 120.0) ||
+      CameraTargetMeetsMinimumDistance(
+          {0, 0, 0}, {119, 0, 0}, 120.0)) {
+    std::cerr << "near-pivot presentation target was accepted\n";
+    return 1;
+  }
+  if (!CameraTargetMeetsMinimumDistance(
+          {100, 200, 300}, {220, 200, 300}, 120.0)) {
+    std::cerr << "minimum usable presentation target was rejected\n";
+    return 1;
+  }
 
   auto step = StepCameraSpringArm(1400.0, 420.0, 1400.0, true, 0, 0);
   ExpectNear(step.radius, 420.0, "immediate contraction");

@@ -721,6 +721,27 @@ and dynamic-block latch release boundaries. This is camera-state arbitration;
 it does not change native volume queries, mesh classification, contact
 distance, spring recovery or authored-shot ownership.
 
+The next runtime trace isolates a separate multi-contact defect. The
+presentation latch treated each node/resource identity as a new owner even
+when contact never cleared. In one run it acquired 208 times, released only
+38 times and switched owner 170 times without a clear interval. Some
+focus-relative target changes were 900--1093 units, and each one reset both
+presentation-history snapshots. The camera was therefore not following one
+contact manifold; adjacent block faces repeatedly stole ownership.
+
+Post-native correction also bypassed the existing 120-unit usable-distance
+topology rule. It made nine exact commits below that boundary, including
+0-, 10- and 15-unit camera positions. These are the screenshot's black
+near-pivot states.
+
+Version `0.0.100` treats the latch as one continuous contact manifold. A new
+mesh identity may replace it only when the old focus-relative target fails a
+native room query or overlaps a qualified current mesh/expanded OBB. A safe
+old target survives the owner switch without a generation reset or history
+normalization. Independently, a sub-120 post-native correction restores the
+already validated pre-native submitted endpoint and cannot become an exact
+publication or latch target.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

@@ -681,6 +681,34 @@ mouse or stick orbit sample. Every new packet restarts that quiet window.
 Collision, the native wall/floor result, mesh sweeps, overlap escape and the
 dynamic-block presentation latch are unchanged.
 
+The `0.0.99` run confirms that the remaining black/stuck sequence is inside
+mesh contact, not presentation follow. Its version-tagged segment contains
+208 latch acquisitions but only 38 clear releases. There are 170 direct owner
+switches without a clear interval; adjacent targets differ by as much as
+1093 units, with repeated 900-unit switches between separate nodes using
+resource 13676. Every switch created a new generation and normalized both
+presentation-history snapshots, turning competing valid faces into visible
+hard jumps.
+
+The same run proves that the post-native safety pass can undo the earlier
+0.0.95 near-pivot escape. Nine exact mesh commits are below the established
+120-unit usable distance: 88.5, 36.2, 17.5, 16.2, 21.3, 0, 108, 15 and
+10 units. At the 10-unit case, the pre-configure phase had already selected a
+792-unit expanded-OBB escape, but `0x2F380` shifted the publication onto a
+shorter intersecting segment. The post-native sweep then rejected its own
+longer escape because it lay beyond that shifted segment and committed the
+10-unit fallback at the player pivot.
+
+Version `0.0.100` enforces the existing usable-distance invariant in the
+post-native phase. A positive mesh correction below 120 restores the submitted
+endpoint that already passed the complete mesh-arm and native-room checks;
+the near-pivot endpoint is never committed or latched. Presentation contact
+also becomes a stable manifold: when a different mesh node reports contact,
+the focus-relative existing target is retained if it remains outside every
+qualified expanded mesh/triangle volume and passes the native room query.
+Only a genuinely invalid old target authorizes a new latch generation and
+history cut.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
