@@ -117,13 +117,16 @@ constexpr uintptr_t kUseConsumableRva = 0x0007B9C0u;
 constexpr uintptr_t kUseChalkRva = 0x000458B0u;
 constexpr uintptr_t kInventorySlotDrawRva = 0x000772A0u;
 constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
-// Both the lean-producing locomotion wrapper at 0x44EA0 and the heading-only
-// wrapper at 0x44E90 converge here. The latter is used by turn-in-place and
-// most other movement states, so hooking only 0x44EA0 leaves camera-relative
-// steering under the original tank turn. 0x44DD0 reads the selected source
-// through player+0x154, adds that Q10 delta to [player+0x10]->+0x1C, and
-// mirrors the result into the engine-owned render/collision orientation.
+// The live gameplay entity owns its movement controller at +0x114. Native
+// locomotion callbacks receive that controller, not the outer entity. Both
+// the lean-producing 0x44EA0 wrapper and the simpler 0x44E90 locomotion
+// wrapper converge on 0x44DD0. Dedicated turn-in-place states instead update
+// heading directly in 0x68970/0x68C20 and intentionally bypass this gateway.
+// 0x44DD0 reads the selected source through controller+0x154, adds that Q10
+// delta to [controller+0x10]->+0x1C, and mirrors the result into the
+// engine-owned render/collision orientation.
 constexpr uintptr_t kPlayerTurnRva = 0x00044DD0u;
+constexpr size_t kPlayerMovementControllerOffset = 0x114u;
 constexpr size_t kPlayerRenderLinkOffset = 0x10u;
 constexpr size_t kPlayerTurnSourcePointerOffset = 0x154u;
 constexpr size_t kPlayerHeadingOffset = 0x1Cu;
@@ -709,10 +712,11 @@ int32_t g_xinput_selector_center_y = 316;
 double g_xinput_movement_threshold = 0.14;
 double g_xinput_run_threshold = 0.50;
 double g_xinput_run_release_threshold = 0.30;
-bool g_xinput_camera_relative_movement = false;
+bool g_xinput_camera_relative_movement = true;
 double g_xinput_movement_turn_degrees_per_tick = 12.0;
 double g_xinput_movement_forward_arc_degrees = 85.0;
 bool g_xinput_run_active = false;
+bool g_xinput_camera_relative_forward_active = false;
 uint64_t g_xinput_chalk_actions_asserted = 0;
 uint64_t g_weapon_wheel_switches = 0;
 uint64_t g_weapon_wheel_rejections = 0;
@@ -5720,6 +5724,7 @@ void ReleaseInjectedControllerInput() {
   SubmitDeathtrapXInputMouseState(0, 0, false, false);
   g_xinput_first_person_toggled = false;
   g_xinput_run_active = false;
+  g_xinput_camera_relative_forward_active = false;
   g_xinput_menu_mode.store(true, std::memory_order_release);
   g_xinput_previous_native_gameplay = false;
   g_previous_xinput_buttons = 0;
@@ -6162,18 +6167,40 @@ int32_t PlayerHeadingDelta(int32_t target, int32_t current) {
   return delta;
 }
 
-bool ReadLivePlayerHeading(int32_t* heading, uintptr_t* live_player = nullptr) {
-  if (!heading || !g_dungeon_base) {
+bool ResolveLivePlayerMovementController(uintptr_t* outer_player,
+                                         uintptr_t* controller) {
+  if (!controller || !g_dungeon_base) {
     return false;
   }
   uintptr_t player = 0;
-  uintptr_t render_link = 0;
-  uintptr_t render_node = 0;
-  int32_t value = 0;
+  uintptr_t movement_controller = 0;
   if (!SafeReadValue(g_dungeon_base + kUiOwnerPointerRva, &player) ||
       !player ||
       !SafeReadValue(reinterpret_cast<const void*>(
-                         player + kPlayerRenderLinkOffset),
+                         player + kPlayerMovementControllerOffset),
+                     &movement_controller) ||
+      !movement_controller) {
+    return false;
+  }
+  if (outer_player) {
+    *outer_player = player;
+  }
+  *controller = movement_controller;
+  return true;
+}
+
+bool ReadLivePlayerHeading(int32_t* heading,
+                           uintptr_t* live_controller = nullptr) {
+  if (!heading || !g_dungeon_base) {
+    return false;
+  }
+  uintptr_t controller = 0;
+  uintptr_t render_link = 0;
+  uintptr_t render_node = 0;
+  int32_t value = 0;
+  if (!ResolveLivePlayerMovementController(nullptr, &controller) ||
+      !SafeReadValue(reinterpret_cast<const void*>(
+                         controller + kPlayerRenderLinkOffset),
                      &render_link) ||
       !render_link ||
       !SafeReadValue(reinterpret_cast<const void*>(render_link),
@@ -6185,8 +6212,8 @@ bool ReadLivePlayerHeading(int32_t* heading, uintptr_t* live_player = nullptr) {
     return false;
   }
   *heading = NormalizePlayerHeading(value);
-  if (live_player) {
-    *live_player = player;
+  if (live_controller) {
+    *live_controller = controller;
   }
   return true;
 }
@@ -6240,30 +6267,30 @@ void PublishCameraRelativeMovementIntent(bool active, int32_t heading,
   g_xinput_camera_relative_was_active = active;
 }
 
-void __cdecl HookPlayerTurn(void* player) {
+void __cdecl HookPlayerTurn(void* controller) {
   if (!g_original_player_turn) {
     return;
   }
-  if (!player ||
+  if (!controller ||
       !g_xinput_camera_relative_intent.load(std::memory_order_acquire)) {
-    g_original_player_turn(player);
+    g_original_player_turn(controller);
     return;
   }
 
-  uintptr_t live_player = 0;
+  uintptr_t live_controller = 0;
   int32_t current_heading = 0;
   uintptr_t turn_source = 0;
   int32_t original_turn = 0;
-  if (!ReadLivePlayerHeading(&current_heading, &live_player) ||
-      live_player != reinterpret_cast<uintptr_t>(player) ||
+  if (!ReadLivePlayerHeading(&current_heading, &live_controller) ||
+      live_controller != reinterpret_cast<uintptr_t>(controller) ||
       !SafeReadValue(reinterpret_cast<const void*>(
-                         live_player + kPlayerTurnSourcePointerOffset),
+                         live_controller + kPlayerTurnSourcePointerOffset),
                      &turn_source) ||
-      turn_source < live_player + 0x100u ||
-      turn_source >= live_player + 0x180u ||
+      turn_source < live_controller + 0x100u ||
+      turn_source >= live_controller + 0x180u ||
       !SafeReadValue(reinterpret_cast<const void*>(turn_source),
                      &original_turn)) {
-    g_original_player_turn(player);
+    g_original_player_turn(controller);
     return;
   }
 
@@ -6282,11 +6309,11 @@ void __cdecl HookPlayerTurn(void* player) {
   const int32_t turn_delta = std::clamp(error, -maximum_step, maximum_step);
   if (!SafeWrite(reinterpret_cast<void*>(turn_source), &turn_delta,
                  sizeof(turn_delta))) {
-    g_original_player_turn(player);
+    g_original_player_turn(controller);
     return;
   }
 
-  g_original_player_turn(player);
+  g_original_player_turn(controller);
   SafeWrite(reinterpret_cast<void*>(turn_source), &original_turn,
             sizeof(original_turn));
   ++g_xinput_camera_relative_turn_calls;
@@ -6342,26 +6369,52 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     if (camera_relative_available && movement_requested) {
       const int32_t heading_error =
           PlayerHeadingDelta(desired_heading, current_heading);
-      const int32_t forward_arc = static_cast<int32_t>(std::lround(
+      const int32_t forward_enter_arc = static_cast<int32_t>(std::lround(
           g_xinput_movement_forward_arc_degrees *
           kPlayerHeadingUnitsPerTurn / 360.0));
-      // Large reversals turn in place briefly; once within the configurable
-      // forward arc, the original forward action produces a smooth native
-      // curve with unchanged animation, speed and collision response.
-      // The active locomotion state is also what reaches the hooked 0x44EA0
-      // gateway. Keep exactly one retail turn action asserted until the
-      // desired heading is reached; the hook replaces its selected source
-      // value with the bounded camera-relative delta for that native call.
+      const double forward_exit_degrees = std::min(
+          175.0, g_xinput_movement_forward_arc_degrees + 20.0);
+      const int32_t forward_exit_arc = static_cast<int32_t>(std::lround(
+          forward_exit_degrees * kPlayerHeadingUnitsPerTurn / 360.0));
+      const int32_t absolute_error = std::abs(heading_error);
+      const bool previous_forward_phase =
+          g_xinput_camera_relative_forward_active;
+      if (g_xinput_camera_relative_forward_active) {
+        if (absolute_error >= forward_exit_arc) {
+          g_xinput_camera_relative_forward_active = false;
+        }
+      } else if (absolute_error <= forward_enter_arc) {
+        g_xinput_camera_relative_forward_active = true;
+      }
+      if (g_debug_log && previous_forward_phase !=
+                             g_xinput_camera_relative_forward_active) {
+        AppendNativeLog(
+            "xinput movement phase=%s error=%d enter=%d exit=%d",
+            g_xinput_camera_relative_forward_active ? "locomotion" :
+                                                      "turn_in_place",
+            heading_error, forward_enter_arc, forward_exit_arc);
+      }
+      // Large reversals deliberately use the game's dedicated native
+      // turn-in-place state. Once inside the forward arc, release both tank
+      // turn actions and assert only W: the locomotion callback reaches
+      // 0x44DD0 even with a zero retail turn source, and HookPlayerTurn
+      // substitutes the bounded camera-relative delta. Separate enter/exit
+      // arcs prevent rapid state oscillation at the boundary.
       PublishCameraRelativeMovementIntent(
           true, desired_heading, movement_stick.magnitude);
       InjectVirtualKey(InjectedKey::kW,
-                       std::abs(heading_error) <= forward_arc);
+                       g_xinput_camera_relative_forward_active);
       InjectVirtualKey(InjectedKey::kS, false);
-      InjectVirtualKey(InjectedKey::kA, heading_error < 0);
-      InjectVirtualKey(InjectedKey::kD, heading_error > 0);
+      InjectVirtualKey(InjectedKey::kA,
+                       !g_xinput_camera_relative_forward_active &&
+                           heading_error < 0);
+      InjectVirtualKey(InjectedKey::kD,
+                       !g_xinput_camera_relative_forward_active &&
+                           heading_error > 0);
       InjectVirtualKey(InjectedKey::kJ, false);
       InjectVirtualKey(InjectedKey::kK, false);
     } else {
+      g_xinput_camera_relative_forward_active = false;
       PublishCameraRelativeMovementIntent(false, desired_heading,
                                           movement_stick.magnitude);
       InjectVirtualKey(InjectedKey::kW,
@@ -6442,6 +6495,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         !selector_captures_controls && !first_person_active &&
             CustomCameraOwnsMode3());
   } else {
+    g_xinput_camera_relative_forward_active = false;
     PublishCameraRelativeMovementIntent(false, 0, 0.0);
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
     g_xinput_first_person_toggled = false;
@@ -10491,7 +10545,7 @@ void InitializePatchState() {
         std::max(0.20, g_xinput_run_threshold - 0.12);
   }
   g_xinput_camera_relative_movement =
-      ConfiguredInteger(L"XInput", L"CameraRelativeMovement", 0) != 0;
+      ConfiguredInteger(L"XInput", L"CameraRelativeMovement", 1) != 0;
   g_xinput_movement_turn_degrees_per_tick =
       static_cast<double>(std::clamp(
           ConfiguredInteger(L"XInput", L"MovementTurnDegreesPerTick", 12),
@@ -10536,8 +10590,9 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.119 stable controller fallback and "
-      "selector ownership with stable v0.0.115 camera, Start dispatch and "
+      "Deathtrap native render overlay 0.0.120 validated movement-controller "
+      "identity and hysteretic camera-relative locomotion with "
+      "stable selector ownership, v0.0.115 camera, Start dispatch and "
       "retail first-person with progressive mesh tangent ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
@@ -10833,7 +10888,8 @@ bool InstallDeathtrapNativeRenderHooks() {
                                            std::memory_order_release);
         AppendNativeLog(
             "xinput movement heading_hook=active rva=%08llX "
-            "source=player+154 heading=[player+10]->1C units=1024",
+            "owner=ui_player controller=[owner+114] "
+            "source=controller+154 heading=[controller+10]->1C units=1024",
             static_cast<unsigned long long>(kPlayerTurnRva));
       } else {
         AppendNativeLog(

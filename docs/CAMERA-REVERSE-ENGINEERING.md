@@ -1070,3 +1070,31 @@ ordinary tank steering and produce the reported zigzag. Version `0.0.119`
 disables `CameraRelativeMovement` in both the shipped INI and compiled default;
 the heading hook is not installed. This restores the stable `0.0.115` left-
 stick mapping while retaining the independent selector orbit-filter fix.
+
+## 0.0.120 movement-controller identity and input-state result
+
+The subsequent read-only pass resolved the failed ownership check without a
+new runtime probe. The live UI/gameplay pointer is the outer player entity,
+while movement callbacks receive the controller stored at `entity+0x114`.
+Current and archived callback logs show those as distinct addresses (for
+example `0x042705D8` and `0x1C074710`). The old `HookPlayerTurn` compared them
+directly, so every invocation necessarily failed validation before it could
+write the selected source.
+
+Static input tracing also corrects the preceding turn-in-place conclusion.
+`0x871B0` converts the retail action table into controller flags: walk
+forward/backward become `0x8/0x10`, run becomes `0x20/0x40`, side-step becomes
+`0x100/0x200`, and ordinary/fast turn become `0x2/0x4` plus a signed value at
+controller `+0x148`. Idle dispatch at `0x68390` enters locomotion for the
+forward flags, but enters dedicated turn-in-place states for `0x2/0x4`. Their
+callbacks `0x68970` and `0x68C20` add fixed 32/64-unit heading steps directly
+and do not call `0x44DD0`. By contrast, locomotion callback `0x7E530` always
+reaches `0x44EA0 -> 0x44DD0`, even when its retail turn source is zero.
+
+Version `0.0.120` therefore resolves and validates
+`outer entity -> +0x114 movement controller`, reads heading and `+0x154` from
+that controller, and uses a hysteretic two-phase mapping. Large reversals use
+the native turn-in-place state. Once inside the configured forward arc, both
+A/D actions are released, W alone enters locomotion, and `0x44DD0` receives the
+bounded camera-relative delta. The forward phase is not abandoned until the
+error exceeds the configured arc by 20 degrees, preventing boundary chatter.

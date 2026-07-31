@@ -112,9 +112,10 @@ D3D11 settings, first-run verification and troubleshooting.
   inventory check and equipment change on the next real gameplay tick.
 - `WeaponWheel/Enabled=0`: disable wheel weapon selection.
 - `WeaponWheel/Invert=1`: reverse wheel direction.
-- XInput controller 0 is enabled in the test config. The left stick drives the
-  original forward/backward and tank-turn actions; hold LB to change its
-  horizontal axis to the game's native side-step actions. A jumps/climbs, X
+- XInput controller 0 is enabled in the test config. In third person the left
+  stick selects a camera-relative heading. Large reversals use the native
+  turn-in-place state; locomotion keeps the game's original animation, speed
+  and collision path. Hold LB to use the native side-step actions. A jumps/climbs, X
   operates, RT attacks, LT blocks, RB casts, and Start opens the menu. Gameplay
   uses one persistent modern third-person camera. Tab enters the game's native
   first-person view, and R3 toggles that same Tab-driven mode; the right stick

@@ -958,6 +958,23 @@ design objective, not a release claim, until a read-only diagnostic proves the
 live player identity and exact native call lifetime. The stable camera and
 selector right-stick ownership fix remain enabled.
 
+### Validated controller ownership and two-phase steering (`0.0.120`)
+
+The live gameplay pointer and the native movement callback argument are not
+the same object. The former is the outer player entity; the latter is its
+movement controller at `entity+0x114`. Heading, the selected turn source at
+`+0x154`, and the `0x44DD0` argument must all be resolved relative to that
+controller.
+
+Turn-in-place is also a separate native path. Ordinary and fast turn states
+update heading directly in `0x68970` and `0x68C20`; they do not converge on
+`0x44DD0`. The camera-relative design therefore uses those retail states only
+for large stationary reversals. Inside the forward arc it releases A/D and
+asserts W alone. The resulting `0x7E530 -> 0x44EA0 -> 0x44DD0` locomotion path
+accepts the bounded camera-relative delta while preserving native root motion,
+animation, collision and walk/run selection. A 20-degree exit margin around
+the configured entry arc provides state hysteresis.
+
 ### Phase E: tuning and release
 
 - Expose sensitivity, inversion, pitch limits, shoulder side, distance,

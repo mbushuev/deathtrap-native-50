@@ -293,10 +293,14 @@ chalk and consumable selections require A. `SelectorRadius` and
 The validated 4:3 center is `SelectorCenterY=316`; the retail UI uses an
 upward-growing Y axis with its origin near the bottom edge, not D3D screen
 coordinates. `MovementThresholdPercent=14` is applied to the circular left-
-stick magnitude. `CameraRelativeMovement=0` is the shipped stable tank mapping.
-The native-heading bridge remains available only for diagnostics with value
-`1`; `MovementTurnDegreesPerTick=12` limits its per-source-tick turn and
-`MovementForwardArcDegrees=85` defines its forward arc. Running engages at `RunThresholdPercent=50` and
+stick magnitude. `CameraRelativeMovement=1` enables the validated
+camera-relative mapping. Large reversals briefly use the retail turn-in-place
+state. Inside `MovementForwardArcDegrees=85`, the bridge releases A/D, asserts
+only forward motion and substitutes a bounded turn at the native `0x44DD0`
+locomotion gateway. A 20-degree exit margin prevents repeated state changes at
+the boundary. Set the value to `0` to restore the stable tank mapping.
+`MovementTurnDegreesPerTick=12` limits the controlled per-source-tick turn.
+Running engages at `RunThresholdPercent=50` and
 disengages only below `RunReleaseThresholdPercent=30`; this hysteresis prevents
 noisy diagonal samples from interrupting a run with a one-tick walk transition.
 
