@@ -742,6 +742,23 @@ normalization. Independently, a sub-120 post-native correction restores the
 already validated pre-native submitted endpoint and cannot become an exact
 publication or latch target.
 
+The `0.0.100` runtime leaves one presentation-state race. A contact-only
+commit updates the visible/published camera immediately, while the native
+four-sample controller can advance its resolved point one source tick before
+that point reaches the publication matrix. The old latch release counted the
+safe committed publication as clear during this delay. In the measured loop,
+the second such sample released the latch and the pending native point entered
+the same block on the following tick.
+
+Version `0.0.101` makes release evidence predictive. The raw resolved point is
+captured immediately after the one native configure call and swept through the
+same current render meshes while the latch is active. If it is blocked, clear
+evidence is reset and the existing focus-relative latch target remains active
+after revalidation. The latch releases only after two samples whose published
+and pending native endpoints are both clear. This changes neither the spring
+radius nor ordinary native wall/floor publication and performs no new direct
+camera commit.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

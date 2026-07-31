@@ -189,6 +189,31 @@ int main() {
     return 1;
   }
 
+  auto latch_clear =
+      StepCameraMeshPresentationLatchClear(0, false);
+  ExpectTicks(latch_clear.clear_ticks, 1,
+              "first complete latch-clear sample");
+  if (latch_clear.release) {
+    std::cerr << "presentation latch released after one clear sample\n";
+    return 1;
+  }
+  latch_clear = StepCameraMeshPresentationLatchClear(
+      latch_clear.clear_ticks, true);
+  ExpectTicks(latch_clear.clear_ticks, 0,
+              "pending native mesh collision resets latch clear evidence");
+  if (latch_clear.release) {
+    std::cerr << "presentation latch released into pending native collision\n";
+    return 1;
+  }
+  latch_clear = StepCameraMeshPresentationLatchClear(
+      latch_clear.clear_ticks, false);
+  latch_clear = StepCameraMeshPresentationLatchClear(
+      latch_clear.clear_ticks, false);
+  if (!latch_clear.release) {
+    std::cerr << "presentation latch did not release after two fully clear samples\n";
+    return 1;
+  }
+
   auto step = StepCameraSpringArm(1400.0, 420.0, 1400.0, true, 0, 0);
   ExpectNear(step.radius, 420.0, "immediate contraction");
 

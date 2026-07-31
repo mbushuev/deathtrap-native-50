@@ -13,6 +13,25 @@ struct CameraSpringArmStep {
   uint32_t blocked_release_ticks = 0;
 };
 
+struct CameraMeshPresentationLatchClearStep {
+  uint32_t clear_ticks = 0;
+  bool release = false;
+};
+
+inline CameraMeshPresentationLatchClearStep
+StepCameraMeshPresentationLatchClear(
+    uint32_t previous_clear_ticks,
+    bool native_candidate_mesh_blocked) {
+  CameraMeshPresentationLatchClearStep result;
+  if (native_candidate_mesh_blocked) {
+    return result;
+  }
+  result.clear_ticks =
+      std::min(previous_clear_ticks + 1u, 120u);
+  result.release = result.clear_ticks >= 2u;
+  return result;
+}
+
 inline bool CameraInitialOverlapBlocks(double start_distance_squared,
                                        double probe_distance_squared) {
   if (!std::isfinite(start_distance_squared) ||

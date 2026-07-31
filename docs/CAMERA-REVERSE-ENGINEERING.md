@@ -709,6 +709,30 @@ qualified expanded mesh/triangle volume and passes the native room query.
 Only a genuinely invalid old target authorizes a new latch generation and
 history cut.
 
+The `0.0.100` run confirms both protections, but exposes a delayed-publication
+release loop. All 81 successful minimum-distance restores kept exact commits
+at or above 120 units, and the earlier multi-node owner-switch storm is absent.
+However, the latch released 88 times; 73 releases reacquired the same resource
+within 8--10 log records, including 72 repetitions on resource 12613.
+
+The controller trace explains the delay. After a contact commit, the published
+matrix can remain at the safe latch point for two source ticks while
+`0x2F380` advances `controller+0x1DC` toward an unsafe mesh point. On the
+second tick, the old release test observed only the still-safe published
+matrix, counted a second clear sample and disabled the latch. The pending
+resolved point became published on the next tick, hit the same mesh and
+reacquired the same target.
+
+Version `0.0.101` snapshots the raw resolved position immediately after the
+single `0x2F380` call and before any contact-only exact correction. While a
+mesh presentation latch is active, that pending native candidate is swept
+against the same qualified render meshes. A hit resets clear evidence and
+retains the existing focus-relative target, provided that target still passes
+the native room query, minimum-distance rule and current mesh occupancy test.
+Only two samples for which both the current publication and pending native
+candidate are clear may release the latch. A pure state test covers the
+observed clear/unsafe/clear sequence.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

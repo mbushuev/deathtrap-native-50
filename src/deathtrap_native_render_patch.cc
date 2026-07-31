@@ -1801,6 +1801,12 @@ uintptr_t ResolveControllerCameraNode(void* controller) {
 bool CameraEndpointClearOfSceneObjects(
     const std::array<int32_t, 3>& endpoint);
 
+bool CameraMeshPresentationLatchActive() {
+  std::lock_guard<std::mutex> lock(
+      g_camera_mesh_presentation_latch_mutex);
+  return g_camera_mesh_presentation_latch.active;
+}
+
 void ClearCameraMeshPresentationLatch(const char* reason) {
   uintptr_t resource = 0;
   bool was_active = false;
@@ -1820,7 +1826,77 @@ void ClearCameraMeshPresentationLatch(const char* reason) {
 }
 
 void ObserveClearCameraMeshPresentationLatch(
-    const std::array<int32_t, 3>& focus) {
+    void* controller, const std::array<int32_t, 3>& focus,
+    bool native_candidate_mesh_blocked,
+    const CameraMeshHitDiagnostic* native_candidate_diagnostic) {
+  if (native_candidate_mesh_blocked) {
+    CameraMeshPresentationLatch previous;
+    {
+      std::lock_guard<std::mutex> lock(
+          g_camera_mesh_presentation_latch_mutex);
+      previous = g_camera_mesh_presentation_latch;
+    }
+    if (!previous.active) {
+      return;
+    }
+
+    // A contact-only exact commit can leave the published matrix at the safe
+    // latch target while 0x2F380 has already advanced its resolved position
+    // toward an unsafe mesh point. Treating the published matrix alone as a
+    // clear sample releases the latch one tick before that pending resolved
+    // point becomes visible, producing an OFF -> contact -> ON loop. Keep the
+    // existing focus-relative target while it remains valid and reset clear
+    // evidence whenever the raw native candidate still intersects a mesh.
+    const std::array<int32_t, 3> retained =
+        TranslateCameraTargetWithFocus(
+            previous.focus, focus, previous.target);
+    bool native_blocked = true;
+    const bool retained_safe =
+        CameraTargetMeetsMinimumDistance(
+            focus, retained, kThirdPersonMinimumCameraDistance) &&
+        NativeCameraVolumeBlocked(
+            controller, focus, retained, &native_blocked) &&
+        !native_blocked &&
+        CameraEndpointClearOfSceneObjects(retained);
+    if (!retained_safe) {
+      ClearCameraMeshPresentationLatch("pending_candidate_target_invalid");
+      return;
+    }
+
+    bool held = false;
+    const CameraMeshPresentationLatchClearStep clear_step =
+        StepCameraMeshPresentationLatchClear(
+            previous.clear_ticks, true);
+    {
+      std::lock_guard<std::mutex> lock(
+          g_camera_mesh_presentation_latch_mutex);
+      CameraMeshPresentationLatch& latch =
+          g_camera_mesh_presentation_latch;
+      if (latch.active &&
+          latch.camera_node == previous.camera_node &&
+          latch.generation == previous.generation) {
+        latch.focus = focus;
+        latch.target = retained;
+        latch.clear_ticks = clear_step.clear_ticks;
+        held = true;
+      }
+    }
+    if (held && previous.clear_ticks && g_debug_log) {
+      AppendNativeLog(
+          "camera_mesh_presentation_latch state=HOLD "
+          "reason=native_candidate_mesh generation=%llu "
+          "resource=%llu candidate_resource=%llu target=%d/%d/%d",
+          static_cast<unsigned long long>(previous.generation),
+          static_cast<unsigned long long>(previous.resource),
+          static_cast<unsigned long long>(
+              native_candidate_diagnostic
+                  ? native_candidate_diagnostic->resource
+                  : 0u),
+          retained[0], retained[1], retained[2]);
+    }
+    return;
+  }
+
   uintptr_t resource = 0;
   bool released = false;
   {
@@ -1837,8 +1913,11 @@ void ObserveClearCameraMeshPresentationLatch(
     latch.target =
         TranslateCameraTargetWithFocus(latch.focus, focus, latch.target);
     latch.focus = focus;
-    latch.clear_ticks = std::min(latch.clear_ticks + 1u, 120u);
-    if (latch.clear_ticks >= 2u) {
+    const CameraMeshPresentationLatchClearStep clear_step =
+        StepCameraMeshPresentationLatchClear(
+            latch.clear_ticks, false);
+    latch.clear_ticks = clear_step.clear_ticks;
+    if (clear_step.release) {
       resource = latch.resource;
       latch = {};
       released = true;
@@ -3905,7 +3984,9 @@ struct CameraMeshPushoutResult {
   bool exact_committed = false;
   bool minimum_distance_restored = false;
   bool exhausted = false;
+  bool native_resolved_valid = false;
   uint32_t passes = 0;
+  std::array<int32_t, 3> native_resolved{};
   std::array<int32_t, 3> initial_published{};
   std::array<int32_t, 3> final_published{};
   std::array<int32_t, 3> accepted_target{};
@@ -3961,6 +4042,10 @@ bool ConfigureCameraWithSceneMeshPushout(
   }
   result->configured = true;
   result->passes = 1u;
+  result->native_resolved_valid = SafeRead(
+      reinterpret_cast<const uint8_t*>(controller) +
+          kCameraControllerResolvedPositionOffset,
+      result->native_resolved.data(), sizeof(result->native_resolved));
   if (!ReadPublishedCameraPosition(&result->initial_published)) {
     return false;
   }
@@ -4090,6 +4175,18 @@ bool ConfigureCameraWithSceneMeshPushout(
   return true;
 }
 
+bool NativeResolvedCameraCandidateIntersectsSceneMesh(
+    const std::array<int32_t, 3>& focus,
+    const CameraMeshPushoutResult& pushout,
+    CameraMeshHitDiagnostic* diagnostic) {
+  if (!pushout.native_resolved_valid) {
+    return false;
+  }
+  std::array<int32_t, 3> mesh_safe = pushout.native_resolved;
+  return ClipThirdPersonOrbitAgainstSceneObjects(
+      focus, pushout.native_resolved, &mesh_safe, diagnostic);
+}
+
 void __cdecl HookMode3Camera(void* controller) {
   if (!g_original_mode3_camera || !g_configure_camera ||
       !g_resolve_camera_sector ||
@@ -4211,7 +4308,17 @@ void __cdecl HookMode3Camera(void* controller) {
           controller, held_pushout.diagnostic, camera_focus,
           held_pushout.final_published);
     } else {
-      ObserveClearCameraMeshPresentationLatch(camera_focus);
+      CameraMeshHitDiagnostic native_candidate_diagnostic;
+      const bool native_candidate_mesh_blocked =
+          CameraMeshPresentationLatchActive() &&
+          NativeResolvedCameraCandidateIntersectsSceneMesh(
+              camera_focus, held_pushout,
+              &native_candidate_diagnostic);
+      ObserveClearCameraMeshPresentationLatch(
+          controller, camera_focus, native_candidate_mesh_blocked,
+          native_candidate_mesh_blocked
+              ? &native_candidate_diagnostic
+              : nullptr);
     }
     AppendNativeLog(
         "camera_native_spring hold reason=%s target=%d/%d/%d "
@@ -4375,7 +4482,17 @@ void __cdecl HookMode3Camera(void* controller) {
     UpdateCameraMeshPresentationLatch(
         controller, latch_diagnostic, camera_focus, latch_target);
   } else {
-    ObserveClearCameraMeshPresentationLatch(camera_focus);
+    CameraMeshHitDiagnostic native_candidate_diagnostic;
+    const bool native_candidate_mesh_blocked =
+        CameraMeshPresentationLatchActive() &&
+        NativeResolvedCameraCandidateIntersectsSceneMesh(
+            camera_focus, mesh_pushout,
+            &native_candidate_diagnostic);
+    ObserveClearCameraMeshPresentationLatch(
+        controller, camera_focus, native_candidate_mesh_blocked,
+        native_candidate_mesh_blocked
+            ? &native_candidate_diagnostic
+            : nullptr);
   }
 
   if (g_debug_log) {
@@ -4402,7 +4519,9 @@ void __cdecl HookMode3Camera(void* controller) {
           "camera_native_mesh_pushout focus=%d/%d/%d orbit=%d/%d/%d "
           "safe=%d/%d/%d submitted=%d/%d/%d "
           "after_desired=%d/%d/%d after_resolved=%d/%d/%d "
-          "published=%d/%d/%d valid=%u/%u/%u blocked=%u/%u "
+          "published=%d/%d/%d valid=%u/%u/%u "
+          "native_candidate=%d/%d/%d candidate_valid=%u "
+          "blocked=%u/%u "
           "mesh=%u/%u/%u exact=%u passes=%u "
           "initial_published=%d/%d/%d radius=%.1f clear_ticks=%u "
           "blocked_release_ticks=%u "
@@ -4418,6 +4537,10 @@ void __cdecl HookMode3Camera(void* controller) {
           published.values[9], published.values[10], published.values[11],
           desired_valid ? 1u : 0u, resolved_valid ? 1u : 0u,
           published_valid ? 1u : 0u,
+          mesh_pushout.native_resolved[0],
+          mesh_pushout.native_resolved[1],
+          mesh_pushout.native_resolved[2],
+          mesh_pushout.native_resolved_valid ? 1u : 0u,
           orbit_blocked ? 1u : 0u,
           mesh_orbit_blocked ? 1u : 0u,
           mesh_pushout.mesh_contact ? 1u : 0u,
@@ -9613,7 +9736,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.100 stable multi-mesh contact "
+      "Deathtrap native render overlay 0.0.101 predictive mesh-latch release "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
