@@ -3215,15 +3215,24 @@ bool ConfigureCameraWithStaticPropVeto(
   *result = {};
   result->accepted_target = submitted;
 
-  // A rejected configure pass must not integrate retail position history a
-  // second time. Snapshot exactly the same resolver/history block used by the
-  // authored-camera transaction, probe the native final position, and restore
-  // it before resubmitting a prop-safe target.
+  // Snapshot exactly the same resolver/history block used by the authored-
+  // camera transaction. A confirmed prop contact advances the native
+  // configure path without restoring between retries. Static disassembly of
+  // 0x2DEF0/0x2DE30 proves that controller+0x204 is a four-sample ring: the
+  // rejected 0.0.86 path restored that ring before every retry, so every pass
+  // necessarily republished the same obstructed average. One ordinary pass
+  // plus four prop-safe passes is sufficient to evict every stale sample
+  // while keeping native wall, floor, sector and orientation ownership.
+  // If that bounded sequence still does not converge, restore this snapshot
+  // and execute the ordinary target once; no partial retry state survives the
+  // source tick.
   RetailCameraProbeSnapshot baseline{};
   const bool baseline_valid =
       CaptureRetailCameraProbeState(controller, &baseline);
   std::array<int32_t, 3> candidate = submitted;
-  constexpr uint32_t kMaximumConfigurePasses = 3u;
+  constexpr uint32_t kMaximumConfigurePasses =
+      1u + static_cast<uint32_t>(
+               kCameraControllerPositionHistorySampleCount);
 
   for (uint32_t pass = 0; pass < kMaximumConfigurePasses; ++pass) {
     if (!CallConfigureCamera(controller, candidate, room_or_sector)) {
@@ -3271,11 +3280,9 @@ bool ConfigureCameraWithStaticPropVeto(
           static_cast<unsigned long long>(diagnostic.triangle_index));
     }
 
-    if (!baseline_valid || pass + 1u >= kMaximumConfigurePasses ||
-        !RestoreRetailCameraProbeState(controller, baseline)) {
+    if (!baseline_valid || pass + 1u >= kMaximumConfigurePasses) {
       break;
     }
-    result->baseline_restored = true;
     candidate = mesh_safe;
   }
 
@@ -3455,8 +3462,10 @@ void __cdecl HookMode3Camera(void* controller) {
   // 0x2F380 remains the final owner of position, orientation, wall/floor
   // resolution, sector bookkeeping and history. The supplemental render-mesh
   // layer only vetoes a native result that actually intersects a qualified
-  // large static prop; rejected probe state is restored before a shorter
-  // target is resubmitted through the same complete native configure path.
+  // large static prop. A shorter target advances through enough bounded
+  // complete native configure passes to replace the verified four-sample
+  // position history. Failure restores the original resolver/history snapshot
+  // and executes the ordinary target once.
   CameraPropVetoResult prop_veto;
   if (!ConfigureCameraWithStaticPropVeto(
           controller, camera_focus, submitted, room_or_sector, &prop_veto)) {
@@ -8493,7 +8502,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.86 native static-prop veto "
+      "Deathtrap native render overlay 0.0.87 native prop convergence "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "

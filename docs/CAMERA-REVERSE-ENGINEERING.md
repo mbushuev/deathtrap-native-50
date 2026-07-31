@@ -418,6 +418,23 @@ through `0x2F380`. Up to three bounded native passes may converge; failure
 restores and republishes the ordinary `0.0.84` result. No controller history,
 camera node or published matrix is directly overwritten.
 
+The user run of `0.0.86` produced 544 prop-veto failures and no successful
+correction. Every three-pass sequence republished exactly the same camera
+position. This is explained by the native code rather than by another
+collision threshold: `0x2DEF0` pushes the resolved point through the
+four-sample ring at controller `+0x204`, while `0.0.86` restored that ring
+before each retry. It therefore made the retry mathematically identical to the
+first rejected pass.
+
+Version `0.0.87` keeps one pre-contact transaction snapshot but no longer
+restores it between prop-safe retries. It allows one ordinary native configure
+followed by at most four shorter native configure passes, enough to replace
+every entry in the verified four-sample position ring. Each published result
+is swept again before acceptance. If the native result still intersects the
+qualified mesh after the bounded history replacement, the original snapshot
+and ordinary `0.0.84` result are restored. The path still performs no direct
+writes to controller history, the camera node or the published matrix.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

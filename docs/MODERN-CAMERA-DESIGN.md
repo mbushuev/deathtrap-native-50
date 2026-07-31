@@ -494,6 +494,15 @@ through the same `0x2F380` path. Bounded failure falls back to the unmodified
 native result. This retains native walls, floors, orientation, authored shots
 and history while giving large BSP-absent props a constrained retry.
 
+Runtime `0.0.86` showed why restoring before every constrained retry cannot
+work: all three passes emitted the same stale four-sample history average.
+Version `0.0.87` instead treats the whole bounded correction as one
+transaction. It retains a single rollback snapshot, then lets up to four
+prop-safe `0x2F380` submissions advance the native ring and evict its
+pre-contact samples. The complete native resolver remains the only writer of
+walls, floors, sectors, orientation, history and publication. Failure rolls
+the entire transaction back to the ordinary result.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
