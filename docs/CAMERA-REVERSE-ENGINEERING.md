@@ -943,6 +943,27 @@ with the previous direction is attempted; the opposite tangent is not used, so
 failure cannot teleport the camera across the player. If no valid slide exists,
 the existing collision-derived contraction remains authoritative.
 
+The fresh `0.0.112` run exposes a different lifetime error in the preceding-
+arm detour. At the end of the run the desired 1400-unit orbit continues moving
+around stationary focus `-1103/400/14738`, but five consecutive resource-11432
+contacts publish the identical verified previous point
+`-1379/400/14738` at radius 276. Earlier runs contain longer repetitions on
+resources 12619 and 12613. The obstruction tests are succeeding; the problem
+is that their safe result has no geometric progress rule and therefore becomes
+an indefinite camera anchor.
+
+Version `0.0.113` treats the previous point only as a contact-acquisition seed.
+Once the presentation latch proves continuous mesh contact, it captures the
+desired orbit displacement between the preceding and current source ticks,
+projects that displacement onto the exact blocking triangle plane, and adds
+the tangential step to the preceding clear camera arm. This is the usual
+velocity projection used for surface sliding: it advances continuously with
+orbit input and cannot select an unrelated opposite tangent from the complete
+desired arm. The candidate is still bounded by the requested distance and
+must pass both a complete scene-mesh arm sweep and the native seven-trace
+volume query. If it fails either test, the already verified previous point is
+the fallback; first contact retains the `0.0.112` continuity projection.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

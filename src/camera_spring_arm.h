@@ -65,6 +65,20 @@ inline bool CameraPreviousClearArmOwnsMeshCorner(
          previous_native_clear && previous_mesh_arm_clear;
 }
 
+inline bool CameraEstablishedMeshContactPrefersTangentProgress(
+    bool presentation_latch_active, bool mesh_orbit_blocked,
+    bool native_orbit_blocked, bool mesh_diagnostic_valid,
+    bool previous_clear_arm_owned, bool previous_requested_orbit_valid) {
+  // A previous clear arm is a continuity seed, not a permanent world-space
+  // anchor. Once the mesh contact has been established, try the current
+  // source-tick orbit displacement projected onto the blocking face before
+  // falling back to that seed. Otherwise a rotating orbit can keep publishing
+  // the same verified old point forever even though a clear route exists.
+  return presentation_latch_active && mesh_orbit_blocked &&
+         !native_orbit_blocked && mesh_diagnostic_valid &&
+         previous_clear_arm_owned && previous_requested_orbit_valid;
+}
+
 inline CameraFloorLimit ResolveCameraFloorLimit(
     const std::array<int32_t, 3>& focus,
     const std::array<int32_t, 3>& player_root,

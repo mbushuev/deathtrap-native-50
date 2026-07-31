@@ -267,6 +267,21 @@ int main() {
     std::cerr << "previous clear camera arm did not own a mesh corner\n";
     return 1;
   }
+  if (!CameraEstablishedMeshContactPrefersTangentProgress(
+          true, true, false, true, true, true) ||
+      CameraEstablishedMeshContactPrefersTangentProgress(
+          false, true, false, true, true, true) ||
+      CameraEstablishedMeshContactPrefersTangentProgress(
+          true, true, true, true, true, true) ||
+      CameraEstablishedMeshContactPrefersTangentProgress(
+          true, true, false, false, true, true) ||
+      CameraEstablishedMeshContactPrefersTangentProgress(
+          true, true, false, true, false, true) ||
+      CameraEstablishedMeshContactPrefersTangentProgress(
+          true, true, false, true, true, false)) {
+    std::cerr << "established mesh contact did not prioritize tangent progress\n";
+    return 1;
+  }
   if (CameraTargetMeetsMinimumDistance(
           {0, 0, 0}, {10, 0, 0}, 120.0) ||
       CameraTargetMeetsMinimumDistance(

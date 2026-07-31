@@ -4450,6 +4450,10 @@ void __cdecl HookMode3Camera(void* controller) {
       g_third_person_orbit_state.controller == controller;
   const std::array<int32_t, 3> previous_focus =
       g_third_person_orbit_state.previous_player;
+  const bool previous_requested_orbit_valid =
+      g_third_person_orbit_state.requested_position_valid;
+  const std::array<int32_t, 3> previous_requested_orbit =
+      g_third_person_orbit_state.requested_position;
 
   std::array<int32_t, 3> orbit{};
   if (!BuildThirdPersonOrbitPosition(controller, native, &orbit)) {
@@ -4623,17 +4627,22 @@ void __cdecl HookMode3Camera(void* controller) {
           previous_modern_sample_valid, mesh_orbit_blocked, orbit_blocked,
           previous_target_usable, previous_native_clear,
           previous_mesh_arm_clear);
+  const bool established_contact_prefers_tangent =
+      CameraEstablishedMeshContactPrefersTangentProgress(
+          latch_active_before_configure, mesh_orbit_blocked, orbit_blocked,
+          mesh_orbit_diagnostic.valid, previous_clear_arm_owned,
+          previous_requested_orbit_valid);
 
-  // If player motion made the preceding arm intersect the newly encountered
-  // face, project its direction onto that face and try the continuity-aligned
-  // tangent at the preceding radius. This is the geometric slide used by a
-  // modern obstruction solver: it preserves distance on first contact rather
-  // than waiting until a near-pivot contraction has already occurred. Every
-  // candidate still has to pass the complete mesh sweep and native volume
-  // query, so an enclosed corner falls through to ordinary contraction.
+  // If player motion made the preceding arm intersect a newly encountered
+  // face, project its direction onto that face for continuity-first contact.
+  // On established contact, project the requested source-tick displacement
+  // instead, so the clear camera advances along the surface rather than
+  // retaining one old coordinate. Every candidate still has to pass the
+  // complete mesh sweep and native volume query, so an enclosed corner falls
+  // through to ordinary contraction.
   std::array<int32_t, 3> tangent_detour{};
   bool tangent_detour_owned = false;
-  if (!previous_clear_arm_owned && previous_modern_sample_valid &&
+  if (previous_modern_sample_valid &&
       mesh_orbit_blocked && !orbit_blocked &&
       mesh_orbit_diagnostic.valid) {
     const Vec3 focus_point{
@@ -4665,33 +4674,27 @@ void __cdecl HookMode3Camera(void* controller) {
         std::isfinite(detour_radius) &&
         detour_radius >= kThirdPersonMinimumCameraDistance) {
       face_normal = CameraVectorScale(face_normal, 1.0 / normal_length);
-      std::array<Vec3, 2> preferred_vectors = {
-          previous_vector, desired_vector};
       std::array<std::array<int32_t, 3>, 2> tried{};
       size_t tried_count = 0;
-      for (const Vec3& preferred : preferred_vectors) {
-        Vec3 tangent = CameraVectorSubtract(
-            preferred,
-            CameraVectorScale(
-                face_normal, CameraVectorDot(preferred, face_normal)));
-        const double tangent_length =
-            std::sqrt(CameraVectorDot(tangent, tangent));
-        if (!std::isfinite(tangent_length) || tangent_length < 1.0e-6) {
-          continue;
+      const auto try_tangent_candidate =
+          [&](const Vec3& candidate_vector) {
+        const double candidate_radius = std::sqrt(
+            CameraVectorDot(candidate_vector, candidate_vector));
+        if (!std::isfinite(candidate_radius) ||
+            candidate_radius < kThirdPersonMinimumCameraDistance ||
+            candidate_radius > desired_length + 1.0) {
+          return false;
         }
-        tangent = CameraVectorScale(tangent, 1.0 / tangent_length);
-        const Vec3 endpoint = CameraVectorAdd(
-            focus_point, CameraVectorScale(tangent, detour_radius));
+        const Vec3 endpoint =
+            CameraVectorAdd(focus_point, candidate_vector);
         const std::array<int32_t, 3> candidate = {
             static_cast<int32_t>(std::lround(endpoint.x)),
             static_cast<int32_t>(std::lround(endpoint.y)),
             static_cast<int32_t>(std::lround(endpoint.z))};
-        bool duplicate = false;
         for (size_t index = 0; index < tried_count; ++index) {
-          duplicate |= tried[index] == candidate;
-        }
-        if (duplicate) {
-          continue;
+          if (tried[index] == candidate) {
+            return false;
+          }
         }
         if (tried_count < tried.size()) {
           tried[tried_count++] = candidate;
@@ -4701,27 +4704,78 @@ void __cdecl HookMode3Camera(void* controller) {
         if (ClipThirdPersonOrbitAgainstSceneObjects(
                 camera_focus, candidate, &candidate_mesh_safe,
                 &candidate_mesh_diagnostic)) {
-          continue;
+          return false;
         }
         bool candidate_native_blocked = true;
         if (!NativeCameraVolumeBlocked(
                 controller, camera_focus, candidate,
                 &candidate_native_blocked) ||
             candidate_native_blocked) {
-          continue;
+          return false;
         }
         tangent_detour = candidate;
         tangent_detour_owned = true;
-        break;
+        return true;
+      };
+
+      if (established_contact_prefers_tangent) {
+        // Slide by the current orbit's source-tick displacement projected on
+        // the blocking plane. Applying velocity rather than re-projecting the
+        // complete arm makes progress continuous and cannot teleport to the
+        // opposite tangent when the requested direction crosses a face normal.
+        const Vec3 previous_requested_vector{
+            static_cast<double>(
+                previous_requested_orbit[0] - previous_focus[0]),
+            static_cast<double>(
+                previous_requested_orbit[1] - previous_focus[1]),
+            static_cast<double>(
+                previous_requested_orbit[2] - previous_focus[2])};
+        const Vec3 requested_step = CameraVectorSubtract(
+            desired_vector, previous_requested_vector);
+        const Vec3 tangent_step = CameraVectorSubtract(
+            requested_step,
+            CameraVectorScale(
+                face_normal, CameraVectorDot(requested_step, face_normal)));
+        try_tangent_candidate(
+            CameraVectorAdd(previous_vector, tangent_step));
+      }
+
+      // Acquisition still uses the 0.0.112 continuity-aligned projection when
+      // no clear previous arm exists. An established clear arm falls back to
+      // that verified point if its incremental surface step is obstructed.
+      if (!tangent_detour_owned && !previous_clear_arm_owned) {
+        const std::array<Vec3, 2> preferred_vectors = {
+            previous_vector, desired_vector};
+        for (const Vec3& preferred : preferred_vectors) {
+          Vec3 tangent = CameraVectorSubtract(
+              preferred,
+              CameraVectorScale(
+                  face_normal, CameraVectorDot(preferred, face_normal)));
+          const double tangent_length =
+              std::sqrt(CameraVectorDot(tangent, tangent));
+          if (!std::isfinite(tangent_length) || tangent_length < 1.0e-6) {
+            continue;
+          }
+          tangent = CameraVectorScale(tangent, 1.0 / tangent_length);
+          if (try_tangent_candidate(
+                  CameraVectorScale(tangent, detour_radius))) {
+            break;
+          }
+        }
       }
     }
   }
+  const bool tangent_detour_selected =
+      tangent_detour_owned &&
+      (established_contact_prefers_tangent || !previous_clear_arm_owned);
+  const bool previous_clear_arm_selected =
+      previous_clear_arm_owned && !tangent_detour_selected;
   const bool mesh_corner_detour_owned =
-      previous_clear_arm_owned || tangent_detour_owned;
+      previous_clear_arm_selected || tangent_detour_selected;
 
   std::array<int32_t, 3> submitted{};
   if (mesh_corner_detour_owned) {
-    submitted = previous_clear_arm_owned
+    submitted = previous_clear_arm_selected
         ? previous_clear_arm
         : tangent_detour;
     const double retained_radius =
@@ -4732,7 +4786,7 @@ void __cdecl HookMode3Camera(void* controller) {
     AppendNativeLog(
         "camera_mesh_corner_detour result=OK kind=%s resource=%llu "
         "target=%d/%d/%d radius=%.1f",
-        previous_clear_arm_owned ? "previous" : "tangent",
+        previous_clear_arm_selected ? "previous" : "tangent",
         static_cast<unsigned long long>(mesh_orbit_diagnostic.resource),
         submitted[0], submitted[1], submitted[2], retained_radius);
   } else if (mesh_orbit_blocked &&
@@ -10159,7 +10213,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.112 first-contact tangent slide "
+      "Deathtrap native render overlay 0.0.113 progressive mesh tangent "
       "ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "

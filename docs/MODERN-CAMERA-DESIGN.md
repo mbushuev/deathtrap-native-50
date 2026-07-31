@@ -887,6 +887,17 @@ surface slide, not collision delay: only a fully scene-clear and native-clear
 tangent may replace radial contraction. No opposite-side tangent is attempted,
 preventing an avoidance solution from flipping through the player.
 
+The `0.0.112` test shows that a clear previous arm cannot remain the primary
+solution after contact acquisition. While the requested orbit changes, that
+branch can repeatedly republish one exact camera coordinate and present as a
+stuck camera. Version `0.0.113` separates acquisition continuity from contact
+motion. First contact may still use the previous-direction plane projection;
+an established contact instead projects only the current source-tick orbit
+displacement onto the blocking plane and applies that incremental tangent to
+the previous clear arm. Thus the camera walks along the constraint surface
+without a full-arm side flip. The previous point remains a fail-closed fallback
+when the incremental target is rejected by either mesh or native geometry.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
