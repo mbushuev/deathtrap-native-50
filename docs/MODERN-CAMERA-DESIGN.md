@@ -690,6 +690,22 @@ walls, floors, sectors and orientation. Manual orbit bypasses rebasing, the
 normal 0.0.95 spring timing is restored, and no clear-space or native-wall
 frame is directly published by the patch.
 
+The remaining `0.0.97` jumps require the standard modern-camera separation
+between collision target and presentation pose. The collision target may
+change immediately whenever the legacy room solver chooses another valid
+portal placement; the visible camera should follow that target with damping
+unless its existing pose has become unsafe.
+
+Version `0.0.98` implements that separation only in the render snapshot. An
+idle-input camera carries the previous presentation pose with the focus,
+applies a proportional response capped separately in horizontal and vertical
+axes, and blends rotation by the same progress. Both endpoint rays and the
+temporal movement chord must remain clear in native room geometry and
+qualified object meshes. A newly invalid old pose takes the exact native
+collision result immediately; a blocked transition chord holds the old safe
+pose. This is asymmetric camera damping: safety contracts instantly, while
+valid lateral/outward changes converge smoothly.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

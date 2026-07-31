@@ -644,6 +644,26 @@ manual orbit do not use it. No published matrix is forced. Native room, floor,
 sector and orientation processing therefore remains downstream and
 authoritative while its smoothing state becomes focus-relative.
 
+The `0.0.97` trace confirms that the history rebase removes the main
+world-anchor regression, but it also isolates a later discontinuity. Across
+619 `camera_native_mesh_pushout` records, consecutive samples with an unchanged
+focus-relative orbit still contain published-position changes of 500--1,052
+units laterally and up to 292 units vertically. Several happen while both
+native and mesh obstruction flags are clear. These are valid-placement branch
+changes inside `0x2F380`, not changes in spring radius, input or authored-camera
+ownership.
+
+Version `0.0.98` leaves those exact native endpoints intact and smooths only
+the captured 50-Hz presentation camera. The previous displayed endpoint first
+follows the live focus delta, then advances toward the native target with
+separate horizontal and vertical speed bounds. Before presentation, the old
+endpoint and candidate focus rays are checked by `0x30910`; the old-to-new
+temporal chord is checked by the same predicate and by the qualified render
+meshes. An unsafe previous endpoint causes an immediate native cut, while an
+unsafe intermediate chord holds the previous safe endpoint. Manual orbit,
+script takeover, teleports and the exact dynamic-block presentation latch
+bypass the follow layer.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
