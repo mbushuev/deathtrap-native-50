@@ -1109,3 +1109,20 @@ therefore inverts only the camera-relative left-stick Y component before the
 camera basis is applied. `CameraRelativeInvertY=0` is available for controller
 mappers that already expose the expected sign. Controller identity, state
 hysteresis and the native locomotion hook are otherwise unchanged.
+
+## 0.0.122 single bounded locomotion path
+
+The following run showed that the remaining endless rotation occurred only
+when the requested heading began outside the forward arc. That is precisely
+the branch which asserted a retail A/D action and entered `0x68970` or
+`0x68C20`; those callbacks bypass `0x44DD0`, so they also bypass the desired
+heading clamp and can rotate past the target repeatedly while input is held.
+
+Version `0.0.122` removes the A/D turn-in-place branch instead of retuning its
+threshold or guessing its sign. Every camera-relative direction now asserts W
+with A/D released, forcing the already validated
+`0x7E530 -> 0x44EA0 -> 0x44DD0` path. `HookPlayerTurn` remains the sole heading
+substitution, clamps each source-tick delta to `MovementTurnDegreesPerTick`,
+and stops naturally when the wrapped desired-heading error reaches zero.
+Position, root motion, animation, collision, walk/run state and action storage
+remain native-owned.

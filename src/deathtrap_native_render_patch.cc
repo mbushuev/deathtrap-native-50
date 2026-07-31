@@ -715,9 +715,7 @@ double g_xinput_run_release_threshold = 0.30;
 bool g_xinput_camera_relative_movement = true;
 bool g_xinput_camera_relative_invert_y = true;
 double g_xinput_movement_turn_degrees_per_tick = 12.0;
-double g_xinput_movement_forward_arc_degrees = 85.0;
 bool g_xinput_run_active = false;
-bool g_xinput_camera_relative_forward_active = false;
 uint64_t g_xinput_chalk_actions_asserted = 0;
 uint64_t g_weapon_wheel_switches = 0;
 uint64_t g_weapon_wheel_rejections = 0;
@@ -5725,7 +5723,6 @@ void ReleaseInjectedControllerInput() {
   SubmitDeathtrapXInputMouseState(0, 0, false, false);
   g_xinput_first_person_toggled = false;
   g_xinput_run_active = false;
-  g_xinput_camera_relative_forward_active = false;
   g_xinput_menu_mode.store(true, std::memory_order_release);
   g_xinput_previous_native_gameplay = false;
   g_previous_xinput_buttons = 0;
@@ -6381,54 +6378,22 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
             movement_stick.y,
             g_xinput_camera_relative_invert_y ? 1u : 0u);
       }
-      const int32_t heading_error =
-          PlayerHeadingDelta(desired_heading, current_heading);
-      const int32_t forward_enter_arc = static_cast<int32_t>(std::lround(
-          g_xinput_movement_forward_arc_degrees *
-          kPlayerHeadingUnitsPerTurn / 360.0));
-      const double forward_exit_degrees = std::min(
-          175.0, g_xinput_movement_forward_arc_degrees + 20.0);
-      const int32_t forward_exit_arc = static_cast<int32_t>(std::lround(
-          forward_exit_degrees * kPlayerHeadingUnitsPerTurn / 360.0));
-      const int32_t absolute_error = std::abs(heading_error);
-      const bool previous_forward_phase =
-          g_xinput_camera_relative_forward_active;
-      if (g_xinput_camera_relative_forward_active) {
-        if (absolute_error >= forward_exit_arc) {
-          g_xinput_camera_relative_forward_active = false;
-        }
-      } else if (absolute_error <= forward_enter_arc) {
-        g_xinput_camera_relative_forward_active = true;
-      }
-      if (g_debug_log && previous_forward_phase !=
-                             g_xinput_camera_relative_forward_active) {
-        AppendNativeLog(
-            "xinput movement phase=%s error=%d enter=%d exit=%d",
-            g_xinput_camera_relative_forward_active ? "locomotion" :
-                                                      "turn_in_place",
-            heading_error, forward_enter_arc, forward_exit_arc);
-      }
-      // Large reversals deliberately use the game's dedicated native
-      // turn-in-place state. Once inside the forward arc, release both tank
-      // turn actions and assert only W: the locomotion callback reaches
-      // 0x44DD0 even with a zero retail turn source, and HookPlayerTurn
-      // substitutes the bounded camera-relative delta. Separate enter/exit
-      // arcs prevent rapid state oscillation at the boundary.
+      // Keep every camera-relative direction on the same verified locomotion
+      // gateway. The retail A/D turn-in-place states update heading directly
+      // in 0x68970/0x68C20 and bypass HookPlayerTurn, so using them for large
+      // errors can orbit past a fixed target indefinitely. W guarantees the
+      // 0x7E530 -> 0x44EA0 -> 0x44DD0 path; the hook then applies the bounded
+      // shortest-angle delta and naturally reaches zero without a second
+      // competing turn state.
       PublishCameraRelativeMovementIntent(
           true, desired_heading, movement_stick.magnitude);
-      InjectVirtualKey(InjectedKey::kW,
-                       g_xinput_camera_relative_forward_active);
+      InjectVirtualKey(InjectedKey::kW, true);
       InjectVirtualKey(InjectedKey::kS, false);
-      InjectVirtualKey(InjectedKey::kA,
-                       !g_xinput_camera_relative_forward_active &&
-                           heading_error < 0);
-      InjectVirtualKey(InjectedKey::kD,
-                       !g_xinput_camera_relative_forward_active &&
-                           heading_error > 0);
+      InjectVirtualKey(InjectedKey::kA, false);
+      InjectVirtualKey(InjectedKey::kD, false);
       InjectVirtualKey(InjectedKey::kJ, false);
       InjectVirtualKey(InjectedKey::kK, false);
     } else {
-      g_xinput_camera_relative_forward_active = false;
       PublishCameraRelativeMovementIntent(false, desired_heading,
                                           movement_stick.magnitude);
       InjectVirtualKey(InjectedKey::kW,
@@ -6509,7 +6474,6 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         !selector_captures_controls && !first_person_active &&
             CustomCameraOwnsMode3());
   } else {
-    g_xinput_camera_relative_forward_active = false;
     PublishCameraRelativeMovementIntent(false, 0, 0.0);
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
     g_xinput_first_person_toggled = false;
@@ -10566,10 +10530,6 @@ void InitializePatchState() {
       static_cast<double>(std::clamp(
           ConfiguredInteger(L"XInput", L"MovementTurnDegreesPerTick", 12),
           4, 30));
-  g_xinput_movement_forward_arc_degrees =
-      static_cast<double>(std::clamp(
-          ConfiguredInteger(L"XInput", L"MovementForwardArcDegrees", 85),
-          30, 140));
   if (g_xinput_enabled) {
     LoadXInputRuntime();
   }
@@ -10606,9 +10566,10 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.121 corrected camera-relative "
-      "left-stick Y with validated movement-controller identity and "
-      "hysteretic camera-relative locomotion with "
+      "Deathtrap native render overlay 0.0.122 unified bounded "
+      "camera-relative locomotion without unbounded retail turn-in-place "
+      "states, with corrected left-stick Y and validated movement-controller "
+      "identity, "
       "stable selector ownership, v0.0.115 camera, Start dispatch and "
       "retail first-person with progressive mesh tangent ownership "
       "(complete native wall/floor/orientation result plus transactional "
@@ -10646,7 +10607,7 @@ void InitializePatchState() {
       "are observation-only and commit through Dungeon.dll+0x90610 once per "
       "real gameplay tick (enabled=%u invert=%u); XInput controller=%u "
       "base_bindings=%u hold_ms=%u deadzones=%d/%d radial=%d center_y=%d "
-      "camera_relative_movement=%u invert_y=%u turn=%.0fdeg arc=%.0fdeg "
+      "camera_relative_movement=%u invert_y=%u turn=%.0fdeg "
       "vibration=%u/%u%% action=%u/%u/%u/%ums event=%u/%u/%u/%u/%u/"
       "%u/%ums heavy=%uhp/%ums "
       "available=%u camera_probe=%u orbit=%u sensitivity=%d/%ddeg "
@@ -10664,7 +10625,6 @@ void InitializePatchState() {
       g_xinput_camera_relative_movement ? 1u : 0u,
       g_xinput_camera_relative_invert_y ? 1u : 0u,
       g_xinput_movement_turn_degrees_per_tick,
-      g_xinput_movement_forward_arc_degrees,
       g_xinput_vibration_enabled ? 1u : 0u,
       g_xinput_vibration_strength_percent,
       g_xinput_melee_swing_vibration_ms,

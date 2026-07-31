@@ -294,11 +294,11 @@ The validated 4:3 center is `SelectorCenterY=316`; the retail UI uses an
 upward-growing Y axis with its origin near the bottom edge, not D3D screen
 coordinates. `MovementThresholdPercent=14` is applied to the circular left-
 stick magnitude. `CameraRelativeMovement=1` enables the validated
-camera-relative mapping. Large reversals briefly use the retail turn-in-place
-state. Inside `MovementForwardArcDegrees=85`, the bridge releases A/D, asserts
-only forward motion and substitutes a bounded turn at the native `0x44DD0`
-locomotion gateway. A 20-degree exit margin prevents repeated state changes at
-the boundary. Set the value to `0` to restore the stable tank mapping.
+camera-relative mapping. Every direction releases A/D, asserts native forward
+motion and substitutes a bounded shortest-angle turn at the native `0x44DD0`
+locomotion gateway. This deliberately avoids the retail turn-in-place states,
+which bypass that gateway and could continue rotating past a fixed target.
+Set the value to `0` to restore the stable tank mapping.
 `CameraRelativeInvertY=1` corrects the tested controller's physical vertical
 axis before applying the camera basis; use `0` only when another controller
 mapper already supplies the opposite sign.

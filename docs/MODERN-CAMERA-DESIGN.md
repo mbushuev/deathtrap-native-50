@@ -983,6 +983,17 @@ heading zero advances world +Z, ruling out a global 180-degree basis change.
 `CameraRelativeInvertY=0` supports mappers that already provide the expected
 sign. The controller resolver and two-phase steering remain unchanged.
 
+The gameplay run then isolated a failure specific to that two-phase design:
+when the desired direction started outside the forward arc, the asserted
+retail A/D action entered `0x68970` or `0x68C20`. Those states bypass the
+validated `0x44DD0` hook, so the native fixed-step turn could pass the desired
+heading and continue circling for as long as the stick remained held.
+Version `0.0.122` removes that competing state entirely. Every camera-relative
+direction asserts W with A/D released and therefore reaches
+`0x7E530 -> 0x44EA0 -> 0x44DD0`; the bounded shortest-angle substitution is
+now the sole steering writer for both small and large heading errors. Native
+root motion, animation, collision and run selection remain unchanged.
+
 ### Phase E: tuning and release
 
 - Expose sensitivity, inversion, pitch limits, shoulder side, distance,
