@@ -152,6 +152,13 @@ constexpr uint32_t kOriginalUiMessageLifetimeTicks = 50u;
 constexpr uint32_t kOriginalPstMessageLifetimeTicks = 27u;
 constexpr uint32_t kOriginalGameplayRate = 16u;
 constexpr uint32_t kOriginalPeriodMilliseconds = 60u;
+// DirectInput mouse motion is delivered in packets. A zero-delta source tick
+// between two packets does not mean that the player has yielded camera
+// ownership. Keep render-only follow disabled through a short, source-period
+// derived quiet window so exact manual orbit and damped follow cannot
+// alternate while the mouse is still moving.
+constexpr uint64_t kCameraPresentationManualOrbitGraceMilliseconds =
+    static_cast<uint64_t>(kOriginalPeriodMilliseconds) * 4u;
 constexpr double kMatrixFixedScale = 16384.0;
 constexpr double kOrbitPi = 3.14159265358979323846;
 constexpr size_t kMatrixOffset = 0x9Cu;
@@ -6915,10 +6922,17 @@ Matrix3x4 MultiplyAffine(const Matrix3x4& local,
 }
 
 bool ApplyModernCameraPresentationFollow(SceneSnapshot* current) {
+  const uint64_t now_ms = GetTickCount64();
+  const bool manual_orbit_settling =
+      g_third_person_orbit_state.last_orbit_activity_ms != 0 &&
+      !CameraPresentationFollowInputIdle(
+          now_ms, g_third_person_orbit_state.last_orbit_activity_ms,
+          kCameraPresentationManualOrbitGraceMilliseconds);
   if (!current || !current->camera ||
       !g_third_person_orbit_state.engaged ||
       g_third_person_orbit_state.suspended ||
       g_third_person_orbit_state.orbit_input_active_this_tick ||
+      manual_orbit_settling ||
       g_scripted_camera_override_active.load(std::memory_order_acquire) ||
       !g_dungeon_base) {
     g_camera_presentation_follow = {};
@@ -9389,7 +9403,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.98 safe presentation follow "
+      "Deathtrap native render overlay 0.0.99 manual-orbit-safe follow "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "

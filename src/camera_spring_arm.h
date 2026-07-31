@@ -251,6 +251,14 @@ inline std::array<int32_t, 3> StepCameraPresentationFollow(
   return next;
 }
 
+inline bool CameraPresentationFollowInputIdle(
+    uint64_t now_ms, uint64_t last_input_ms, uint64_t grace_ms) {
+  if (!last_input_ms || !grace_ms || now_ms < last_input_ms) {
+    return false;
+  }
+  return now_ms - last_input_ms >= grace_ms;
+}
+
 inline CameraSpringArmStep StepCameraSpringArm(
     double desired_distance, double hard_safe_distance,
     double previous_radius, bool obstruction_present,

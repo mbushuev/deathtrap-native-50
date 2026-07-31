@@ -664,6 +664,23 @@ unsafe intermediate chord holds the previous safe endpoint. Manual orbit,
 script takeover, teleports and the exact dynamic-block presentation latch
 bypass the follow layer.
 
+The first `0.0.98` run rejects the one-tick manual-input gate. The fresh log
+contains 146 `camera_follow state=SMOOTH` records, no `HOLD` records and one
+real `HARD_CUT`, so a blocked presentation chord is not the reported freeze.
+Instead, yaw/pitch continue to change from physical mouse packets while many
+follow sequences repeatedly restart at `smooth=1`. DirectInput relative
+motion is accumulated asynchronously, and a source tick with no new packet
+does not mean that manual orbit has ended. The renderer therefore alternated
+exact manual rotation with position/rotation follow on the empty ticks. Near
+a dynamic block, the same alternation occurred around presentation-latch
+release boundaries and looked like a stuck orbit followed by a jump.
+
+Version `0.0.99` gives manual orbit explicit temporal ownership. Render-only
+follow remains disabled for four original 60-ms source periods after the last
+mouse or stick orbit sample. Every new packet restarts that quiet window.
+Collision, the native wall/floor result, mesh sweeps, overlap escape and the
+dynamic-block presentation latch are unchanged.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

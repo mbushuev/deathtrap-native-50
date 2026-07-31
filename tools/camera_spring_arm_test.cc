@@ -163,6 +163,19 @@ int main() {
     std::cerr << "invalid presentation follow parameters changed position\n";
     return 1;
   }
+  if (CameraPresentationFollowInputIdle(1239, 1000, 240)) {
+    std::cerr << "presentation follow resumed inside manual-input grace\n";
+    return 1;
+  }
+  if (!CameraPresentationFollowInputIdle(1240, 1000, 240)) {
+    std::cerr << "presentation follow did not resume after manual-input grace\n";
+    return 1;
+  }
+  if (CameraPresentationFollowInputIdle(999, 1000, 240) ||
+      CameraPresentationFollowInputIdle(1240, 0, 240)) {
+    std::cerr << "presentation follow accepted invalid input timing\n";
+    return 1;
+  }
 
   auto step = StepCameraSpringArm(1400.0, 420.0, 1400.0, true, 0, 0);
   ExpectNear(step.radius, 420.0, "immediate contraction");

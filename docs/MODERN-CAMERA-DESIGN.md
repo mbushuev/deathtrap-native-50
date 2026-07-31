@@ -706,6 +706,21 @@ collision result immediately; a blocked transition chord holds the old safe
 pose. This is asymmetric camera damping: safety contracts instantly, while
 valid lateral/outward changes converge smoothly.
 
+The first runtime test exposed an input-ownership error rather than another
+collision threshold. Physical mouse deltas arrive as discrete DirectInput
+packets. `0.0.98` disabled follow only on the source tick that consumed a
+non-zero packet, so an empty tick between packets immediately re-enabled
+position and rotation damping. The trace shows yaw/pitch continuing to change
+while follow repeatedly restarts at its first smoothed tick; it contains no
+presentation `HOLD` loop.
+
+Version `0.0.99` requires a four-source-period quiet window after the most
+recent manual orbit sample before presentation follow may resume. Manual
+rotation is therefore exact for the complete gesture, including packet gaps
+and dynamic-block latch release boundaries. This is camera-state arbitration;
+it does not change native volume queries, mesh classification, contact
+distance, spring recovery or authored-shot ownership.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
