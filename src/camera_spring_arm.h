@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 
@@ -23,6 +24,24 @@ inline bool CameraInitialOverlapBlocks(double start_distance_squared,
   const double tolerance =
       std::max(1.0e-4, start_distance_squared * 1.0e-6);
   return probe_distance_squared + tolerance < start_distance_squared;
+}
+
+inline bool CameraMeshExtentsBlockVolume(
+    const std::array<double, 3>& extents, double camera_diameter) {
+  if (!std::isfinite(camera_diameter) || camera_diameter <= 0.0) {
+    return false;
+  }
+  std::array<double, 3> sorted = extents;
+  for (double extent : sorted) {
+    if (!std::isfinite(extent) || extent < 0.0) {
+      return false;
+    }
+  }
+  std::sort(sorted.begin(), sorted.end());
+  // A thin lever may be long on one intrinsic mesh axis, but rotating it must
+  // not turn its world AABB into a camera wall. Require a blocker to span the
+  // complete camera diameter on at least two intrinsic axes.
+  return sorted[1] >= camera_diameter;
 }
 
 inline CameraSpringArmStep StepCameraSpringArm(

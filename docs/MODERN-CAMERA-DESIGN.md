@@ -480,6 +480,20 @@ lateral fallback is appropriate for fixed cameras and unstable for a
 continuously controlled orbit. The diagnostic retail call remains
 transactional and is retained only for authored interaction-shot arbitration.
 
+The failed `0.0.85` build applied an exact post-resolver camera translation.
+That protected the known prop but bypassed native wall/floor placement and
+separated position from the orientation calculated by the retail controller.
+It is reverted and must not be reused.
+
+Version `0.0.86` treats supplemental prop geometry as a veto rather than a
+replacement camera solver. The ordinary native result remains untouched unless
+its published camera volume intersects a stable render mesh large enough to
+span the camera diameter on two intrinsic axes. A rejected native probe has
+its resolver/history state restored before a shorter target is resubmitted
+through the same `0x2F380` path. Bounded failure falls back to the unmodified
+native result. This retains native walls, floors, orientation, authored shots
+and history while giving large BSP-absent props a constrained retry.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

@@ -402,6 +402,22 @@ camera state and then invokes `0x2DEF0` exactly once. It does not enter the
 shots still use the untouched full dispatcher after the existing interaction
 arbitration accepts ownership.
 
+The rejected `0.0.85` experiment proved that the final native result cannot be
+replaced by writing an independently validated position to controller history,
+the camera node and the published matrix. Although that stopped the tested
+lever block, it let the camera cross ordinary walls and floors and decoupled
+translation from native orientation/static-camera state. The experiment was
+reverted completely.
+
+Version `0.0.86` recovers only the useful static-mesh classification and sweep.
+`0x2F380` first produces the complete native position and orientation. If that
+published position does not intersect a qualified large stable render mesh, it
+is retained byte-for-byte. If it does intersect one, the resolver/history
+block is restored transactionally and the mesh-safe target is submitted again
+through `0x2F380`. Up to three bounded native passes may converge; failure
+restores and republishes the ordinary `0.0.84` result. No controller history,
+camera node or published matrix is directly overwritten.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
