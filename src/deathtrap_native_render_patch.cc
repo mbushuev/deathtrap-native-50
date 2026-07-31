@@ -2831,7 +2831,9 @@ bool CameraMeshExpandedBoundsPushout(
     const CameraCollisionMesh& mesh, const Matrix3x4& world,
     const Vec3& point, const Vec3& reference, double radius,
     double margin, double minimum_distance, Vec3* pushed,
-    size_t* pushed_axis = nullptr) {
+    size_t* pushed_axis = nullptr,
+    const Vec3* continuity_reference = nullptr,
+    bool prefer_contained_ray_exit = false) {
   if (!pushed || !mesh.local_bounds_valid ||
       !std::isfinite(radius) || radius <= 0.0) {
     return false;
@@ -2841,6 +2843,7 @@ bool CameraMeshExpandedBoundsPushout(
   std::array<Vec3, 3> axes{};
   std::array<double, 3> point_coordinates{};
   std::array<double, 3> reference_coordinates{};
+  std::array<double, 3> continuity_coordinates{};
   std::array<double, 3> half_extents{};
   Vec3 center{
       static_cast<double>(world.values[9]),
@@ -2873,6 +2876,8 @@ bool CameraMeshExpandedBoundsPushout(
 
   const Vec3 point_offset = CameraVectorSubtract(point, center);
   const Vec3 reference_offset = CameraVectorSubtract(reference, center);
+  const Vec3 continuity_offset = CameraVectorSubtract(
+      continuity_reference ? *continuity_reference : reference, center);
   size_t vertical_axis = 0;
   double vertical_alignment = -1.0;
   for (size_t axis = 0; axis < axes.size(); ++axis) {
@@ -2880,6 +2885,8 @@ bool CameraMeshExpandedBoundsPushout(
         CameraVectorDot(point_offset, axes[axis]);
     reference_coordinates[axis] =
         CameraVectorDot(reference_offset, axes[axis]);
+    continuity_coordinates[axis] =
+        CameraVectorDot(continuity_offset, axes[axis]);
     const double alignment = std::abs(axes[axis].y);
     if (alignment > vertical_alignment) {
       vertical_alignment = alignment;
@@ -2891,10 +2898,15 @@ bool CameraMeshExpandedBoundsPushout(
   size_t selected_axis = axes.size();
   const bool pushed_valid =
       minimum_distance > 0.0
-          ? PushCameraToUsableExpandedBoxFace(
-                point_coordinates, reference_coordinates, half_extents,
-                vertical_axis, margin, minimum_distance,
-                &pushed_coordinates, &selected_axis)
+          ? ((prefer_contained_ray_exit &&
+              PushCameraToUsableExpandedBoxRayExit(
+                  point_coordinates, reference_coordinates, half_extents,
+                  vertical_axis, margin, minimum_distance,
+                  &pushed_coordinates, &selected_axis)) ||
+             PushCameraToUsableExpandedBoxFace(
+                 point_coordinates, continuity_coordinates, half_extents,
+                 vertical_axis, margin, minimum_distance,
+                 &pushed_coordinates, &selected_axis))
           : PushCameraOutOfExpandedBox(
                 point_coordinates, reference_coordinates, half_extents,
                 vertical_axis, margin, &pushed_coordinates, &selected_axis);
@@ -3483,10 +3495,11 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
                     static_cast<double>(focus[1]),
                     static_cast<double>(focus[2])};
   const Vec3 ray_direction{direction[0], direction[1], direction[2]};
-  Vec3 overlap_reference{
+  const Vec3 requested_reference{
       static_cast<double>(requested[0]),
       static_cast<double>(requested[1]),
       static_cast<double>(requested[2])};
+  Vec3 overlap_reference = requested_reference;
   const auto previous_camera =
       g_previous_snapshot.nodes.find(g_previous_snapshot.camera);
   if (previous_camera != g_previous_snapshot.nodes.end()) {
@@ -3608,17 +3621,16 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
           push_distance < kThirdPersonMinimumCameraDistance) {
         Vec3 usable_face{};
         size_t usable_axis = std::numeric_limits<size_t>::max();
-        // Keep the face used by the preceding accepted camera. Choosing from
-        // the instantaneous requested ray makes a contained pivot flip
-        // between opposite OBB faces as the orbit crosses an angular tie.
-        // The previous endpoint is only one source tick old and supplies
-        // contact-side continuity; room validation still follows below.
+        // A contained pivot must remain responsive to orbit input. Exit the
+        // expanded OBB along the requested horizontal ray and continue on
+        // that same ray to the usable-distance boundary. If the pivot is
+        // already outside one face, retain the preceding accepted side as the
+        // supporting-face fallback instead of crossing back through the box.
         if (CameraMeshExpandedBoundsPushout(
-                *mesh, current.world, origin,
-                overlap_reference,
+                *mesh, current.world, origin, requested_reference,
                 kCameraCollisionSphereRadius, kOverlapPushoutMargin,
                 kThirdPersonMinimumCameraDistance, &usable_face,
-                &usable_axis)) {
+                &usable_axis, &overlap_reference, true)) {
           const double usable_distance = std::sqrt(
               CameraVectorDot(
                   CameraVectorSubtract(usable_face, origin),
@@ -3670,16 +3682,15 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
       constexpr double kNearPivotEscapeMargin = 8.0;
       Vec3 escaped{};
       size_t escape_axis = std::numeric_limits<size_t>::max();
-      // A near-pivot escape is a persistent contact side, not a new choice on
-      // every input angle. Follow the preceding accepted camera face until
-      // the requested arm becomes radially usable and naturally releases the
-      // escape. This prevents opposite-face jumps on one continuous pillar.
+      // The same contained-pivot ray exit avoids both opposite-face snapping
+      // and the fixed-face anchor exposed by 0.0.107. The preceding accepted
+      // camera is used only when an already-outside pivot needs a supporting
+      // face to route around the object.
       if (CameraMeshExpandedBoundsPushout(
-              *mesh, current.world, origin,
-              overlap_reference,
+              *mesh, current.world, origin, requested_reference,
               kCameraCollisionSphereRadius, kNearPivotEscapeMargin,
               kThirdPersonMinimumCameraDistance, &escaped,
-              &escape_axis)) {
+              &escape_axis, &overlap_reference, true)) {
         const double escape_distance = std::sqrt(
             CameraVectorDot(CameraVectorSubtract(escaped, origin),
                             CameraVectorSubtract(escaped, origin)));
@@ -9867,7 +9878,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.107 stable mesh-contact face "
+      "Deathtrap native render overlay 0.0.108 continuous mesh ray-exit "
       "ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "

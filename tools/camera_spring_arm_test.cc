@@ -123,6 +123,28 @@ int main() {
     std::cerr << "continuous near-pivot contact switched face axis\n";
     return 1;
   }
+  if (!PushCameraToUsableExpandedBoxRayExit(
+          {0.0, 0.0, 0.0}, {500.0, 0.0, 100.0},
+          {100.0, 200.0, 300.0}, 1, 8.0, 120.0,
+          &pushed, &pushed_axis)) {
+    std::cerr << "contained pivot did not follow the requested ray exit\n";
+    return 1;
+  }
+  ExpectNear(std::hypot(pushed[0], pushed[2]), 120.0,
+             "contained ray exit reaches usable distance");
+  ExpectNear(pushed[2] / pushed[0], 0.2,
+             "contained ray exit preserves orbit direction");
+  if (pushed_axis != 0 || pushed[0] <= 108.0) {
+    std::cerr << "contained ray exit did not clear its selected face\n";
+    return 1;
+  }
+  if (PushCameraToUsableExpandedBoxRayExit(
+          {101.0, 0.0, 0.0}, {-500.0, 0.0, 100.0},
+          {100.0, 200.0, 300.0}, 1, 8.0, 120.0,
+          &pushed, &pushed_axis)) {
+    std::cerr << "outside pivot was routed back through the expanded box\n";
+    return 1;
+  }
   if (!PushCameraToUsableExpandedBoxFace(
           {-101.0, 0.0, 0.0}, {-101.0, 0.0, -500.0},
           {100.0, 200.0, 300.0}, 1, 8.0, 120.0,

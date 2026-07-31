@@ -840,6 +840,20 @@ or above the established usable distance, ordinary collision takes over and
 the camera may move around the obstacle. This is contact topology, not input
 damping or a new distance threshold.
 
+The `0.0.107` trace shows that a persistent face is still insufficient because
+the escape representation stores only the face-normal endpoint. While the
+requested orbit rotates through many directions around resource 12613, exact
+publication remains at one coordinate for hundreds of source ticks. A modern
+camera needs a continuous constraint surface, not a permanent point anchor.
+
+Version `0.0.108` maps a contained pivot's requested horizontal ray to the
+expanded OBB boundary. The endpoint stays on that ray and, when necessary,
+continues beyond the first face only far enough to meet the already established
+usable camera distance. As yaw changes, this construction slides continuously
+across a face and through shared corners instead of either sticking or jumping
+to an unrelated face-normal point. An already-outside pivot retains the safe
+supporting-face fallback so no path is allowed back through the obstacle.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

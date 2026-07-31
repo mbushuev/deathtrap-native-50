@@ -853,6 +853,24 @@ still passes the existing arm bounds and native room validation. Ordinary
 radial contact, walls/floors, spring timing, mesh classification and authored
 camera ownership are unchanged.
 
+The `0.0.107` run rejects fixed-face retention. During resource 12613 contact,
+the requested 1400-unit orbit travels around the player, but 248 successful
+continuous pins keep returning exactly `-167/400/15246`. The focus remains at
+`-545/400/14868`, the pre- and post-native phases agree on the same resource,
+and the latch has no retain/release cycle. The camera is therefore stuck by
+the geometric escape point itself: retaining a face normal retained one
+absolute point rather than a surface on which the orbit could move.
+
+Version `0.0.108` replaces contained-pivot face-normal selection with a
+continuous horizontal ray exit. In OBB-local space it finds the first expanded
+face reached by the requested orbit direction and continues outward on that
+same ray until the existing minimum usable distance is met. Orbit direction
+is preserved, so the endpoint moves continuously around faces and corners.
+If the pivot already lies outside a horizontal face, this operation refuses to
+route it back through the box and falls back to the preceding supporting-face
+slide. Native room validation and the requested-arm distance bound remain
+unchanged.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

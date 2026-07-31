@@ -269,6 +269,83 @@ inline bool PushCameraToUsableExpandedBoxFace(
   return true;
 }
 
+inline bool PushCameraToUsableExpandedBoxRayExit(
+    const std::array<double, 3>& point,
+    const std::array<double, 3>& requested,
+    const std::array<double, 3>& half_extents,
+    size_t excluded_axis, double margin, double minimum_distance,
+    std::array<double, 3>* pushed, size_t* pushed_axis = nullptr) {
+  if (!pushed || excluded_axis >= point.size() ||
+      !std::isfinite(margin) || margin < 0.0 ||
+      !std::isfinite(minimum_distance) || minimum_distance <= 0.0) {
+    return false;
+  }
+
+  std::array<double, 3> direction{};
+  double horizontal_length_squared = 0.0;
+  for (size_t axis = 0; axis < point.size(); ++axis) {
+    if (!std::isfinite(point[axis]) || !std::isfinite(requested[axis]) ||
+        !std::isfinite(half_extents[axis]) || half_extents[axis] <= 0.0) {
+      return false;
+    }
+    direction[axis] = requested[axis] - point[axis];
+    if (axis == excluded_axis) {
+      continue;
+    }
+    // This operation is only for a pivot contained by the horizontal
+    // expanded OBB. A pivot already outside needs the existing supporting-
+    // face slide so its route cannot cross back through the box.
+    if (std::abs(point[axis]) >= half_extents[axis]) {
+      return false;
+    }
+    horizontal_length_squared += direction[axis] * direction[axis];
+  }
+  const double horizontal_length = std::sqrt(horizontal_length_squared);
+  constexpr double kDirectionEpsilon = 1.0e-6;
+  if (!std::isfinite(horizontal_length) ||
+      horizontal_length <= kDirectionEpsilon) {
+    return false;
+  }
+
+  double exit_scale = std::numeric_limits<double>::infinity();
+  size_t exit_axis = point.size();
+  for (size_t axis = 0; axis < point.size(); ++axis) {
+    if (axis == excluded_axis ||
+        std::abs(direction[axis]) <= kDirectionEpsilon) {
+      continue;
+    }
+    const double face =
+        direction[axis] < 0.0
+            ? -(half_extents[axis] + margin)
+            : half_extents[axis] + margin;
+    const double scale = (face - point[axis]) / direction[axis];
+    if (scale > 0.0 && scale < exit_scale) {
+      exit_scale = scale;
+      exit_axis = axis;
+    }
+  }
+  if (exit_axis >= point.size() || !std::isfinite(exit_scale)) {
+    return false;
+  }
+
+  // Continue outward on the same requested ray when the box exit alone is
+  // too close to the player. Unlike choosing a face-normal point, this maps
+  // orbit angle continuously around the OBB perimeter and cannot become a
+  // fixed contact anchor.
+  const double usable_scale = std::max(
+      exit_scale, minimum_distance / horizontal_length);
+  *pushed = point;
+  for (size_t axis = 0; axis < point.size(); ++axis) {
+    if (axis != excluded_axis) {
+      (*pushed)[axis] = point[axis] + direction[axis] * usable_scale;
+    }
+  }
+  if (pushed_axis) {
+    *pushed_axis = exit_axis;
+  }
+  return true;
+}
+
 inline std::array<int32_t, 3> SelectCameraMeshPresentationTarget(
     bool post_native_mesh_contact,
     const std::array<int32_t, 3>& submitted,
