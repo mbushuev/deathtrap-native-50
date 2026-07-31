@@ -49,6 +49,15 @@ int main() {
     std::cerr << "solid housing was not classified as a blocker\n";
     return 1;
   }
+  if (CameraMeshBoundsBlockVolume(180.0, 192.0)) {
+    std::cerr << "compact lever housing was incorrectly classified as a wall\n";
+    return 1;
+  }
+  if (!CameraMeshBoundsBlockVolume(310.0, 192.0) ||
+      !CameraMeshBoundsBlockVolume(1136.0, 192.0)) {
+    std::cerr << "large scene blocker was incorrectly ignored\n";
+    return 1;
+  }
 
   auto step = StepCameraSpringArm(1400.0, 420.0, 1400.0, true, 0, 0);
   ExpectNear(step.radius, 420.0, "immediate contraction");

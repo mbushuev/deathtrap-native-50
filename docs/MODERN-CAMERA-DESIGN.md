@@ -578,6 +578,30 @@ This is temporal hysteresis on the native obstruction boundary, not a lever
 resource blacklist. It suppresses the observed 182/311 alternating sample
 while retaining collision for large blocks and ordinary room geometry.
 
+The `0.0.91` log shows that source collision and presentation collision must
+also share ownership. At the final lever housing, the spring radius is stable
+but camera snapshots alternate every real tick between the same 65-unit safe
+point and a 211-unit native-history point. Repeated post-native writes cannot
+solve this because the 50 Hz renderer has already retained both endpoints.
+
+Version `0.0.92` adds the missing presentation contract:
+
+1. Compact props whose bounding-sphere radius is smaller than the full
+   192-unit camera diameter do not own the arm. This is a footprint-derived
+   small-object rule, not a resource ID exception.
+2. A positive contact with any remaining large mesh latches its final
+   post-native safe endpoint.
+3. On latch acquisition, both historical camera snapshots are cut to the
+   verified safe endpoint. Later safe endpoints interpolate normally as the
+   player, block or orbit moves.
+4. Every new snapshot is constrained to the active target before synthetic
+   and exact rendering. One missing source sample is tolerated; two complete
+   clear rays release the latch.
+5. Authored cameras and scene-history resets clear the latch immediately.
+
+This prevents a native/mesh A-B-A presentation loop without restoring the
+rejected global exact-camera ownership of `0.0.85`.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

@@ -520,6 +520,29 @@ pipeline, rather than exposing the retail fixed-camera frame. A still-blocked
 boundary must also provide three consecutive outward samples before the
 spring releases; inward contraction remains immediate.
 
+The `0.0.91` run proves both changes execute: the only clip failure was
+preceded by `camera_native_spring hold` and ended with `held=1`, while the old
+182/311 hard-boundary alternation no longer released the spring radius.
+However, the final lever-area contact exposed a separate presentation cycle.
+The compact housing resource 12708 (bounds radius 180) remained a qualified
+mesh blocker even though the adjacent handle resource 12709 was correctly
+excluded. The spring stabilized near radius 38, but `0x2F380` alternated an
+unsafe 211-unit publication with a 65-unit mesh-safe endpoint. There were 183
+post-native commits to resource 12708 and 732 temporal-chord guards; 167
+commits selected the exact same safe target. Camera snapshots therefore
+alternated by about 147 units while the player and target were stationary.
+
+Version `0.0.92` separates small-prop filtering from large-mesh presentation
+ownership. A scene node must now have a bounds radius of at least one complete
+camera diameter (192 units) in addition to the existing two-axis extent rule.
+This ignores resource 12708/12709 as compact lever geometry while retaining
+the observed 310-, 551- and 1136-unit blockers. For every remaining qualified
+mesh contact, a presentation latch records the post-native safe endpoint,
+normalizes both existing history snapshots once on acquisition, and applies
+the current safe target to every newly captured camera snapshot. It persists
+through one missing sample, clears after two complete clear rays, and clears
+immediately for scripted cameras or scene-history resets.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

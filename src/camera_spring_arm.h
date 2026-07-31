@@ -45,6 +45,19 @@ inline bool CameraMeshExtentsBlockVolume(
   return sorted[1] >= camera_diameter;
 }
 
+inline bool CameraMeshBoundsBlockVolume(double bounds_radius,
+                                        double camera_diameter) {
+  if (!std::isfinite(bounds_radius) || !std::isfinite(camera_diameter) ||
+      bounds_radius < 0.0 || camera_diameter <= 0.0) {
+    return false;
+  }
+  // Props smaller than one complete camera diameter in bounding-sphere radius
+  // cannot form a wall-like occluder around the spring arm. Their enlarged
+  // swept sphere otherwise fills the entire player-to-prop gap and traps the
+  // camera against lever handles and compact housings.
+  return bounds_radius >= camera_diameter;
+}
+
 inline CameraSpringArmStep StepCameraSpringArm(
     double desired_distance, double hard_safe_distance,
     double previous_radius, bool obstruction_present,
