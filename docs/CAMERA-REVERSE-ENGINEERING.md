@@ -907,6 +907,24 @@ validation, it replaces the stale post-native point in exact publication,
 spring state and presentation. First contact still uses the collision-derived
 escape, and a genuinely blocked submitted arm cannot take ownership.
 
+The `0.0.110` elevator run confirms the post-only anchor is no longer the main
+failure, but shows severe radial contractions on mesh-corner transitions.
+While running around the lift, adjacent resources 12619 and 12613 can change
+ownership as the requested orbit turns. Individual source ticks contract from
+`671.8` to `131.2`, `343.5` to `129.2`, and `331.8` to `131.4`. Each new radial
+arm is genuinely clipped, but the preceding focus-relative camera arm may
+still be completely clear; discarding it creates the visible camera-to-player
+pop and subsequent spring expansion.
+
+Version `0.0.111` adds a verified corner detour for established mesh contact.
+When a new mesh-blocked orbit appears but native room geometry is clear, the
+preceding exact camera point is translated by the player's focus motion. It is
+retained only if its distance is usable, it does not exceed the requested arm,
+the native seven-trace volume query accepts it and a fresh complete scene-mesh
+sweep is clear. That point then enters the existing unified commit and latch
+path. A wall/floor obstruction or an actually blocked preceding arm continues
+to contract immediately.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

@@ -256,6 +256,17 @@ int main() {
     std::cerr << "continuous mesh-contact target ownership was invalid\n";
     return 1;
   }
+  if (!CameraPreviousClearArmOwnsMeshCorner(
+          true, true, false, true, true, true, true) ||
+      CameraPreviousClearArmOwnsMeshCorner(
+          true, true, true, true, true, true, true) ||
+      CameraPreviousClearArmOwnsMeshCorner(
+          true, true, false, false, true, true, true) ||
+      CameraPreviousClearArmOwnsMeshCorner(
+          true, true, false, true, true, true, false)) {
+    std::cerr << "previous clear camera arm did not own a mesh corner\n";
+    return 1;
+  }
   if (CameraTargetMeetsMinimumDistance(
           {0, 0, 0}, {10, 0, 0}, 120.0) ||
       CameraTargetMeetsMinimumDistance(

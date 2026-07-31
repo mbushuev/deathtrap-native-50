@@ -4576,8 +4576,68 @@ void __cdecl HookMode3Camera(void* controller) {
   }
   const bool spring_arm_blocked = orbit_blocked || mesh_orbit_blocked;
 
+  // A newly requested radial arm can graze the next face of a multi-part prop
+  // while the preceding camera arm is still completely clear. Modern corner
+  // avoidance keeps that preceding route until there is a real path around
+  // the obstruction; collapsing immediately to the new ray's near-side hit
+  // produces the characteristic camera-to-player pop. Translate the previous
+  // verified camera with the moving focus and validate the whole candidate
+  // against both collision authorities before it may own this source tick.
+  const bool latch_active_before_configure =
+      CameraMeshPresentationLatchActive();
+  std::array<int32_t, 3> previous_clear_arm{};
+  bool previous_target_usable = false;
+  bool previous_native_clear = false;
+  bool previous_mesh_arm_clear = false;
+  if (previous_modern_sample_valid && mesh_orbit_blocked &&
+      !orbit_blocked && latch_active_before_configure) {
+    previous_clear_arm = TranslateCameraTargetWithFocus(
+        previous_focus, camera_focus, before_original);
+    const double previous_radius =
+        CameraPositionDistance(camera_focus, previous_clear_arm);
+    const double desired_radius =
+        CameraPositionDistance(camera_focus, orbit);
+    previous_target_usable =
+        CameraTargetMeetsMinimumDistance(
+            camera_focus, previous_clear_arm,
+            kThirdPersonMinimumCameraDistance) &&
+        std::isfinite(previous_radius) && std::isfinite(desired_radius) &&
+        previous_radius <= desired_radius + 1.0;
+    bool previous_native_blocked = true;
+    previous_native_clear =
+        previous_target_usable &&
+        NativeCameraVolumeBlocked(
+            controller, camera_focus, previous_clear_arm,
+            &previous_native_blocked) &&
+        !previous_native_blocked;
+    std::array<int32_t, 3> previous_mesh_safe = previous_clear_arm;
+    CameraMeshHitDiagnostic previous_mesh_diagnostic;
+    previous_mesh_arm_clear =
+        previous_native_clear &&
+        !ClipThirdPersonOrbitAgainstSceneObjects(
+            camera_focus, previous_clear_arm, &previous_mesh_safe,
+            &previous_mesh_diagnostic);
+  }
+  const bool previous_clear_arm_owned =
+      CameraPreviousClearArmOwnsMeshCorner(
+          previous_modern_sample_valid, mesh_orbit_blocked, orbit_blocked,
+          latch_active_before_configure, previous_target_usable,
+          previous_native_clear, previous_mesh_arm_clear);
+
   std::array<int32_t, 3> submitted{};
-  if (mesh_orbit_blocked &&
+  if (previous_clear_arm_owned) {
+    submitted = previous_clear_arm;
+    const double retained_radius =
+        CameraPositionDistance(camera_focus, submitted);
+    g_third_person_orbit_state.collision_radius = retained_radius;
+    g_third_person_orbit_state.collision_clear_ticks = 0;
+    g_third_person_orbit_state.collision_blocked_release_ticks = 0;
+    AppendNativeLog(
+        "camera_mesh_corner_detour result=OK resource=%llu "
+        "target=%d/%d/%d radius=%.1f",
+        static_cast<unsigned long long>(mesh_orbit_diagnostic.resource),
+        submitted[0], submitted[1], submitted[2], retained_radius);
+  } else if (mesh_orbit_blocked &&
       (mesh_orbit_diagnostic.overlap_pushout ||
        mesh_orbit_diagnostic.near_pivot_escape)) {
     submitted = hard_safe_endpoint;
@@ -4663,7 +4723,7 @@ void __cdecl HookMode3Camera(void* controller) {
     return;
   }
   const bool latch_active_before_update =
-      CameraMeshPresentationLatchActive();
+      latch_active_before_configure;
   const bool submitted_usable =
       CameraTargetMeetsMinimumDistance(
           camera_focus, submitted, kThirdPersonMinimumCameraDistance);
@@ -9998,7 +10058,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.110 post-contact depenetration "
+      "Deathtrap native render overlay 0.0.111 verified mesh corner detour "
       "ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "

@@ -871,6 +871,14 @@ submitted arm passes the scene-mesh sweep and its endpoint has already passed
 the native room-volume query; blocked arms and first-contact escape selection
 remain unchanged.
 
+Version `0.0.111` introduces continuity-aware mesh-corner avoidance. If the
+new radial orbit hits a prop but the preceding camera arm remains clear after
+being translated with player motion, that complete arm is kept as a temporary
+detour. Both native room-volume and scene-mesh sweeps must validate it on the
+current tick. This avoids unnecessary near-pivot collapse around multi-part
+lift corners without delaying a real collision, weakening wall/floor
+authority or relying on a frame-count threshold.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
