@@ -826,6 +826,20 @@ responsible for unsafe synthetic interpolation between consecutive safe
 endpoints. No collision distance, object-size classifier, native wall/floor
 query or authored-camera rule changes.
 
+The `0.0.106` trace confirms that ownership unification worked, but reveals a
+geometric discontinuity within one blocker. Resource 11432 can provide two
+opposite expanded-OBB escape faces. Selecting between them from the current
+requested orbit vector makes an angular sign change produce a 958-unit exact
+side swap while the player, focus and physical contact are unchanged.
+
+Version `0.0.107` gives a near-pivot escape persistent face continuity. The
+last accepted source camera selects the side for the next contained or grazing
+escape, so orbit input cannot switch through the solid object merely by
+crossing a directional tie. Once the complete arm has a normal radial point at
+or above the established usable distance, ordinary collision takes over and
+the camera may move around the obstacle. This is contact topology, not input
+damping or a new distance threshold.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

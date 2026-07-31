@@ -111,6 +111,19 @@ int main() {
     return 1;
   }
   if (!PushCameraToUsableExpandedBoxFace(
+          {0.0, 0.0, 0.0}, {-308.0, 0.0, 0.0},
+          {300.0, 200.0, 300.0}, 1, 8.0, 120.0,
+          &pushed, &pushed_axis)) {
+    std::cerr << "continuous near-pivot contact lost its prior face\n";
+    return 1;
+  }
+  ExpectNear(pushed[0], -308.0,
+             "continuous near-pivot contact retains its prior face");
+  if (pushed_axis != 0) {
+    std::cerr << "continuous near-pivot contact switched face axis\n";
+    return 1;
+  }
+  if (!PushCameraToUsableExpandedBoxFace(
           {-101.0, 0.0, 0.0}, {-101.0, 0.0, -500.0},
           {100.0, 200.0, 300.0}, 1, 8.0, 120.0,
           &pushed, &pushed_axis)) {

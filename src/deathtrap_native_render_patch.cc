@@ -3608,11 +3608,14 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
           push_distance < kThirdPersonMinimumCameraDistance) {
         Vec3 usable_face{};
         size_t usable_axis = std::numeric_limits<size_t>::max();
+        // Keep the face used by the preceding accepted camera. Choosing from
+        // the instantaneous requested ray makes a contained pivot flip
+        // between opposite OBB faces as the orbit crosses an angular tie.
+        // The previous endpoint is only one source tick old and supplies
+        // contact-side continuity; room validation still follows below.
         if (CameraMeshExpandedBoundsPushout(
                 *mesh, current.world, origin,
-                Vec3{static_cast<double>(requested[0]),
-                     static_cast<double>(requested[1]),
-                     static_cast<double>(requested[2])},
+                overlap_reference,
                 kCameraCollisionSphereRadius, kOverlapPushoutMargin,
                 kThirdPersonMinimumCameraDistance, &usable_face,
                 &usable_axis)) {
@@ -3667,11 +3670,13 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
       constexpr double kNearPivotEscapeMargin = 8.0;
       Vec3 escaped{};
       size_t escape_axis = std::numeric_limits<size_t>::max();
+      // A near-pivot escape is a persistent contact side, not a new choice on
+      // every input angle. Follow the preceding accepted camera face until
+      // the requested arm becomes radially usable and naturally releases the
+      // escape. This prevents opposite-face jumps on one continuous pillar.
       if (CameraMeshExpandedBoundsPushout(
               *mesh, current.world, origin,
-              Vec3{static_cast<double>(requested[0]),
-                   static_cast<double>(requested[1]),
-                   static_cast<double>(requested[2])},
+              overlap_reference,
               kCameraCollisionSphereRadius, kNearPivotEscapeMargin,
               kThirdPersonMinimumCameraDistance, &escaped,
               &escape_axis)) {
@@ -9862,7 +9867,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.106 single mesh-contact "
+      "Deathtrap native render overlay 0.0.107 stable mesh-contact face "
       "ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "

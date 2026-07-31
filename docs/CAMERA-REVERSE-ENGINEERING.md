@@ -835,6 +835,24 @@ inside the existing contact generation, so the switch neither retains the
 wrong face nor creates a history-normalizing cut. First contact, native-only
 walls/floors, unsafe endpoints and authored cameras retain their prior paths.
 
+The `0.0.106` run removes the adjacent-resource ownership defect completely:
+208 continuous pins succeed, none fail, and the presentation latch records no
+`RETAIN` owner switches. The remaining pillar jolt is inside resource 11432's
+near-pivot escape itself. With focus and player stationary, the same expanded
+OBB alternates between opposite axis-0 faces at `-1379/400/14725` and
+`-421/400/14725`, a 958-unit exact jump. The face was selected from the
+instantaneous requested orbit direction, so crossing an angular tie could
+teleport the camera to the other valid side without contact ever clearing.
+
+Version `0.0.107` uses the preceding accepted source camera as the reference
+for both contained-pivot and grazing near-pivot usable-face selection. A
+continuous contact therefore remains on its current expanded-OBB face until
+the desired arm becomes radially usable and releases naturally around the
+object. The previous point is only a side selector; every generated endpoint
+still passes the existing arm bounds and native room validation. Ordinary
+radial contact, walls/floors, spring timing, mesh classification and authored
+camera ownership are unchanged.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
