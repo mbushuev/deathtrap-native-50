@@ -879,6 +879,14 @@ current tick. This avoids unnecessary near-pivot collapse around multi-part
 lift corners without delaying a real collision, weakening wall/floor
 authority or relying on a frame-count threshold.
 
+Version `0.0.112` handles the complementary case where player motion has made
+the previous arm invalid before a mesh latch can be established. It projects
+the previous camera direction onto the exact blocking triangle plane and tests
+that continuity-aligned tangent at the previous distance. This is a geometric
+surface slide, not collision delay: only a fully scene-clear and native-clear
+tangent may replace radial contraction. No opposite-side tangent is attempted,
+preventing an avoidance solution from flipping through the player.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

@@ -925,6 +925,24 @@ sweep is clear. That point then enters the existing unified commit and latch
 path. A wall/floor obstruction or an actually blocked preceding arm continues
 to contract immediately.
 
+The short `0.0.111` rerun shows that this detour works 15 times but starts too
+late in the remaining failure. At the first resource-12613 encounter, the
+camera is already committed to radius 126.6 or 241.2 before an established
+latch exists. On the next tick it contracts to 121.7 or 162.1. Subsequent
+`camera_mesh_corner_detour` records then preserve that already collapsed
+radius correctly, so the visible camera still remains at the character's back.
+
+Version `0.0.112` adds a first-contact tangent slide. The blocking triangle's
+world-space plane is known from the exact mesh sweep. The preceding camera
+direction is projected onto that plane, producing the continuity-aligned
+tangent with the preceding radius clamped to the desired arm length. The
+complete candidate arm must pass both the scene-mesh sweep and native
+seven-trace volume query. A valid tangent immediately owns exact publication,
+history, spring state and latch even on first contact. Only the tangent aligned
+with the previous direction is attempted; the opposite tangent is not used, so
+failure cannot teleport the camera across the player. If no valid slide exists,
+the existing collision-derived contraction remains authoritative.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

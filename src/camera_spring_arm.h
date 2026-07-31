@@ -52,8 +52,8 @@ inline bool CameraContinuousMeshContactOwnsSubmittedTarget(
 
 inline bool CameraPreviousClearArmOwnsMeshCorner(
     bool previous_modern_sample_valid, bool mesh_orbit_blocked,
-    bool native_orbit_blocked, bool presentation_latch_active,
-    bool previous_target_usable, bool previous_native_clear,
+    bool native_orbit_blocked, bool previous_target_usable,
+    bool previous_native_clear,
     bool previous_mesh_arm_clear) {
   // At a prop corner, the newly requested radial arm can become very short
   // even though the preceding camera arm remains completely usable. Preserve
@@ -61,9 +61,8 @@ inline bool CameraPreviousClearArmOwnsMeshCorner(
   // player's back. Native room obstruction is deliberately excluded: retail
   // walls, floors and portals retain immediate contraction authority.
   return previous_modern_sample_valid && mesh_orbit_blocked &&
-         !native_orbit_blocked && presentation_latch_active &&
-         previous_target_usable && previous_native_clear &&
-         previous_mesh_arm_clear;
+         !native_orbit_blocked && previous_target_usable &&
+         previous_native_clear && previous_mesh_arm_clear;
 }
 
 inline CameraFloorLimit ResolveCameraFloorLimit(

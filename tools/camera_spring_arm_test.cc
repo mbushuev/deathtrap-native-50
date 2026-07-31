@@ -257,13 +257,13 @@ int main() {
     return 1;
   }
   if (!CameraPreviousClearArmOwnsMeshCorner(
-          true, true, false, true, true, true, true) ||
+          true, true, false, true, true, true) ||
       CameraPreviousClearArmOwnsMeshCorner(
-          true, true, true, true, true, true, true) ||
+          true, true, true, true, true, true) ||
       CameraPreviousClearArmOwnsMeshCorner(
-          true, true, false, false, true, true, true) ||
+          true, true, false, false, true, true) ||
       CameraPreviousClearArmOwnsMeshCorner(
-          true, true, false, true, true, true, false)) {
+          true, true, false, true, true, false)) {
     std::cerr << "previous clear camera arm did not own a mesh corner\n";
     return 1;
   }
