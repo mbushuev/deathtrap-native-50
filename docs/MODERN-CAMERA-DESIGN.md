@@ -767,6 +767,22 @@ Second, a scene-root change is detected before any render-only mesh latch,
 follow target, head target or transition is applied. The first frame of a new
 root is exact native state and becomes clean interpolation history.
 
+The `0.0.102` run confirms the floor fix and exposes a remaining ownership
+stack: native collision contraction, translation-only mesh retention and
+render-only follow can each present a different endpoint. During mouse orbit,
+retaining translation while accepting a new native orientation creates the
+reported invisible orbit centre. Near a wall, following a previously displayed
+endpoint on top of the contracted spring arm creates a delayed return followed
+by a hard cut. Corrupt same-root exact frames also bypass the midpoint-only
+presentation guard.
+
+Version `0.0.103` therefore gives the complete manual gesture priority over
+translation-only retention, gives native/mesh collision priority over
+presentation follow, and permits exact-frame corruption rejection only while
+that modern-camera collision owner is active. These are ownership decisions;
+mesh qualification, spring radius, native room tests, contact margin, release
+thresholds and authored-camera arbitration are unchanged.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

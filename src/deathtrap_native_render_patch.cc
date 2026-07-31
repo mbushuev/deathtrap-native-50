@@ -546,6 +546,10 @@ struct ThirdPersonOrbitState {
   uint64_t last_input_time_ms = 0;
   uint64_t applications = 0;
   bool suspended = false;
+  // The current native endpoint is contracted or otherwise collision-owned.
+  // Presentation follow must not lag behind it and later snap back from an
+  // invalid carried point.
+  bool collision_constrained_this_tick = false;
 };
 
 ThirdPersonOrbitState g_third_person_orbit_state;
@@ -2051,6 +2055,26 @@ void UpdateCameraMeshPresentationLatch(
 
 bool ApplyCameraMeshPresentationLatch(SceneSnapshot* current) {
   if (!current) {
+    return false;
+  }
+  const uint64_t now_ms = GetTickCount64();
+  const bool manual_orbit_owned =
+      g_third_person_orbit_state.orbit_input_active_this_tick ||
+      (g_third_person_orbit_state.last_orbit_activity_ms != 0 &&
+       !CameraPresentationFollowInputIdle(
+           now_ms, g_third_person_orbit_state.last_orbit_activity_ms,
+           kCameraPresentationManualOrbitGraceMilliseconds));
+  if (manual_orbit_owned) {
+    // A latch target changes only translation. Applying it while the native
+    // controller is rotating the camera keeps the new orientation around an
+    // old collision point and makes the view orbit an invisible centre.
+    // Contact-only exact commits remain active; bypass only the render-layer
+    // retention until the complete manual gesture has ended.
+    std::lock_guard<std::mutex> lock(
+        g_camera_mesh_presentation_latch_mutex);
+    if (g_camera_mesh_presentation_latch.active) {
+      g_camera_mesh_presentation_latch.history_generation = 0;
+    }
     return false;
   }
   bool applied = false;
@@ -4218,6 +4242,7 @@ void __cdecl HookMode3Camera(void* controller) {
   if (!BeginMode3SourceTick(controller)) {
     return;
   }
+  g_third_person_orbit_state.collision_constrained_this_tick = false;
   g_last_mode3_source_tick_ms.store(GetTickCount64(),
                                      std::memory_order_release);
 
@@ -4439,6 +4464,15 @@ void __cdecl HookMode3Camera(void* controller) {
       return;
     }
   }
+  const double desired_radius =
+      CameraPositionDistance(camera_focus, orbit);
+  const double submitted_radius =
+      CameraPositionDistance(camera_focus, submitted);
+  g_third_person_orbit_state.collision_constrained_this_tick =
+      spring_arm_blocked ||
+      (std::isfinite(desired_radius) &&
+       std::isfinite(submitted_radius) &&
+       submitted_radius + 0.5 < desired_radius);
 
   // Release candidates are generated from a previously contracted radius.
   // Validate the actual rounded endpoint too; a portal boundary need not be
@@ -4484,6 +4518,8 @@ void __cdecl HookMode3Camera(void* controller) {
     AppendNativeLog("camera_native_mesh_pushout configure_failed");
     return;
   }
+  g_third_person_orbit_state.collision_constrained_this_tick |=
+      mesh_pushout.mesh_contact;
 
   if (mesh_orbit_blocked || mesh_pushout.mesh_contact) {
     const CameraMeshHitDiagnostic& latch_diagnostic =
@@ -7278,6 +7314,7 @@ bool ApplyModernCameraPresentationFollow(SceneSnapshot* current) {
   if (!current || !current->camera ||
       !g_third_person_orbit_state.engaged ||
       g_third_person_orbit_state.suspended ||
+      g_third_person_orbit_state.collision_constrained_this_tick ||
       g_third_person_orbit_state.orbit_input_active_this_tick ||
       manual_orbit_settling ||
       g_scripted_camera_override_active.load(std::memory_order_acquire) ||
@@ -9763,8 +9800,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.102 floor envelope and "
-      "scene-boundary reset "
+      "Deathtrap native render overlay 0.0.103 collision/presentation "
+      "ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
@@ -9955,6 +9992,22 @@ bool DeathtrapModernCameraConsumesMouse() {
 
 DeathtrapNativePresentationStage GetDeathtrapNativePresentationStage() {
   return g_active_presentation_trace.stage;
+}
+
+uint64_t GetDeathtrapNativePresentationTick() {
+  return g_active_presentation_trace.tick;
+}
+
+bool DeathtrapModernCameraCollisionPresentationGuardActive() {
+  if (!g_third_person_orbit_state.engaged ||
+      g_third_person_orbit_state.suspended ||
+      g_scripted_camera_override_active.load(std::memory_order_acquire)) {
+    return false;
+  }
+  if (g_third_person_orbit_state.collision_constrained_this_tick) {
+    return true;
+  }
+  return CameraMeshPresentationLatchActive();
 }
 
 DeathtrapControllerSelectorStatus GetDeathtrapControllerSelectorStatus() {

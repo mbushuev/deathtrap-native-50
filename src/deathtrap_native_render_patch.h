@@ -88,6 +88,12 @@ uint64_t GetDeathtrapNativeSuppressedPresentCount();
 // Present hook. This is thread-local because both the renderer and Present
 // execute synchronously on the game's render thread.
 DeathtrapNativePresentationStage GetDeathtrapNativePresentationStage();
+uint64_t GetDeathtrapNativePresentationTick();
+
+// Restricts exact-frame black-region rejection to an active modern-camera
+// collision. Loading screens, authored reveals and ordinary dark rooms remain
+// exact native presentations.
+bool DeathtrapModernCameraCollisionPresentationGuardActive();
 
 // Read-only presentation state for the controller's four-category selector.
 // The D3D11 layer uses this to draw an eight-direction marker after the game

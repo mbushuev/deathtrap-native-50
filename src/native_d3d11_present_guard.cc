@@ -222,6 +222,7 @@ struct State {
   uint32_t height = 0;
   DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
   uint64_t rejected = 0;
+  uint64_t rejected_exact_camera = 0;
   std::mutex mutex;
 };
 
@@ -456,18 +457,35 @@ bool AllowNativeD3D11Present(IDXGISwapChain* swap_chain) {
   }
   const DeathtrapNativePresentationStage stage =
       GetDeathtrapNativePresentationStage();
-  if (stage == DeathtrapNativePresentationStage::kMidpoint &&
+  const uint64_t source_tick = GetDeathtrapNativePresentationTick();
+  if ((stage == DeathtrapNativePresentationStage::kMidpoint ||
+       stage == DeathtrapNativePresentationStage::kExact) &&
       state->last_exact_valid) {
     uint32_t newly_black = 0;
     const char* reason = "none";
     if (IsCorrupt(state->last_exact, sample, &newly_black, &reason)) {
-      ++state->rejected;
-      Log("native phase rejected reason=%s newly_black=%u total=%llu",
-          reason, newly_black,
-          static_cast<unsigned long long>(state->rejected));
-      return false;
+      if (stage == DeathtrapNativePresentationStage::kMidpoint) {
+        ++state->rejected;
+        Log("native phase rejected stage=midpoint tick=%llu reason=%s "
+            "newly_black=%u total=%llu",
+            static_cast<unsigned long long>(source_tick),
+            reason, newly_black,
+            static_cast<unsigned long long>(state->rejected));
+        return false;
+      }
+      if (DeathtrapModernCameraCollisionPresentationGuardActive()) {
+        ++state->rejected_exact_camera;
+        Log("native phase rejected stage=exact_camera tick=%llu reason=%s "
+            "newly_black=%u total=%llu",
+            static_cast<unsigned long long>(source_tick),
+            reason, newly_black,
+            static_cast<unsigned long long>(
+                state->rejected_exact_camera));
+        return false;
+      }
     }
-  } else if (stage == DeathtrapNativePresentationStage::kExact) {
+  }
+  if (stage == DeathtrapNativePresentationStage::kExact) {
     state->last_exact = sample;
     state->last_exact_valid = true;
   }

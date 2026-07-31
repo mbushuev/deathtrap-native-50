@@ -758,6 +758,26 @@ inherit an old-room camera. Version `0.0.102` captures raw state, detects the
 boundary first, clears render-only latch/follow state and seeds the new history
 without applying any custom camera transform.
 
+The `0.0.102` runtime confirmed that the floor envelope works, but isolated
+three presentation-ownership failures. First, the mesh presentation latch
+changed only camera translation while the native controller continued to
+change orientation during manual orbit. That combination geometrically rotates
+the view around a retained collision point instead of the player. Second,
+render-only follow could trail a collision-contracted spring arm until its
+carried endpoint became invalid, then take the logged `previous_blocked`
+hard-cut path. Third, the D3D11 guard rejected corrupt midpoint phases but
+accepted every exact phase, including same-root collision frames with the same
+large newly-black signature.
+
+Version `0.0.103` separates those owners. A complete manual-orbit gesture,
+including DirectInput packet gaps, bypasses the translation-only latch while
+the exact native/contact path remains active. Presentation follow does not add
+a second delayed camera endpoint while the native spring arm or mesh contact
+owns contraction. Exact-phase black-region rejection is enabled only during
+an active modern-camera collision; loading screens, authored reveals and
+ordinary dark rooms remain exact native presentation. Present diagnostics now
+include the source tick and distinguish `midpoint` from `exact_camera`.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
