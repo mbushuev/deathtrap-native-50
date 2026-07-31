@@ -50,36 +50,57 @@ int main() {
     return 1;
   }
 
-  auto step = StepCameraSpringArm(1400.0, 420.0, 1400.0, true, 0);
+  auto step = StepCameraSpringArm(1400.0, 420.0, 1400.0, true, 0, 0);
   ExpectNear(step.radius, 420.0, "immediate contraction");
 
   step = StepCameraSpringArm(1400.0, 420.0, step.radius, true,
-                             step.clear_ticks);
+                             step.clear_ticks, step.blocked_release_ticks);
   ExpectNear(step.radius, 420.0, "stable contact does not oscillate");
 
   step = StepCameraSpringArm(1400.0, 1400.0, step.radius, false,
-                             step.clear_ticks);
+                             step.clear_ticks, step.blocked_release_ticks);
   ExpectNear(step.radius, 420.0, "one missing snapshot is held");
   ExpectTicks(step.clear_ticks, 1, "first clear tick");
 
   step = StepCameraSpringArm(1400.0, 1400.0, step.radius, false,
-                             step.clear_ticks);
+                             step.clear_ticks, step.blocked_release_ticks);
   ExpectNear(step.radius, 484.0, "bounded clear-space release");
 
   step = StepCameraSpringArm(1400.0, 500.0, step.radius, true,
-                             step.clear_ticks);
-  ExpectNear(step.radius, 500.0, "moving boundary release");
+                             step.clear_ticks, step.blocked_release_ticks);
+  ExpectNear(step.radius, 484.0, "first blocked outward sample is held");
+  ExpectTicks(step.blocked_release_ticks, 1,
+              "first blocked outward confirmation");
+
+  step = StepCameraSpringArm(1400.0, 540.0, step.radius, true,
+                             step.clear_ticks, step.blocked_release_ticks);
+  ExpectNear(step.radius, 484.0, "second blocked outward sample is held");
+
+  step = StepCameraSpringArm(1400.0, 580.0, step.radius, true,
+                             step.clear_ticks, step.blocked_release_ticks);
+  ExpectNear(step.radius, 548.0, "confirmed moving boundary release");
 
   step = StepCameraSpringArm(1400.0, 450.0, step.radius, true,
-                             step.clear_ticks);
+                             step.clear_ticks, step.blocked_release_ticks);
   ExpectNear(step.radius, 450.0, "new inward boundary is authoritative");
 
   step = StepCameraSpringArm(1400.0, 0.0, step.radius, true,
-                             step.clear_ticks);
+                             step.clear_ticks, step.blocked_release_ticks);
   ExpectNear(step.radius, 0.0, "verified pivot overlap is safe");
 
-  step = StepCameraSpringArm(1400.0, 1600.0, 1390.0, false, 1);
+  step = StepCameraSpringArm(1400.0, 1600.0, 1390.0, false, 1, 0);
   ExpectNear(step.radius, 1400.0, "never extends beyond desired arm");
+
+  step = StepCameraSpringArm(1400.0, 182.0, 246.0, true, 0, 0);
+  ExpectNear(step.radius, 182.0, "alternating boundary contracts");
+  step = StepCameraSpringArm(1400.0, 311.0, step.radius, true,
+                             step.clear_ticks, step.blocked_release_ticks);
+  ExpectNear(step.radius, 182.0, "one-frame outward boundary is held");
+  step = StepCameraSpringArm(1400.0, 182.0, step.radius, true,
+                             step.clear_ticks, step.blocked_release_ticks);
+  ExpectNear(step.radius, 182.0, "alternating inward boundary stays stable");
+  ExpectTicks(step.blocked_release_ticks, 0,
+              "alternating boundary resets confirmation");
 
   std::cout << "camera spring-arm state tests passed\n";
   return 0;

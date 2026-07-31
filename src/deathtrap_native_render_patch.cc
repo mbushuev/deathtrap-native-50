@@ -513,6 +513,10 @@ struct ThirdPersonOrbitState {
   // Ignore a single missing render snapshot before releasing the arm. This
   // never owns a stale contact because the full segment is re-tested.
   uint32_t collision_clear_ticks = 0;
+  // A still-blocked native boundary must move outward for several consecutive
+  // source ticks before the arm follows it. This rejects alternating
+  // portal/small-prop samples without delaying hard inward contraction.
+  uint32_t collision_blocked_release_ticks = 0;
   uint64_t last_orbit_activity_ms = 0;
   bool motion_active_this_tick = false;
   bool orbit_input_active_this_tick = false;
@@ -1564,23 +1568,65 @@ bool ClipThirdPersonOrbitAgainstNativeWorld(
   const std::array<double, 3> direction = {
       ray_x / requested_distance, ray_y / requested_distance,
       ray_z / requested_distance};
-  // Binary search requires a proven-clear lower endpoint. Assuming distance
-  // zero was clear and then clamping the result back to 120 produced an
-  // endpoint that had never passed the query and could live inside a corner.
+  // Binary search requires a proven-clear lower endpoint. Normally the focus
+  // itself provides it. Near a thin lever, portal seam or moving block,
+  // however, the native camera footprint can report the focus sample blocked
+  // for a few ticks even though a point farther along the same complete ray
+  // is clear. Returning immediately in that case hands the frame back to the
+  // retail fixed-camera candidate. Search the same ray for a verified clear
+  // lower endpoint before giving up; every accepted sample still passes the
+  // complete native volume predicate.
   bool focus_blocked = true;
-  if (!NativeCameraVolumeBlocked(controller, focus, focus, &focus_blocked) ||
-      focus_blocked) {
-    if (g_debug_log) {
-      AppendNativeLog("camera_native_volume pivot_not_clear focus=%d/%d/%d",
-                      focus[0], focus[1], focus[2]);
-    }
+  if (!NativeCameraVolumeBlocked(controller, focus, focus,
+                                 &focus_blocked)) {
     return false;
+  }
+  double clear_distance = 0.0;
+  if (focus_blocked) {
+    constexpr uint32_t kPivotRecoverySamples = 16u;
+    bool recovered_clear_sample = false;
+    for (uint32_t sample = 1u; sample < kPivotRecoverySamples; ++sample) {
+      const double sample_distance =
+          requested_distance * static_cast<double>(sample) /
+          static_cast<double>(kPivotRecoverySamples);
+      const std::array<int32_t, 3> candidate = {
+          focus[0] + static_cast<int32_t>(
+                         std::lround(direction[0] * sample_distance)),
+          focus[1] + static_cast<int32_t>(
+                         std::lround(direction[1] * sample_distance)),
+          focus[2] + static_cast<int32_t>(
+                         std::lround(direction[2] * sample_distance))};
+      bool sample_blocked = true;
+      if (!NativeCameraVolumeBlocked(controller, focus, candidate,
+                                     &sample_blocked)) {
+        return false;
+      }
+      if (!sample_blocked) {
+        clear_distance = sample_distance;
+        recovered_clear_sample = true;
+      }
+    }
+    if (recovered_clear_sample) {
+      if (g_debug_log) {
+        AppendNativeLog(
+            "camera_native_volume pivot_recovered clear=%.1f "
+            "requested=%.1f focus=%d/%d/%d",
+            clear_distance, requested_distance,
+            focus[0], focus[1], focus[2]);
+      }
+    } else {
+      if (g_debug_log) {
+        AppendNativeLog(
+            "camera_native_volume pivot_not_clear focus=%d/%d/%d",
+            focus[0], focus[1], focus[2]);
+      }
+      return false;
+    }
   }
 
   // The native query is boolean. Search the same focus->endpoint segment for
   // the farthest clear camera centre. Retraction is immediate; outward
   // recovery is handled independently by the spring-arm state.
-  double clear_distance = 0.0;
   double blocked_distance = requested_distance;
   for (uint32_t iteration = 0; iteration < 12u; ++iteration) {
     const double candidate_distance =
@@ -1887,6 +1933,7 @@ bool InitializeThirdPersonOrbit(void* controller, int32_t native_x,
   g_third_person_orbit_state.collision_radius =
       g_third_person_orbit_state.radius;
   g_third_person_orbit_state.collision_clear_ticks = 0;
+  g_third_person_orbit_state.collision_blocked_release_ticks = 0;
   g_third_person_orbit_state.last_orbit_activity_ms = GetTickCount64();
   g_third_person_orbit_state.motion_active_this_tick = false;
   g_third_person_orbit_state.previous_player = focus;
@@ -3023,10 +3070,12 @@ bool ResolveThirdPersonSpringArm(
       std::clamp(state.collision_radius, 0.0, desired_distance);
   const CameraSpringArmStep step = StepCameraSpringArm(
       desired_distance, hard_safe_distance, previous_radius,
-      obstruction_present, state.collision_clear_ticks);
+      obstruction_present, state.collision_clear_ticks,
+      state.collision_blocked_release_ticks);
   const double next_radius = step.radius;
   state.collision_radius = next_radius;
   state.collision_clear_ticks = step.clear_ticks;
+  state.collision_blocked_release_ticks = step.blocked_release_ticks;
 
   const std::array<double, 3> direction = {
       dx / desired_distance, dy / desired_distance, dz / desired_distance};
@@ -3040,9 +3089,10 @@ bool ResolveThirdPersonSpringArm(
   if (g_debug_log && std::abs(next_radius - previous_radius) > 1.0) {
     AppendNativeLog(
         "camera_spring desired=%.1f hard=%.1f actual=%.1f->%.1f "
-        "blocked=%u clear_ticks=%u",
+        "blocked=%u clear_ticks=%u blocked_release_ticks=%u",
         desired_distance, hard_safe_distance, previous_radius, next_radius,
-        obstruction_present ? 1u : 0u, state.collision_clear_ticks);
+        obstruction_present ? 1u : 0u, state.collision_clear_ticks,
+        state.collision_blocked_release_ticks);
   }
   return true;
 }
@@ -3278,6 +3328,7 @@ bool ConfigureCameraWithSceneMeshPushout(
         std::min(g_third_person_orbit_state.collision_radius,
                  constrained_radius);
     g_third_person_orbit_state.collision_clear_ticks = 0;
+    g_third_person_orbit_state.collision_blocked_release_ticks = 0;
   }
   return true;
 }
@@ -3346,6 +3397,13 @@ void __cdecl HookMode3Camera(void* controller) {
     return;
   }
 
+  const bool previous_modern_sample_valid =
+      before_original_valid &&
+      g_third_person_orbit_state.engaged &&
+      g_third_person_orbit_state.controller == controller;
+  const std::array<int32_t, 3> previous_focus =
+      g_third_person_orbit_state.previous_player;
+
   std::array<int32_t, 3> orbit{};
   if (!BuildThirdPersonOrbitPosition(controller, native, &orbit)) {
     return;
@@ -3370,6 +3428,36 @@ void __cdecl HookMode3Camera(void* controller) {
     return;
   }
 
+  // The untouched retail callback runs first so authored-camera arbitration
+  // can inspect it. If a transient native query failure prevents a new modern
+  // endpoint, do not leave that retail/fixed candidate published for one
+  // frame. Translate the preceding verified modern result by the focus delta
+  // and feed it through the ordinary native configure + scene-mesh phases.
+  // This is a short fail-closed hold, not a direct global camera write.
+  auto publish_held_modern_sample = [&](const char* reason) {
+    if (!previous_modern_sample_valid) {
+      return false;
+    }
+    std::array<int32_t, 3> held_target = before_original;
+    for (size_t axis = 0; axis < held_target.size(); ++axis) {
+      held_target[axis] += camera_focus[axis] - previous_focus[axis];
+    }
+    CameraMeshPushoutResult held_pushout;
+    if (!ConfigureCameraWithSceneMeshPushout(
+            controller, camera_focus, held_target, room_or_sector,
+            &held_pushout)) {
+      return false;
+    }
+    AppendNativeLog(
+        "camera_native_spring hold reason=%s target=%d/%d/%d "
+        "mesh=%u/%u/%u",
+        reason, held_target[0], held_target[1], held_target[2],
+        held_pushout.mesh_contact ? 1u : 0u,
+        held_pushout.correction_applied ? 1u : 0u,
+        held_pushout.exhausted ? 1u : 0u);
+    return true;
+  };
+
   // The complete retail mode-3 dispatcher is not a deterministic spring arm:
   // when the requested ray is blocked it calls 0x2F750, whose alternate
   // placement search deliberately changes sectors and sides between ticks.
@@ -3383,10 +3471,9 @@ void __cdecl HookMode3Camera(void* controller) {
   const bool visibility_query_valid = NativeCameraVolumeBlocked(
       controller, camera_focus, orbit, &orbit_blocked);
   if (!visibility_query_valid) {
-    // The retail probe above already published a valid camera for this tick.
-    // Never guess a world-space endpoint when the native room query is
-    // unavailable.
-    AppendNativeLog("camera_native_spring unavailable");
+    const bool held = publish_held_modern_sample("query_unavailable");
+    AppendNativeLog("camera_native_spring unavailable held=%u",
+                    held ? 1u : 0u);
     return;
   }
 
@@ -3394,7 +3481,9 @@ void __cdecl HookMode3Camera(void* controller) {
   if (orbit_blocked &&
       !ClipThirdPersonOrbitAgainstNativeWorld(
           controller, camera_focus, orbit, &hard_safe_endpoint)) {
-    AppendNativeLog("camera_native_spring clip_failed");
+    const bool held = publish_held_modern_sample("clip_failed");
+    AppendNativeLog("camera_native_spring clip_failed held=%u",
+                    held ? 1u : 0u);
     return;
   }
 
@@ -3438,20 +3527,25 @@ void __cdecl HookMode3Camera(void* controller) {
   bool submitted_blocked = true;
   if (!NativeCameraVolumeBlocked(controller, camera_focus, submitted,
                                  &submitted_blocked)) {
-    AppendNativeLog("camera_native_spring validation_unavailable");
+    const bool held = publish_held_modern_sample("validation_unavailable");
+    AppendNativeLog("camera_native_spring validation_unavailable held=%u",
+                    held ? 1u : 0u);
     return;
   }
   if (submitted_blocked) {
     std::array<int32_t, 3> reclipped{};
     if (!ClipThirdPersonOrbitAgainstNativeWorld(
             controller, camera_focus, submitted, &reclipped)) {
-      AppendNativeLog("camera_native_spring validation_failed");
+      const bool held = publish_held_modern_sample("validation_failed");
+      AppendNativeLog("camera_native_spring validation_failed held=%u",
+                      held ? 1u : 0u);
       return;
     }
     submitted = reclipped;
     g_third_person_orbit_state.collision_radius =
         CameraPositionDistance(camera_focus, submitted);
     g_third_person_orbit_state.collision_clear_ticks = 0;
+    g_third_person_orbit_state.collision_blocked_release_ticks = 0;
   }
 
   // First resolve against native rooms/walls/floors, then push the published
@@ -3493,6 +3587,7 @@ void __cdecl HookMode3Camera(void* controller) {
           "published=%d/%d/%d valid=%u/%u/%u blocked=%u/%u "
           "mesh=%u/%u/%u exact=%u passes=%u "
           "initial_published=%d/%d/%d radius=%.1f clear_ticks=%u "
+          "blocked_release_ticks=%u "
           "pre_resource=%llu resource=%llu tri=%llu motion=%.1f",
           camera_focus[0], camera_focus[1], camera_focus[2],
           orbit[0], orbit[1], orbit[2],
@@ -3517,6 +3612,7 @@ void __cdecl HookMode3Camera(void* controller) {
           mesh_pushout.initial_published[2],
           g_third_person_orbit_state.collision_radius,
           g_third_person_orbit_state.collision_clear_ticks,
+          g_third_person_orbit_state.collision_blocked_release_ticks,
           static_cast<unsigned long long>(
               mesh_orbit_diagnostic.resource),
           static_cast<unsigned long long>(
@@ -8504,7 +8600,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.90 persistent mesh spring contact "
+      "Deathtrap native render overlay 0.0.91 stable obstruction boundary "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "

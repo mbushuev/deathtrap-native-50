@@ -500,6 +500,26 @@ same desired ray remains obstructed. The post-native sweep remains necessary,
 but only to reject a lateral or vertical `0x2F380` shift that crosses the mesh
 after the spring has selected a safe radial endpoint.
 
+The `0.0.90` run confirms that persistent mesh ownership improves block
+contact, but exposes two native-volume edge cases. Four consecutive
+`pivot_not_clear` samples returned `clip_failed`; because the untouched retail
+callback had already run, each early return left its fixed-camera candidate
+published for that frame. At the end of the run, a thin lever was not
+classified as a mesh blocker (`blocked=1/0`, resource zero), but the native
+volume boundary alternated between safe radii 182 and 311. The spring followed
+each outward sample by 64 units and immediately contracted on the next inward
+sample, producing a stable 182 -> 246 -> 182 loop.
+
+Version `0.0.91` addresses the measured failure modes without broadening
+direct camera writes. If the focus footprint itself is temporarily blocked,
+the native clipper samples farther points on the same complete ray and uses
+the farthest proven-clear point as the binary-search lower bound. If no such
+sample is available, the preceding modern-camera result is translated by the
+focus delta and republished through the ordinary `0x2F380` plus scene-mesh
+pipeline, rather than exposing the retail fixed-camera frame. A still-blocked
+boundary must also provide three consecutive outward samples before the
+spring releases; inward contraction remains immediate.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

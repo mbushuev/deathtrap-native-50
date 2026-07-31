@@ -559,6 +559,25 @@ safety constraint around `0x2F380` output, preserving the two-stage
 room-then-item architecture without allowing the native history to move the
 camera back through the block.
 
+The next `0.0.90` capture distinguishes two remaining problems. Temporary
+`pivot_not_clear` failures must not hand one frame back to the retail
+fixed-camera result, and a one-frame outward change in a still-blocked native
+boundary must not move the spring. Version `0.0.91` therefore adds two
+state-level rules:
+
+1. Recover a proven-clear lower endpoint by sampling the same complete ray
+   when the focus footprint is blocked. If the query remains unavailable,
+   translate the last modern-camera result with the moving focus and run that
+   hold through the normal native and mesh phases.
+2. Require three consecutive outward boundary samples while
+   `obstruction_present` remains true before releasing by the usual bounded
+   64-unit step. Any inward boundary is still authoritative immediately and
+   resets confirmation.
+
+This is temporal hysteresis on the native obstruction boundary, not a lever
+resource blacklist. It suppresses the observed 182/311 alternating sample
+while retaining collision for large blocks and ordinary room geometry.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
