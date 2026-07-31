@@ -76,6 +76,34 @@ int main() {
     std::cerr << "clear point was incorrectly pushed\n";
     return 1;
   }
+  if (!PushCameraToUsableExpandedBoxFace(
+          {0.0, 0.0, 0.0}, {0.0, 0.0, -500.0},
+          {100.0, 200.0, 300.0}, 1, 8.0, 120.0,
+          &pushed, &pushed_axis)) {
+    std::cerr << "contained pivot did not find a usable side face\n";
+    return 1;
+  }
+  ExpectNear(pushed[2], -308.0,
+             "contained pivot follows requested camera side");
+  if (pushed_axis != 2) {
+    std::cerr << "contained pivot selected the wrong usable face\n";
+    return 1;
+  }
+  if (!PushCameraToUsableExpandedBoxFace(
+          {-101.0, 0.0, 0.0}, {-101.0, 0.0, -500.0},
+          {100.0, 200.0, 300.0}, 1, 8.0, 120.0,
+          &pushed, &pushed_axis)) {
+    std::cerr << "near-pivot contact did not slide along the outside face\n";
+    return 1;
+  }
+  ExpectNear(pushed[0], -101.0,
+             "outside support coordinate remains fixed");
+  ExpectNear(pushed[2], -308.0,
+             "near-pivot contact follows requested camera side");
+  if (pushed_axis != 2) {
+    std::cerr << "near-pivot contact selected its support face\n";
+    return 1;
+  }
 
   const std::array<int32_t, 3> submitted = {-8198, -1540, 16942};
   const std::array<int32_t, 3> stale_native = {-8229, -1646, 17607};

@@ -97,6 +97,94 @@ inline bool PushCameraOutOfExpandedBox(
   return true;
 }
 
+inline bool PushCameraToUsableExpandedBoxFace(
+    const std::array<double, 3>& point,
+    const std::array<double, 3>& reference,
+    const std::array<double, 3>& half_extents,
+    size_t excluded_axis, double margin, double minimum_distance,
+    std::array<double, 3>* pushed, size_t* pushed_axis = nullptr) {
+  if (!pushed || excluded_axis >= point.size() ||
+      !std::isfinite(margin) || margin < 0.0 ||
+      !std::isfinite(minimum_distance) || minimum_distance <= 0.0) {
+    return false;
+  }
+  for (size_t axis = 0; axis < point.size(); ++axis) {
+    if (!std::isfinite(point[axis]) || !std::isfinite(reference[axis]) ||
+        !std::isfinite(half_extents[axis]) || half_extents[axis] <= 0.0) {
+      return false;
+    }
+  }
+
+  // If the pivot is just outside one expanded face, keep that coordinate
+  // fixed and slide to the other horizontal face. The complete path then
+  // remains outside the conservative OBB instead of crossing through it.
+  size_t outside_axes = 0;
+  size_t sole_outside_axis = point.size();
+  for (size_t axis = 0; axis < point.size(); ++axis) {
+    if (axis != excluded_axis &&
+        std::abs(point[axis]) >= half_extents[axis]) {
+      ++outside_axes;
+      sole_outside_axis = axis;
+    }
+  }
+
+  std::array<double, 3> reference_direction{};
+  double reference_length_squared = 0.0;
+  for (size_t axis = 0; axis < point.size(); ++axis) {
+    reference_direction[axis] = reference[axis] - point[axis];
+    reference_length_squared +=
+        reference_direction[axis] * reference_direction[axis];
+  }
+  const double reference_length =
+      std::sqrt(reference_length_squared);
+
+  bool found = false;
+  double best_alignment = -std::numeric_limits<double>::infinity();
+  double best_distance = std::numeric_limits<double>::infinity();
+  std::array<double, 3> best = point;
+  size_t best_axis = point.size();
+  constexpr double kComparisonEpsilon = 1.0e-6;
+  for (size_t axis = 0; axis < point.size(); ++axis) {
+    if (axis == excluded_axis ||
+        (outside_axes == 1u && axis == sole_outside_axis)) {
+      continue;
+    }
+    for (double sign : {-1.0, 1.0}) {
+      std::array<double, 3> candidate = point;
+      candidate[axis] =
+          sign * (half_extents[axis] + margin);
+      const double delta = candidate[axis] - point[axis];
+      const double distance = std::abs(delta);
+      if (distance + kComparisonEpsilon < minimum_distance) {
+        continue;
+      }
+      const double alignment =
+          reference_length > kComparisonEpsilon
+              ? delta * reference_direction[axis] /
+                    (distance * reference_length)
+              : 0.0;
+      if (!found ||
+          alignment > best_alignment + kComparisonEpsilon ||
+          (std::abs(alignment - best_alignment) <= kComparisonEpsilon &&
+           distance < best_distance)) {
+        found = true;
+        best_alignment = alignment;
+        best_distance = distance;
+        best = candidate;
+        best_axis = axis;
+      }
+    }
+  }
+  if (!found) {
+    return false;
+  }
+  *pushed = best;
+  if (pushed_axis) {
+    *pushed_axis = best_axis;
+  }
+  return true;
+}
+
 inline std::array<int32_t, 3> SelectCameraMeshPresentationTarget(
     bool post_native_mesh_contact,
     const std::array<int32_t, 3>& submitted,

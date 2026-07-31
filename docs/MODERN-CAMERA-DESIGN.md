@@ -636,6 +636,22 @@ translates its target with the current camera focus, preserving the relative
 safe pose instead of freezing a world point. This changes neither the
 room/wall/floor resolver nor the oriented overlap-pushout operation.
 
+The `0.0.94` test leaves one geometric degeneracy. When the player-side pivot
+grazes the expanded face of moving block 13676, the current orbit ray may have
+only 1--42 units of usable radial length. Exact contraction is collision-safe
+for the protected sphere but is not a usable third-person pose; the screenshot
+shows the resulting partial-black view. The latch itself remains current and
+releases correctly.
+
+Version `0.0.95` does not raise the collision radius or force a minimum point
+through the block. Below the existing 120-unit minimum usable camera distance,
+it selects the requested-side horizontal face of the same expanded OBB. If the
+pivot is already outside another horizontal face, that coordinate is preserved
+so the complete move is a slide around the object rather than a chord through
+it. The candidate remains bounded by the desired arm and is revalidated by the
+native room-volume query. Ordinary radial contacts at 120 units or more,
+walls/floors, presentation ownership and authored shots are unchanged.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

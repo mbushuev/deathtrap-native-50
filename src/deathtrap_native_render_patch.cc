@@ -272,6 +272,7 @@ struct CameraMeshHitDiagnostic {
   double bounds_motion = 0.0;
   bool initial_overlap = false;
   bool overlap_pushout = false;
+  bool near_pivot_escape = false;
   size_t pushout_axis = std::numeric_limits<size_t>::max();
   bool valid = false;
 };
@@ -2606,10 +2607,11 @@ Vec3 CameraVectorCross(const Vec3& a, const Vec3& b) {
           a.x * b.y - a.y * b.x};
 }
 
-bool CameraMeshInitialOverlapPushout(
+bool CameraMeshExpandedBoundsPushout(
     const CameraCollisionMesh& mesh, const Matrix3x4& world,
     const Vec3& point, const Vec3& reference, double radius,
-    double margin, Vec3* pushed, size_t* pushed_axis = nullptr) {
+    double margin, double minimum_distance, Vec3* pushed,
+    size_t* pushed_axis = nullptr) {
   if (!pushed || !mesh.local_bounds_valid ||
       !std::isfinite(radius) || radius <= 0.0) {
     return false;
@@ -2667,9 +2669,16 @@ bool CameraMeshInitialOverlapPushout(
 
   std::array<double, 3> pushed_coordinates{};
   size_t selected_axis = axes.size();
-  if (!PushCameraOutOfExpandedBox(
-          point_coordinates, reference_coordinates, half_extents,
-          vertical_axis, margin, &pushed_coordinates, &selected_axis)) {
+  const bool pushed_valid =
+      minimum_distance > 0.0
+          ? PushCameraToUsableExpandedBoxFace(
+                point_coordinates, reference_coordinates, half_extents,
+                vertical_axis, margin, minimum_distance,
+                &pushed_coordinates, &selected_axis)
+          : PushCameraOutOfExpandedBox(
+                point_coordinates, reference_coordinates, half_extents,
+                vertical_axis, margin, &pushed_coordinates, &selected_axis);
+  if (!pushed_valid) {
     return false;
   }
 
@@ -3154,7 +3163,7 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
   double nearest_object_radius = 0.0;
   size_t nearest_triangle_count = 0;
   bool nearest_initial_overlap = false;
-  bool nearest_overlap_pushout = false;
+  bool nearest_nonradial_pushout = false;
   std::array<int32_t, 3> nearest_target = requested;
   CameraMeshHitDiagnostic nearest_diagnostic;
   const Vec3 origin{static_cast<double>(focus[0]),
@@ -3272,17 +3281,43 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
       constexpr double kOverlapPushoutMargin = 8.0;
       Vec3 pushed{};
       size_t pushout_axis = std::numeric_limits<size_t>::max();
-      if (!CameraMeshInitialOverlapPushout(
+      if (!CameraMeshExpandedBoundsPushout(
               *mesh, current.world, origin, overlap_reference,
               kCameraCollisionSphereRadius, kOverlapPushoutMargin,
-              &pushed, &pushout_axis)) {
+              0.0, &pushed, &pushout_axis)) {
         continue;
       }
-      const double push_distance = std::sqrt(
+      double push_distance = std::sqrt(
           CameraVectorDot(CameraVectorSubtract(pushed, origin),
                           CameraVectorSubtract(pushed, origin)));
+      bool near_pivot_escape = false;
+      if (std::isfinite(push_distance) &&
+          push_distance < kThirdPersonMinimumCameraDistance) {
+        Vec3 usable_face{};
+        size_t usable_axis = std::numeric_limits<size_t>::max();
+        if (CameraMeshExpandedBoundsPushout(
+                *mesh, current.world, origin,
+                Vec3{static_cast<double>(requested[0]),
+                     static_cast<double>(requested[1]),
+                     static_cast<double>(requested[2])},
+                kCameraCollisionSphereRadius, kOverlapPushoutMargin,
+                kThirdPersonMinimumCameraDistance, &usable_face,
+                &usable_axis)) {
+          const double usable_distance = std::sqrt(
+              CameraVectorDot(
+                  CameraVectorSubtract(usable_face, origin),
+                  CameraVectorSubtract(usable_face, origin)));
+          if (std::isfinite(usable_distance) &&
+              usable_distance <= requested_distance) {
+            pushed = usable_face;
+            pushout_axis = usable_axis;
+            push_distance = usable_distance;
+            near_pivot_escape = true;
+          }
+        }
+      }
       if (!std::isfinite(push_distance) ||
-          (nearest_overlap_pushout &&
+          (nearest_nonradial_pushout &&
            push_distance >= nearest_distance)) {
         continue;
       }
@@ -3296,7 +3331,7 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
       nearest_object_radius = static_cast<double>(current.bounds_radius);
       nearest_triangle_count = mesh->triangles.size();
       nearest_initial_overlap = true;
-      nearest_overlap_pushout = true;
+      nearest_nonradial_pushout = true;
       nearest_diagnostic = candidate_diagnostic;
       nearest_diagnostic.node = node;
       nearest_diagnostic.resource = current.render_resource_handle;
@@ -3305,15 +3340,60 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
       nearest_diagnostic.bounds_motion = bounds_motion;
       nearest_diagnostic.initial_overlap = true;
       nearest_diagnostic.overlap_pushout = true;
+      nearest_diagnostic.near_pivot_escape = near_pivot_escape;
       nearest_diagnostic.pushout_axis = pushout_axis;
       continue;
     }
-    if (nearest_overlap_pushout) {
+    if (nearest_nonradial_pushout) {
       continue;
     }
 
     const double safe_distance =
         std::max(0.0, surface_distance - kContactBackoff);
+    if (safe_distance < kThirdPersonMinimumCameraDistance) {
+      constexpr double kNearPivotEscapeMargin = 8.0;
+      Vec3 escaped{};
+      size_t escape_axis = std::numeric_limits<size_t>::max();
+      if (CameraMeshExpandedBoundsPushout(
+              *mesh, current.world, origin,
+              Vec3{static_cast<double>(requested[0]),
+                   static_cast<double>(requested[1]),
+                   static_cast<double>(requested[2])},
+              kCameraCollisionSphereRadius, kNearPivotEscapeMargin,
+              kThirdPersonMinimumCameraDistance, &escaped,
+              &escape_axis)) {
+        const double escape_distance = std::sqrt(
+            CameraVectorDot(CameraVectorSubtract(escaped, origin),
+                            CameraVectorSubtract(escaped, origin)));
+        if (std::isfinite(escape_distance) &&
+            escape_distance <= requested_distance) {
+          nearest_distance = escape_distance;
+          nearest_target = {
+              static_cast<int32_t>(std::lround(escaped.x)),
+              static_cast<int32_t>(std::lround(escaped.y)),
+              static_cast<int32_t>(std::lround(escaped.z))};
+          nearest_node = node;
+          nearest_resource = current.render_resource_handle;
+          nearest_object_radius =
+              static_cast<double>(current.bounds_radius);
+          nearest_triangle_count = mesh->triangles.size();
+          nearest_initial_overlap = false;
+          nearest_nonradial_pushout = true;
+          nearest_diagnostic = candidate_diagnostic;
+          nearest_diagnostic.node = node;
+          nearest_diagnostic.resource =
+              current.render_resource_handle;
+          nearest_diagnostic.bounds_center = current.bounds_center;
+          nearest_diagnostic.bounds_radius = current.bounds_radius;
+          nearest_diagnostic.bounds_motion = bounds_motion;
+          nearest_diagnostic.initial_overlap = false;
+          nearest_diagnostic.overlap_pushout = false;
+          nearest_diagnostic.near_pivot_escape = true;
+          nearest_diagnostic.pushout_axis = escape_axis;
+          continue;
+        }
+      }
+    }
     nearest_distance = std::min(nearest_distance, safe_distance);
     nearest_surface_distance = surface_distance;
     nearest_target = {
@@ -3336,6 +3416,7 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     nearest_diagnostic.bounds_motion = bounds_motion;
     nearest_diagnostic.initial_overlap = false;
     nearest_diagnostic.overlap_pushout = false;
+    nearest_diagnostic.near_pivot_escape = false;
   }
 
   if (!nearest_node) {
@@ -3349,15 +3430,17 @@ bool ClipThirdPersonOrbitAgainstSceneObjects(
     AppendNativeLog(
         "camera_mesh_sweep node=%08llX resource=%llu triangles=%llu "
         "object_radius=%.1f contact=%.1f sphere=%.1f camera_radius=%.1f "
-        "requested=%.1f overlap=%u pushout=%u axis=%lld motion=%.1f",
+        "requested=%.1f overlap=%u pushout=%u escape=%u axis=%lld "
+        "motion=%.1f",
         static_cast<unsigned long long>(nearest_node),
         static_cast<unsigned long long>(nearest_resource),
         static_cast<unsigned long long>(nearest_triangle_count),
         nearest_object_radius, nearest_surface_distance,
         kCameraCollisionSphereRadius, nearest_distance, requested_distance,
         nearest_initial_overlap ? 1u : 0u,
-        nearest_overlap_pushout ? 1u : 0u,
-        nearest_overlap_pushout
+        nearest_diagnostic.overlap_pushout ? 1u : 0u,
+        nearest_diagnostic.near_pivot_escape ? 1u : 0u,
+        nearest_nonradial_pushout
             ? static_cast<long long>(nearest_diagnostic.pushout_axis)
             : -1ll,
         nearest_diagnostic.bounds_motion);
@@ -3478,7 +3561,7 @@ bool CommitImmediateSpringArmContraction(
   // contracted/release lifetime: runtime 0.0.85 proved that doing so breaks
   // native wall/floor/orientation ownership. The endpoint is either a prefix
   // of the already published native focus-to-camera segment or a native-
-  // validated nearest-face depenetration from a pivot-containing scene object.
+  // validated expanded-OBB escape from a near-pivot scene object.
   const std::array<int32_t, 3>& target = submitted;
 
   bool written = SafeWrite(
@@ -3644,7 +3727,8 @@ bool ConfigureCameraWithSceneMeshPushout(
 
   result->mesh_contact = true;
   result->diagnostic = diagnostic;
-  if (diagnostic.overlap_pushout) {
+  if (diagnostic.overlap_pushout ||
+      diagnostic.near_pivot_escape) {
     bool room_blocked = true;
     if (!NativeCameraVolumeBlocked(
             controller, focus, mesh_safe, &room_blocked)) {
@@ -3677,13 +3761,14 @@ bool ConfigureCameraWithSceneMeshPushout(
     AppendNativeLog(
         "camera_post_native_mesh published=%d/%d/%d "
         "safe_target=%d/%d/%d node=%08llX resource=%llu tri=%llu "
-        "overlap_pushout=%u motion=%.1f",
+        "overlap_pushout=%u near_pivot_escape=%u motion=%.1f",
         result->initial_published[0], result->initial_published[1],
         result->initial_published[2], mesh_safe[0], mesh_safe[1],
         mesh_safe[2], static_cast<unsigned long long>(diagnostic.node),
         static_cast<unsigned long long>(diagnostic.resource),
         static_cast<unsigned long long>(diagnostic.triangle_index),
         diagnostic.overlap_pushout ? 1u : 0u,
+        diagnostic.near_pivot_escape ? 1u : 0u,
         diagnostic.bounds_motion);
   }
 
@@ -3891,9 +3976,10 @@ void __cdecl HookMode3Camera(void* controller) {
           camera_focus, orbit, &mesh_safe_endpoint,
           &mesh_orbit_diagnostic);
   if (mesh_orbit_blocked) {
-    if (mesh_orbit_diagnostic.overlap_pushout) {
-      // A pivot-containing object has no meaningful radial "near side".
-      // Preserve the deterministic nearest-face pushout and let the native
+    if (mesh_orbit_diagnostic.overlap_pushout ||
+        mesh_orbit_diagnostic.near_pivot_escape) {
+      // A contained or near-surface pivot has no usable radial "near side".
+      // Preserve the deterministic expanded-OBB escape and let the native
       // room-volume validation below reject or clip it if necessary.
       hard_safe_endpoint = mesh_safe_endpoint;
     } else {
@@ -3912,7 +3998,8 @@ void __cdecl HookMode3Camera(void* controller) {
 
   std::array<int32_t, 3> submitted{};
   if (mesh_orbit_blocked &&
-      mesh_orbit_diagnostic.overlap_pushout) {
+      (mesh_orbit_diagnostic.overlap_pushout ||
+       mesh_orbit_diagnostic.near_pivot_escape)) {
     submitted = hard_safe_endpoint;
     const double pushed_radius =
         CameraPositionDistance(camera_focus, submitted);
@@ -3925,10 +4012,12 @@ void __cdecl HookMode3Camera(void* controller) {
     g_third_person_orbit_state.collision_blocked_release_ticks = 0;
     AppendNativeLog(
         "camera_mesh_overlap_pushout target=%d/%d/%d radius=%.1f "
-        "resource=%llu axis=%llu",
+        "resource=%llu overlap=%u escape=%u axis=%llu",
         submitted[0], submitted[1], submitted[2], pushed_radius,
         static_cast<unsigned long long>(
             mesh_orbit_diagnostic.resource),
+        mesh_orbit_diagnostic.overlap_pushout ? 1u : 0u,
+        mesh_orbit_diagnostic.near_pivot_escape ? 1u : 0u,
         static_cast<unsigned long long>(
             mesh_orbit_diagnostic.pushout_axis));
   } else {
@@ -9036,7 +9125,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.94 focus-relative mesh latch "
+      "Deathtrap native render overlay 0.0.95 near-pivot block escape "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "

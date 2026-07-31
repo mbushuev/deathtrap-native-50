@@ -587,6 +587,25 @@ retain an unverified history point nor become a stale world-space anchor while
 the player moves. Native walls, floors, orientation, overlap pushout geometry
 and authored-camera arbitration are otherwise unchanged.
 
+The `0.0.94` run confirms that fix: moving-block targets advance with the
+focus, the latch releases normally, and the former long-lived frozen camera
+does not recur. The remaining screenshot is a separate near-pivot topology.
+At a grazing angle on resource 13676, the safe radial radius contracts through
+41, 23, 3 and 1.4 units. Adjacent initial-overlap samples choose nearest-face
+pushouts of only 9, 17, 41 and 42 units. All are geometrically outside the
+96-unit expanded surface, but they place the camera centre effectively on its
+pivot and expose an unusable near-plane/visibility view.
+
+Version `0.0.95` uses the already established 120-unit minimum usable camera
+distance as a topology boundary rather than clamping through the blocker. If a
+radial contact or nearest-face depenetration would fall below that distance,
+the expanded object OBB supplies the other horizontal face in the direction
+of the requested orbit. When the pivot is already outside one expanded face,
+that supporting coordinate remains fixed and the escape path slides along the
+outside of the box. A contained pivot selects the requested-side face directly.
+The endpoint must remain within the requested arm and still passes the native
+room-volume validation before publication.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
