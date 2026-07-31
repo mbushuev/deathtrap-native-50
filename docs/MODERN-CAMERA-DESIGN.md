@@ -544,6 +544,21 @@ directly. Thin levers still fail the two-axis camera-diameter rule. Because the
 test happens after native publication on every source tick, any recovery shift
 back into a block is immediately constrained again.
 
+The user reported that `0.0.89` finally handles the blocks but continuously
+pushes and jitters against them. Runtime values show the spring releasing by
+64 units per tick after each successful post-native correction, then entering
+the same mesh and being shortened again. Object recognition and publication
+are correct; obstruction ownership is missing.
+
+Version `0.0.90` feeds the complete desired-arm mesh sweep into the same
+spring state as native wall collision. Native and mesh endpoints are combined
+by nearest safe radius, and either obstruction prevents clear-tick
+accumulation. A sustained block therefore holds one contracted radius instead
+of alternating release and push-out. The post-native phase remains only as a
+safety constraint around `0x2F380` output, preserving the two-stage
+room-then-item architecture without allowing the native history to move the
+camera back through the block.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

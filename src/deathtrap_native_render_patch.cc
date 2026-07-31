@@ -3398,9 +3398,35 @@ void __cdecl HookMode3Camera(void* controller) {
     return;
   }
 
+  // Treat a qualified scene mesh as the same persistent spring-arm
+  // obstruction as native room geometry. Version 0.0.89 only corrected the
+  // final published point, so the next source tick considered the desired arm
+  // clear, extended by 64 units and drove back into the same block. Query the
+  // complete desired arm before stepping the spring and retain the nearer of
+  // the native and scene-mesh endpoints. The post-native pass below remains a
+  // safety net for lateral/vertical shifts introduced by 0x2F380.
+  std::array<int32_t, 3> mesh_safe_endpoint = orbit;
+  CameraMeshHitDiagnostic mesh_orbit_diagnostic;
+  const bool mesh_orbit_blocked =
+      ClipThirdPersonOrbitAgainstSceneObjects(
+          camera_focus, orbit, &mesh_safe_endpoint,
+          &mesh_orbit_diagnostic);
+  if (mesh_orbit_blocked) {
+    const double native_safe_radius =
+        CameraPositionDistance(camera_focus, hard_safe_endpoint);
+    const double mesh_safe_radius =
+        CameraPositionDistance(camera_focus, mesh_safe_endpoint);
+    if (std::isfinite(mesh_safe_radius) &&
+        (!std::isfinite(native_safe_radius) ||
+         mesh_safe_radius < native_safe_radius)) {
+      hard_safe_endpoint = mesh_safe_endpoint;
+    }
+  }
+  const bool spring_arm_blocked = orbit_blocked || mesh_orbit_blocked;
+
   std::array<int32_t, 3> submitted{};
   if (!ResolveThirdPersonSpringArm(
-          camera_focus, orbit, hard_safe_endpoint, orbit_blocked,
+          camera_focus, orbit, hard_safe_endpoint, spring_arm_blocked,
           &submitted)) {
     AppendNativeLog("camera_native_spring resolve_failed");
     return;
@@ -3457,16 +3483,17 @@ void __cdecl HookMode3Camera(void* controller) {
         &published, sizeof(published));
     static uint32_t diagnostic_sequence = 0;
     ++diagnostic_sequence;
-    if (orbit_blocked || submitted != orbit || mesh_pushout.mesh_contact ||
+    if (spring_arm_blocked || submitted != orbit ||
+        mesh_pushout.mesh_contact ||
         (diagnostic_sequence & 15u) == 0u) {
       AppendNativeLog(
           "camera_native_mesh_pushout focus=%d/%d/%d orbit=%d/%d/%d "
           "safe=%d/%d/%d submitted=%d/%d/%d "
           "after_desired=%d/%d/%d after_resolved=%d/%d/%d "
-          "published=%d/%d/%d valid=%u/%u/%u blocked=%u "
+          "published=%d/%d/%d valid=%u/%u/%u blocked=%u/%u "
           "mesh=%u/%u/%u exact=%u passes=%u "
           "initial_published=%d/%d/%d radius=%.1f clear_ticks=%u "
-          "resource=%llu tri=%llu motion=%.1f",
+          "pre_resource=%llu resource=%llu tri=%llu motion=%.1f",
           camera_focus[0], camera_focus[1], camera_focus[2],
           orbit[0], orbit[1], orbit[2],
           hard_safe_endpoint[0], hard_safe_endpoint[1],
@@ -3479,6 +3506,7 @@ void __cdecl HookMode3Camera(void* controller) {
           desired_valid ? 1u : 0u, resolved_valid ? 1u : 0u,
           published_valid ? 1u : 0u,
           orbit_blocked ? 1u : 0u,
+          mesh_orbit_blocked ? 1u : 0u,
           mesh_pushout.mesh_contact ? 1u : 0u,
           mesh_pushout.correction_applied ? 1u : 0u,
           mesh_pushout.exhausted ? 1u : 0u,
@@ -3489,6 +3517,8 @@ void __cdecl HookMode3Camera(void* controller) {
           mesh_pushout.initial_published[2],
           g_third_person_orbit_state.collision_radius,
           g_third_person_orbit_state.collision_clear_ticks,
+          static_cast<unsigned long long>(
+              mesh_orbit_diagnostic.resource),
           static_cast<unsigned long long>(
               mesh_pushout.diagnostic.resource),
           static_cast<unsigned long long>(
@@ -8474,7 +8504,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.89 post-native mesh push-out "
+      "Deathtrap native render overlay 0.0.90 persistent mesh spring contact "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "

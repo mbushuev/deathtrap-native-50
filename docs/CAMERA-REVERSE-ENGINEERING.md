@@ -484,6 +484,22 @@ Moving bounds are no longer discarded; same resource and stable radius are
 still required, player nodes are excluded, and the two-axis 192-unit test
 continues to ignore thin lever geometry.
 
+The user-visible `0.0.89` result established the next defect: blocks were
+recognized, but the camera was repeatedly pushed rather than held at contact.
+The trace shows why. A post-native commit reduced the radius to 657.9, then the
+pre-configure spring saw no native-room obstruction and released through
+721.9, 785.9, 849.9, 913.9 and 977.9. The native publication then crossed
+resource 13676 again and the post pass committed it abruptly to 768.0.
+
+Version `0.0.90` promotes the already verified scene-mesh sweep into the hard
+spring-arm query. The full desired orbit is tested before
+`ResolveThirdPersonSpringArm`; its mesh-safe endpoint is combined with the
+native room endpoint by nearest radius, and either contact keeps the spring's
+blocked state active. This prevents clear ticks and outward release while the
+same desired ray remains obstructed. The post-native sweep remains necessary,
+but only to reject a lateral or vertical `0x2F380` shift that crosses the mesh
+after the spring has selected a safe radial endpoint.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
