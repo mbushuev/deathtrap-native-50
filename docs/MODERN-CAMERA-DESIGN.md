@@ -524,6 +524,26 @@ source tick. Thus a moving block can push the camera out, while static walls,
 floors, unobstructed tracking, spring-arm recovery and authored reveals never
 use the exact-write exception.
 
+The immediate `0.0.88` runtime proved that movement history was the wrong
+authorization signal. It latched 18 unrelated moving nodes, performed zero
+commits, yet the post-native sweep independently found 769 real mesh
+intersections. Resources 13676 and 13678 alone accounted for 378 of them; both
+reported zero snapshot motion at contact. The user saw no visible change.
+
+Version `0.0.89` therefore treats object collision as a phase, not an object
+label. The normal engine call first resolves rooms, walls, floors, sectors,
+orientation and camera history. The actual published camera sphere is then
+tested against large current scene meshes, including translating ones. Only a
+positive intersection permits an exact shorter endpoint on the same already
+native-safe radial segment. This matches the useful room/LOS-then-item-push
+separation in the open TombEngine implementation.
+
+The rejected 0.0.85 global overwrite is not restored: clear ticks, authored
+shots, native walls/floors and mesh-safe recovery results are never written
+directly. Thin levers still fail the two-axis camera-diameter rule. Because the
+test happens after native publication on every source tick, any recovery shift
+back into a block is immediately constrained again.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

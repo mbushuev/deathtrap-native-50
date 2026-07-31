@@ -462,6 +462,28 @@ tick so the block can depenetrate the camera. This is not the rejected
 `0.0.85` global publication model; clear tracking, static contacts, recovery
 and authored shots never enter the direct-write path.
 
+The immediate `0.0.88` user run disproved the gate. It identified 18 other
+moving scene nodes but committed zero camera corrections. At the same time,
+the post-native triangle sweep already reported 769 unsafe publications,
+including 314 contacts with resource 13676 and 64 with 13678. At contact those
+target block nodes had zero adjacent-snapshot bounds motion, so movement
+history could not tell them from stable props and suppressed every safe point.
+
+Version `0.0.89` instead adopts the two-phase architecture demonstrated by the
+open TombEngine camera: room/LOS collision is resolved first, then collidable
+items and static meshes are handled as a separate camera push-out phase.
+Deathtrap Dungeon's `0x2F380` remains the sole room/wall/floor/orientation
+resolver and is called once. Its actual published endpoint is then swept
+against the qualified render meshes. A positive contact alone authorizes the
+shorter point on that already native-resolved radial segment.
+
+Unlike 0.0.85, no clear or ordinary camera tick is overwritten. Unlike the
+older pre-configure mesh pipeline, the sweep observes any lateral/vertical
+shift made by `0x2F380`, so recovery is revalidated after native publication.
+Moving bounds are no longer discarded; same resource and stable radius are
+still required, player nodes are excluded, and the two-axis 192-unit test
+continues to ignore thin lever geometry.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
