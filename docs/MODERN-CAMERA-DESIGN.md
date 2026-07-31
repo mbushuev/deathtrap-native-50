@@ -480,24 +480,6 @@ lateral fallback is appropriate for fixed cameras and unstable for a
 continuously controlled orbit. The diagnostic retail call remains
 transactional and is retained only for authored interaction-shot arbitration.
 
-Runtime `0.0.84` showed that `0x2F380` still applies fixed-camera positional
-history after accepting a clear endpoint. Most submissions were published
-hundreds of world units away from the tested radial segment, producing running
-jolts, apparent attachment to stock camera locations and failed spring-arm
-recovery. It also confirmed the known structural gap in `0x30910`: visible
-static props absent from the room BSP do not block its seven traces.
-
-Version `0.0.85` combines the two verified geometry domains without reviving
-alternate-camera fallback. The native volume query clips walls and portals;
-the existing swept-sphere render-mesh query clips stable static housings,
-stairs and blocks on the same ray. A mesh is eligible only when its scaled
-intrinsic bounds span the 192-unit camera diameter on at least two axes, so thin levers
-and other small interactive details cannot pin the camera. `0x2F380` still
-calculates orientation and sector state, after which the exact collision-
-validated endpoint is committed for ordinary modern-camera ticks. Native-50
-presentation interpolation remains the only positional smoothing between
-those exact source endpoints. Authored lever reveals remain fully retail.
-
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.
