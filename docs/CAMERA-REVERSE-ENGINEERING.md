@@ -381,6 +381,27 @@ interaction reveal, its state changes are rolled back before the real orbit
 pass. The final camera therefore advances native history once per source tick,
 while lever/switch reveals still receive the complete untouched retail result.
 
+The final `0.0.83` runtime trace showed that retained fallback was still the
+wrong abstraction. The fallback survived for over one hundred source ticks,
+while the full mode-3 dispatcher transformed each clear submitted endpoint
+into a different desired and resolved position. The orbit layer and the
+fixed-camera alternate-placement policy therefore continued to fight.
+
+Version `0.0.84` replaces the alternate endpoint with a deterministic radial
+spring arm. A blocked `focus -> orbit` request is binary-searched with the
+verified `0x30910` volume predicate for the farthest clear point on that same
+ray. Contraction is immediate; release waits for consecutive clear samples
+and advances at a bounded rate. The final integer endpoint is queried again,
+so rounding or a portal transition cannot publish an unverified centre.
+
+The clear endpoint is submitted directly through
+`Dungeon.dll+0x2F380(controller, x, y, z, room_or_sector, 1)`. Static
+disassembly confirms that this function calls `0x2F340` to refresh the desired
+camera state and then invokes `0x2DEF0` exactly once. It does not enter the
+`0x2F310 -> 0x2F6D0 -> 0x2F750` blocked-ray alternate search. Authored reveal
+shots still use the untouched full dispatcher after the existing interaction
+arbitration accepts ownership.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short

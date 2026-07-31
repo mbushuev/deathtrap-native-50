@@ -458,6 +458,28 @@ position-history state are restored before the orbit pass. This prevents two
 history integrations per source tick and removes periodic running jolts without
 weakening interaction-camera detection.
 
+Runtime `0.0.83` disproved retained alternate placement as a suitable
+player-controlled orbit model. The cached offset could remain active for more
+than one hundred source ticks, and the complete mode-3 dispatcher still
+re-shaped each independently validated submission. An unchanged focus and
+orbit therefore produced changing desired, resolved and published positions.
+
+Version `0.0.84` removes alternate-camera retention and stops re-entering the
+complete mode-3 dispatcher for the ordinary modern view. The retail `0x30910`
+centre-plus-six-offset volume query remains the collision authority. If the
+requested orbit is blocked, a bounded binary search finds the farthest clear
+point on the exact focus-to-orbit ray and applies a small native-space backoff.
+The spring arm contracts immediately and extends by a bounded amount only
+after consecutive clear samples. Every rounded recovery endpoint is queried
+again before submission.
+
+The resulting clear endpoint is passed once to `0x2F380`, the verified retail
+configure/history/publication function. This preserves native sector
+bookkeeping and camera orientation but bypasses `0x2F750`, whose randomized
+lateral fallback is appropriate for fixed cameras and unstable for a
+continuously controlled orbit. The diagnostic retail call remains
+transactional and is retained only for authored interaction-shot arbitration.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

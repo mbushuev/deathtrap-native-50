@@ -572,24 +572,6 @@ struct Mode3SourceTickState {
 
 Mode3SourceTickState g_mode3_source_tick;
 
-// Retail mode 3 deliberately randomizes its alternate-camera search when the
-// requested focus-to-camera volume is blocked. That is appropriate for the
-// original fixed cameras, but an orbit camera can submit the same blocked ray
-// for many consecutive source ticks. Re-running the search then makes the
-// camera jump between several equally valid sectors. Keep the first native-
-// validated offset and move it with the focus until it can slide back toward
-// the requested orbit, or until the native visibility query invalidates it.
-struct NativeCameraFallbackState {
-  void* controller = nullptr;
-  bool active = false;
-  std::array<int32_t, 3> safe_offset{};
-  uint32_t age_ticks = 0;
-  uint64_t reuses = 0;
-  uint64_t invalidations = 0;
-};
-
-NativeCameraFallbackState g_native_camera_fallback;
-
 // The first retail mode-3 call is a probe used only for authored-camera
 // arbitration. Roll its mutable resolver/history block back when the probe did
 // not take ownership, otherwise the final orbit pass integrates the camera
@@ -740,6 +722,10 @@ using RangedWeaponLaunchFn = void*(__cdecl*)(void* actor,
                                              void* launch_output);
 using UseConsumableFn = void(__cdecl*)(int32_t item_id);
 using Mode3CameraFn = void(__cdecl*)(void* controller);
+using ConfigureCameraFn = void(__cdecl*)(void* controller, int32_t x,
+                                         int32_t y, int32_t z,
+                                         uintptr_t room_or_sector,
+                                         int32_t update_flags);
 using ResolveCameraSectorFn = uintptr_t(__cdecl*)(
     const int32_t* position, uintptr_t seed_sector);
 using CameraVolumeVisibleFn = int(__cdecl*)(
@@ -759,6 +745,7 @@ OffensiveSpellLaunchFn g_original_offensive_spell_launch = nullptr;
 RangedWeaponLaunchFn g_original_ranged_weapon_launch = nullptr;
 UseConsumableFn g_original_use_consumable = nullptr;
 Mode3CameraFn g_original_mode3_camera = nullptr;
+ConfigureCameraFn g_configure_camera = nullptr;
 ResolveCameraSectorFn g_resolve_camera_sector = nullptr;
 CameraVolumeVisibleFn g_camera_volume_visible = nullptr;
 
@@ -1545,182 +1532,6 @@ bool RestoreRetailCameraProbeState(
                    snapshot.bytes.data(), snapshot.bytes.size());
 }
 
-void ResetNativeCameraFallback(const char* reason) {
-  if (g_native_camera_fallback.active && g_debug_log) {
-    AppendNativeLog(
-        "camera_native_fallback release reason=%s age=%u reuses=%llu",
-        reason, g_native_camera_fallback.age_ticks,
-        static_cast<unsigned long long>(g_native_camera_fallback.reuses));
-  }
-  const uint64_t invalidations = g_native_camera_fallback.invalidations;
-  g_native_camera_fallback = {};
-  g_native_camera_fallback.invalidations = invalidations;
-}
-
-std::array<int32_t, 3> CameraPositionFromOffset(
-    const std::array<int32_t, 3>& focus,
-    const std::array<int32_t, 3>& offset) {
-  std::array<int32_t, 3> position{};
-  for (size_t axis = 0; axis < position.size(); ++axis) {
-    const int64_t value = static_cast<int64_t>(focus[axis]) + offset[axis];
-    position[axis] = static_cast<int32_t>(std::clamp<int64_t>(
-        value, std::numeric_limits<int32_t>::min(),
-        std::numeric_limits<int32_t>::max()));
-  }
-  return position;
-}
-
-std::array<int32_t, 3> CameraOffsetFromPositions(
-    const std::array<int32_t, 3>& focus,
-    const std::array<int32_t, 3>& position) {
-  std::array<int32_t, 3> offset{};
-  for (size_t axis = 0; axis < offset.size(); ++axis) {
-    const int64_t value = static_cast<int64_t>(position[axis]) - focus[axis];
-    offset[axis] = static_cast<int32_t>(std::clamp<int64_t>(
-        value, std::numeric_limits<int32_t>::min(),
-        std::numeric_limits<int32_t>::max()));
-  }
-  return offset;
-}
-
-bool IsNativeCameraCandidateClear(
-    void* controller, const std::array<int32_t, 3>& focus,
-    const std::array<int32_t, 3>& candidate) {
-  bool blocked = true;
-  return NativeCameraVolumeBlocked(controller, focus, candidate, &blocked) &&
-         !blocked;
-}
-
-// Advances a retained native-safe camera offset toward the requested orbit.
-// The first attempt follows a short chord; if that chord touches a protrusion,
-// the second attempt retracts the spring arm without changing sides. Repeating
-// these verified steps lets the camera round a switch or stair corner instead
-// of either tunnelling through it or asking the randomized retail fallback for
-// a new unrelated endpoint every frame.
-bool PrepareStableNativeCameraCandidate(
-    void* controller, const std::array<int32_t, 3>& focus,
-    const std::array<int32_t, 3>& requested, bool requested_blocked,
-    std::array<int32_t, 3>* candidate) {
-  if (!controller || !candidate || !g_native_camera_fallback.active ||
-      g_native_camera_fallback.controller != controller) {
-    if (g_native_camera_fallback.active &&
-        g_native_camera_fallback.controller != controller) {
-      ResetNativeCameraFallback("controller_changed");
-    }
-    return false;
-  }
-
-  std::array<int32_t, 3> current = CameraPositionFromOffset(
-      focus, g_native_camera_fallback.safe_offset);
-  if (!IsNativeCameraCandidateClear(controller, focus, current)) {
-    ++g_native_camera_fallback.invalidations;
-    ResetNativeCameraFallback("translated_path_blocked");
-    return false;
-  }
-
-  const double delta_x = static_cast<double>(requested[0] - current[0]);
-  const double delta_y = static_cast<double>(requested[1] - current[1]);
-  const double delta_z = static_cast<double>(requested[2] - current[2]);
-  const double delta = std::hypot(std::hypot(delta_x, delta_z), delta_y);
-  if (!requested_blocked && delta <= 10.0) {
-    *candidate = requested;
-    ResetNativeCameraFallback("requested_path_clear");
-    return false;
-  }
-
-  constexpr double kMaximumSlidePerSourceTick = 64.0;
-  if (std::isfinite(delta) && delta > 1.0) {
-    const double scale = std::min(1.0, kMaximumSlidePerSourceTick / delta);
-    const std::array<int32_t, 3> advanced = {
-        current[0] + static_cast<int32_t>(std::lround(delta_x * scale)),
-        current[1] + static_cast<int32_t>(std::lround(delta_y * scale)),
-        current[2] + static_cast<int32_t>(std::lround(delta_z * scale))};
-    if (IsNativeCameraCandidateClear(controller, focus, advanced)) {
-      current = advanced;
-    } else {
-      const std::array<int32_t, 3> current_offset =
-          CameraOffsetFromPositions(focus, current);
-      const double radius = std::hypot(
-          std::hypot(static_cast<double>(current_offset[0]),
-                     static_cast<double>(current_offset[2])),
-          static_cast<double>(current_offset[1]));
-      constexpr double kRetractionPerSourceTick = 36.0;
-      if (std::isfinite(radius) && radius > 180.0) {
-        const double retract_scale =
-            std::max(0.0, radius - kRetractionPerSourceTick) / radius;
-        const std::array<int32_t, 3> retracted = {
-            focus[0] + static_cast<int32_t>(
-                           std::lround(current_offset[0] * retract_scale)),
-            focus[1] + static_cast<int32_t>(
-                           std::lround(current_offset[1] * retract_scale)),
-            focus[2] + static_cast<int32_t>(
-                           std::lround(current_offset[2] * retract_scale))};
-        if (IsNativeCameraCandidateClear(controller, focus, retracted)) {
-          current = retracted;
-        }
-      }
-    }
-  }
-
-  g_native_camera_fallback.safe_offset =
-      CameraOffsetFromPositions(focus, current);
-  ++g_native_camera_fallback.age_ticks;
-  ++g_native_camera_fallback.reuses;
-  *candidate = current;
-  return true;
-}
-
-bool CaptureNativeCameraFallback(
-    void* controller, const std::array<int32_t, 3>& focus) {
-  if (!controller) {
-    return false;
-  }
-  const uintptr_t base = reinterpret_cast<uintptr_t>(controller);
-  std::array<int32_t, 3> desired{};
-  std::array<int32_t, 3> resolved{};
-  const bool desired_valid = SafeRead(
-      reinterpret_cast<const void*>(
-          base + kCameraControllerDesiredPositionOffset),
-      desired.data(), sizeof(desired));
-  const bool resolved_valid = SafeRead(
-      reinterpret_cast<const void*>(
-          base + kCameraControllerResolvedPositionOffset),
-      resolved.data(), sizeof(resolved));
-
-  const std::array<int32_t, 3>* safe = nullptr;
-  if (desired_valid && IsNativeCameraCandidateClear(controller, focus,
-                                                     desired)) {
-    safe = &desired;
-  } else if (resolved_valid && IsNativeCameraCandidateClear(
-                                   controller, focus, resolved)) {
-    safe = &resolved;
-  }
-  if (!safe) {
-    ++g_native_camera_fallback.invalidations;
-    ResetNativeCameraFallback("retail_fallback_not_clear");
-    return false;
-  }
-
-  const uint64_t invalidations = g_native_camera_fallback.invalidations;
-  g_native_camera_fallback = {};
-  g_native_camera_fallback.controller = controller;
-  g_native_camera_fallback.active = true;
-  g_native_camera_fallback.safe_offset =
-      CameraOffsetFromPositions(focus, *safe);
-  g_native_camera_fallback.age_ticks = 1u;
-  g_native_camera_fallback.invalidations = invalidations;
-  if (g_debug_log) {
-    AppendNativeLog(
-        "camera_native_fallback retain focus=%d/%d/%d safe=%d/%d/%d "
-        "offset=%d/%d/%d",
-        focus[0], focus[1], focus[2], (*safe)[0], (*safe)[1], (*safe)[2],
-        g_native_camera_fallback.safe_offset[0],
-        g_native_camera_fallback.safe_offset[1],
-        g_native_camera_fallback.safe_offset[2]);
-  }
-  return true;
-}
-
 bool ClipThirdPersonOrbitAgainstNativeWorld(
     void* controller, const std::array<int32_t, 3>& focus,
     const std::array<int32_t, 3>& requested,
@@ -2099,7 +1910,6 @@ void ResetThirdPersonOrbit(const char* reason) {
                         g_third_person_orbit_state.applications));
   }
   g_third_person_orbit_state = {};
-  ResetNativeCameraFallback(reason);
 }
 
 bool BuildThirdPersonOrbitPosition(void* controller,
@@ -3274,7 +3084,8 @@ bool CommitImmediateSpringArmContraction(
 }
 
 void __cdecl HookMode3Camera(void* controller) {
-  if (!g_original_mode3_camera || !g_resolve_camera_sector ||
+  if (!g_original_mode3_camera || !g_configure_camera ||
+      !g_resolve_camera_sector ||
       !g_camera_volume_visible || !controller) {
     if (g_original_mode3_camera) {
       g_original_mode3_camera(controller);
@@ -3313,7 +3124,6 @@ void __cdecl HookMode3Camera(void* controller) {
   g_scripted_camera_override_active.store(scripted,
                                            std::memory_order_release);
   if (scripted) {
-    ResetNativeCameraFallback("explicit_reveal");
     if (g_third_person_orbit_state.engaged &&
         !g_third_person_orbit_state.suspended) {
       g_third_person_orbit_state.suspended = true;
@@ -3350,70 +3160,90 @@ void __cdecl HookMode3Camera(void* controller) {
 
   uintptr_t room_holder = 0;
   uintptr_t room_or_sector = 0;
-  uintptr_t endpoint_seed_sector = 0;
   if (!SafeReadValue(reinterpret_cast<const void*>(
                          base + kCameraControllerRoomPointerOffset),
                      &room_holder) ||
       !room_holder ||
       !SafeReadValue(reinterpret_cast<const void*>(room_holder),
                      &room_or_sector) ||
-      !room_or_sector ||
-      !SafeReadValue(reinterpret_cast<const void*>(
-                         base + kCameraControllerEndpointSectorOffset),
-                     &endpoint_seed_sector)) {
+      !room_or_sector) {
     ResetThirdPersonOrbit("room_pointer");
     return;
   }
 
+  // The complete retail mode-3 dispatcher is not a deterministic spring arm:
+  // when the requested ray is blocked it calls 0x2F750, whose alternate
+  // placement search deliberately changes sectors and sides between ticks.
+  // For a player-controlled orbit this produces corner sticking and camera
+  // jumps even with an unchanged focus and input. Use the stock seven-trace
+  // volume predicate as the collision authority, but resolve a blocked arm
+  // only by shortening the exact requested ray. This is the conventional
+  // third-person spring-arm model: immediate contraction, delayed bounded
+  // release and no lateral fallback state.
   bool orbit_blocked = false;
   const bool visibility_query_valid = NativeCameraVolumeBlocked(
       controller, camera_focus, orbit, &orbit_blocked);
-  std::array<int32_t, 3> submitted = orbit;
-  const bool retained_fallback = visibility_query_valid &&
-      PrepareStableNativeCameraCandidate(
-          controller, camera_focus, orbit, orbit_blocked, &submitted);
-
-  // Feed the modern orbit (or a retained native-safe fallback while rounding
-  // an obstruction) into the retail mode-3 dispatcher instead of
-  // trying to replace its collision system. 0x2F6D0 validates this exact
-  // focus/end-point pair through 0x30910. A visible candidate proceeds to the
-  // common 0x2DEF0 resolver; an occluded candidate is sent to 0x2F750, which
-  // searches the same safe alternate position used by the unmodified game.
-  // This retains the stock camera clearance around props and corners and, in
-  // particular, avoids publishing a camera centre by overwriting matrices.
-  uintptr_t focus_sector = 0;
-  uintptr_t endpoint_sector = 0;
-  __try {
-    focus_sector =
-        g_resolve_camera_sector(camera_focus.data(), room_or_sector);
-    endpoint_sector = g_resolve_camera_sector(
-        submitted.data(), endpoint_seed_sector ? endpoint_seed_sector
-                                               : room_or_sector);
-    if (!endpoint_sector && focus_sector) {
-      endpoint_sector =
-          g_resolve_camera_sector(submitted.data(), focus_sector);
-    }
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-    focus_sector = 0;
-    endpoint_sector = 0;
-  }
-  if (!focus_sector || !endpoint_sector ||
-      !SafeWrite(reinterpret_cast<void*>(
-                     base + kCameraControllerEndpointSectorOffset),
-                 &endpoint_sector, sizeof(endpoint_sector)) ||
-       !SafeWrite(reinterpret_cast<void*>(
-                      base + kCameraControllerDesiredPositionOffset),
-                  submitted.data(), sizeof(submitted))) {
-    // The first retail call above already published a valid camera for this
-    // tick. Failing closed here is safer than submitting an unclassified
-    // endpoint or partially mutating the native controller.
-    ResetThirdPersonOrbit("native_orbit_submission");
+  if (!visibility_query_valid) {
+    // The retail probe above already published a valid camera for this tick.
+    // Never guess a world-space endpoint when the native room query is
+    // unavailable.
+    AppendNativeLog("camera_native_spring unavailable");
     return;
   }
 
-  g_original_mode3_camera(controller);
-  if (visibility_query_valid && orbit_blocked && !retained_fallback) {
-    CaptureNativeCameraFallback(controller, camera_focus);
+  std::array<int32_t, 3> hard_safe_endpoint = orbit;
+  if (orbit_blocked &&
+      !ClipThirdPersonOrbitAgainstNativeWorld(
+          controller, camera_focus, orbit, &hard_safe_endpoint)) {
+    AppendNativeLog("camera_native_spring clip_failed");
+    return;
+  }
+
+  std::array<int32_t, 3> submitted{};
+  if (!ResolveThirdPersonSpringArm(
+          camera_focus, orbit, hard_safe_endpoint, orbit_blocked,
+          &submitted)) {
+    AppendNativeLog("camera_native_spring resolve_failed");
+    return;
+  }
+
+  // Release candidates are generated from a previously contracted radius.
+  // Validate the actual rounded endpoint too; a portal boundary need not be
+  // perfectly monotonic after integer conversion.
+  bool submitted_blocked = true;
+  if (!NativeCameraVolumeBlocked(controller, camera_focus, submitted,
+                                 &submitted_blocked)) {
+    AppendNativeLog("camera_native_spring validation_unavailable");
+    return;
+  }
+  if (submitted_blocked) {
+    std::array<int32_t, 3> reclipped{};
+    if (!ClipThirdPersonOrbitAgainstNativeWorld(
+            controller, camera_focus, submitted, &reclipped)) {
+      AppendNativeLog("camera_native_spring validation_failed");
+      return;
+    }
+    submitted = reclipped;
+    g_third_person_orbit_state.collision_radius =
+        CameraPositionDistance(camera_focus, submitted);
+    g_third_person_orbit_state.collision_clear_ticks = 0;
+  }
+
+  // 0x2F380 is the verified common configure/history/publication path used by
+  // retail mode 3 after it already has a camera target. Calling it directly
+  // keeps native orientation, sector bookkeeping and history, but bypasses
+  // the randomized 0x2F750 alternate-camera search in the full dispatcher.
+  bool configured = false;
+  __try {
+    g_configure_camera(controller, submitted[0], submitted[1], submitted[2],
+                       room_or_sector, 1);
+    configured = true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    configured = false;
+  }
+  if (!configured) {
+    AppendNativeLog("camera_native_spring configure_failed");
+    return;
   }
 
   if (g_debug_log) {
@@ -3433,27 +3263,28 @@ void __cdecl HookMode3Camera(void* controller) {
         &published, sizeof(published));
     static uint32_t diagnostic_sequence = 0;
     ++diagnostic_sequence;
-    if (orbit_blocked || (diagnostic_sequence & 15u) == 0u) {
+    if (orbit_blocked || submitted != orbit ||
+        (diagnostic_sequence & 15u) == 0u) {
       AppendNativeLog(
-          "camera_native_dispatch focus=%d/%d/%d orbit=%d/%d/%d "
-          "submitted=%d/%d/%d retained=%u "
+          "camera_native_spring focus=%d/%d/%d orbit=%d/%d/%d "
+          "safe=%d/%d/%d submitted=%d/%d/%d "
           "after_desired=%d/%d/%d after_resolved=%d/%d/%d "
-          "published=%d/%d/%d valid=%u/%u/%u query=%u blocked=%u "
-          "focus_sector=%08llX endpoint_sector=%08llX fallback=%u",
+          "published=%d/%d/%d valid=%u/%u/%u blocked=%u "
+          "radius=%.1f clear_ticks=%u",
           camera_focus[0], camera_focus[1], camera_focus[2],
           orbit[0], orbit[1], orbit[2],
+          hard_safe_endpoint[0], hard_safe_endpoint[1],
+          hard_safe_endpoint[2],
           submitted[0], submitted[1], submitted[2],
-          retained_fallback ? 1u : 0u,
           configured_desired[0], configured_desired[1],
           configured_desired[2], configured_resolved[0],
           configured_resolved[1], configured_resolved[2],
           published.values[9], published.values[10], published.values[11],
           desired_valid ? 1u : 0u, resolved_valid ? 1u : 0u,
           published_valid ? 1u : 0u,
-          visibility_query_valid ? 1u : 0u, orbit_blocked ? 1u : 0u,
-          static_cast<unsigned long long>(focus_sector),
-          static_cast<unsigned long long>(endpoint_sector),
-          desired_valid && configured_desired != submitted ? 1u : 0u);
+          orbit_blocked ? 1u : 0u,
+          g_third_person_orbit_state.collision_radius,
+          g_third_person_orbit_state.collision_clear_ticks);
     }
   }
 }
@@ -8432,7 +8263,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.83 stable native fallback glide "
+      "Deathtrap native render overlay 0.0.84 deterministic native spring arm "
       "(native mode-3 visibility, fallback placement and publication): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "
       "transactional PST text lifetime and tuned controller response "
@@ -8651,9 +8482,12 @@ bool InstallDeathtrapNativeRenderHooks() {
   }
 
   // Optional modern-camera layer. It supplies an orbit candidate at the
-  // mode-3 dispatcher, while the original visibility, fallback placement,
-  // history and final publication path retains ownership.
+  // mode-3 dispatcher, clips the exact spring-arm ray with the native camera
+  // volume query, then submits the clear endpoint through the common retail
+  // configure/history/publication path.
   if (g_third_person_orbit_enabled) {
+    g_configure_camera = reinterpret_cast<ConfigureCameraFn>(
+        g_dungeon_base + kConfigureCameraRva);
     g_resolve_camera_sector = reinterpret_cast<ResolveCameraSectorFn>(
         g_dungeon_base + kResolveCameraSectorRva);
     g_camera_volume_visible = reinterpret_cast<CameraVolumeVisibleFn>(
@@ -8672,7 +8506,7 @@ bool InstallDeathtrapNativeRenderHooks() {
         AppendNativeLog(
             "camera_orbit hook=active rva=%08llX configure=%08llX "
             "mode3_free_path_override=1 cinematic_arbitration=1 "
-            "native_dispatcher=1 native_volume_query=%08llX "
+            "native_radial_spring=1 native_volume_query=%08llX "
             "focus_offset=%03llX mesh_props=0 forced_commit=0 "
             "head_pose=render_only body_safe=1 transition=SAFE_CUT",
             static_cast<unsigned long long>(kMode3CameraRva),
