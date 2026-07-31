@@ -1811,6 +1811,14 @@ bool CameraMeshPresentationLatchActive() {
   return g_camera_mesh_presentation_latch.active;
 }
 
+bool ManualOrbitOwnsPresentation(uint64_t now_ms) {
+  return g_third_person_orbit_state.orbit_input_active_this_tick ||
+         (g_third_person_orbit_state.last_orbit_activity_ms != 0 &&
+          !CameraPresentationFollowInputIdle(
+              now_ms, g_third_person_orbit_state.last_orbit_activity_ms,
+              kCameraPresentationManualOrbitGraceMilliseconds));
+}
+
 void ClearCameraMeshPresentationLatch(const char* reason) {
   uintptr_t resource = 0;
   bool was_active = false;
@@ -1958,7 +1966,11 @@ void UpdateCameraMeshPresentationLatch(
   const bool incoming_usable =
       CameraTargetMeetsMinimumDistance(
           focus, target, kThirdPersonMinimumCameraDistance);
-  if (same_camera && (owner_changed || !incoming_usable)) {
+  const bool manual_orbit_owned =
+      ManualOrbitOwnsPresentation(GetTickCount64());
+  if (CameraMeshLatchRetainsPreviousTarget(
+          same_camera, owner_changed, incoming_usable,
+          manual_orbit_owned)) {
     const std::array<int32_t, 3> retained =
         TranslateCameraTargetWithFocus(
             previous.focus, focus, previous.target);
@@ -2057,13 +2069,8 @@ bool ApplyCameraMeshPresentationLatch(SceneSnapshot* current) {
   if (!current) {
     return false;
   }
-  const uint64_t now_ms = GetTickCount64();
   const bool manual_orbit_owned =
-      g_third_person_orbit_state.orbit_input_active_this_tick ||
-      (g_third_person_orbit_state.last_orbit_activity_ms != 0 &&
-       !CameraPresentationFollowInputIdle(
-           now_ms, g_third_person_orbit_state.last_orbit_activity_ms,
-           kCameraPresentationManualOrbitGraceMilliseconds));
+      ManualOrbitOwnsPresentation(GetTickCount64());
   if (manual_orbit_owned) {
     // A latch target changes only translation. Applying it while the native
     // controller is rotating the camera keeps the new orientation around an
@@ -4517,6 +4524,37 @@ void __cdecl HookMode3Camera(void* controller) {
           &mesh_pushout)) {
     AppendNativeLog("camera_native_mesh_pushout configure_failed");
     return;
+  }
+  const bool latch_active_before_update =
+      CameraMeshPresentationLatchActive();
+  const bool submitted_usable =
+      CameraTargetMeetsMinimumDistance(
+          camera_focus, submitted, kThirdPersonMinimumCameraDistance);
+  const bool submitted_endpoint_clear =
+      submitted_usable && CameraEndpointClearOfSceneObjects(submitted);
+  if (CameraContinuousMeshContactNeedsCommit(
+          mesh_orbit_blocked, mesh_pushout.mesh_contact,
+          latch_active_before_update, submitted_usable,
+          submitted_endpoint_clear)) {
+    std::array<int32_t, 3> committed{};
+    if (CommitImmediateSpringArmContraction(
+            controller, camera_focus, submitted, true, &committed)) {
+      mesh_pushout.correction_applied = true;
+      mesh_pushout.exact_committed = true;
+      mesh_pushout.final_published = committed;
+      mesh_pushout.accepted_target = committed;
+      AppendNativeLog(
+          "camera_mesh_contact_pin result=OK resource=%llu "
+          "target=%d/%d/%d",
+          static_cast<unsigned long long>(
+              mesh_orbit_diagnostic.resource),
+          committed[0], committed[1], committed[2]);
+    } else {
+      AppendNativeLog(
+          "camera_mesh_contact_pin result=FAILED resource=%llu",
+          static_cast<unsigned long long>(
+              mesh_orbit_diagnostic.resource));
+    }
   }
   g_third_person_orbit_state.collision_constrained_this_tick |=
       mesh_pushout.mesh_contact;
@@ -9800,8 +9838,8 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.104 exact-frame fail-open "
-      "presentation "
+      "Deathtrap native render overlay 0.0.105 continuous mesh-contact "
+      "ownership "
       "(complete native wall/floor/orientation result plus transactional "
       "large-mesh constraint): "
       "melee/block/spell/ranged/healing/selector/landing/heavy impact, "

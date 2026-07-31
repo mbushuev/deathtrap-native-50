@@ -23,6 +23,30 @@ struct CameraFloorLimit {
   bool player_root_used = false;
 };
 
+inline bool CameraMeshLatchRetainsPreviousTarget(
+    bool same_camera, bool owner_changed, bool incoming_usable,
+    bool manual_orbit_owned) {
+  // Stable contact normally keeps the preceding face across adjacent mesh
+  // nodes. During a manual orbit, however, a usable incoming target is the
+  // user's current side of the obstruction; retaining the old face makes the
+  // latch jump back as soon as input grace expires.
+  return same_camera && (owner_changed || !incoming_usable) &&
+         !(manual_orbit_owned && incoming_usable);
+}
+
+inline bool CameraContinuousMeshContactNeedsCommit(
+    bool pre_native_mesh_contact, bool post_native_mesh_contact,
+    bool presentation_latch_active, bool submitted_usable,
+    bool submitted_endpoint_clear) {
+  // Once a qualified mesh contact owns the spring arm, pin the already
+  // validated submitted endpoint on a tick where the native history happens
+  // to publish a clear intermediate. Otherwise the next history sample can
+  // re-enter the same mesh and create a clear/contact two-cycle.
+  return pre_native_mesh_contact && !post_native_mesh_contact &&
+         presentation_latch_active && submitted_usable &&
+         submitted_endpoint_clear;
+}
+
 inline CameraFloorLimit ResolveCameraFloorLimit(
     const std::array<int32_t, 3>& focus,
     const std::array<int32_t, 3>& player_root,

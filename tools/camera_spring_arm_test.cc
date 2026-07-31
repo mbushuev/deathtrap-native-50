@@ -197,6 +197,26 @@ int main() {
     std::cerr << "presentation follow accepted invalid input timing\n";
     return 1;
   }
+  if (!CameraMeshLatchRetainsPreviousTarget(
+          true, true, true, false) ||
+      CameraMeshLatchRetainsPreviousTarget(
+          true, true, true, true) ||
+      !CameraMeshLatchRetainsPreviousTarget(
+          true, false, false, true)) {
+    std::cerr << "manual orbit did not own a usable latch retarget\n";
+    return 1;
+  }
+  if (!CameraContinuousMeshContactNeedsCommit(
+          true, false, true, true, true) ||
+      CameraContinuousMeshContactNeedsCommit(
+          true, true, true, true, true) ||
+      CameraContinuousMeshContactNeedsCommit(
+          true, false, false, true, true) ||
+      CameraContinuousMeshContactNeedsCommit(
+          true, false, true, true, false)) {
+    std::cerr << "continuous mesh-contact commit ownership was invalid\n";
+    return 1;
+  }
   if (CameraTargetMeetsMinimumDistance(
           {0, 0, 0}, {10, 0, 0}, 120.0) ||
       CameraTargetMeetsMinimumDistance(

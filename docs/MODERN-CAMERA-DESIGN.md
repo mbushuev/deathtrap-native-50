@@ -792,6 +792,22 @@ that native exact presentation always fails open. Only synthetic midpoint
 phases may be rejected. Manual-orbit latch arbitration and collision-owned
 follow bypass remain unchanged; the first run recorded no follow hard cuts.
 
+The `0.0.104` door run demonstrates that contact ownership must also include
+the native position-history ring. A qualified pre-native mesh contact selected
+one stable 609.5-unit endpoint, but post-native mesh contact appeared only on
+every other tick. The uncorrected clear tick left a 235-unit intermediate in
+history; the following contact tick restored the safe endpoint, producing an
+exact two-position strobe. A retained latch face from before the manual orbit
+could additionally become visible after input grace despite being far from the
+current contact side.
+
+Version `0.0.105` pins the validated submitted endpoint on the clear half of a
+continuous qualified-mesh contact cycle once a latch has established that
+contact. It also lets manual orbit refresh a usable latch target across
+adjacent nodes, while continuing to suppress translation-only latch rendering
+during the gesture. This is a contact-manifold state fix, not additional
+damping or a new collision threshold.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

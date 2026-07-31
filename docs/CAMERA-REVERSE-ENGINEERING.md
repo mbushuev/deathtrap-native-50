@@ -788,6 +788,31 @@ may suppress only synthetic midpoint phases. Source-tick correlation remains
 in midpoint diagnostics. The two independent `0.0.103` ownership changes are
 retained; notably, the same run recorded zero presentation-follow hard cuts.
 
+The `0.0.104` door trace then exposes a deterministic native-history
+two-cycle. With a stationary focus at `-1251/400/14740` and qualified
+pre-contact on resource 12613, the final safe submitted endpoint remains
+`-1682/400/15171`. On alternating ticks, however, `0x2F380` publishes
+`-1527/552/15261`; post-native mesh collision restores the submitted endpoint
+and rewrites history. The next tick publishes the restored endpoint without a
+post-native hit, so no rewrite occurs and the intermediate enters the history
+again. Camera probe therefore alternates the two positions by exactly 235
+units for 18 consecutive samples. This is neither authored-camera takeover nor
+scene transition; both diagnostic counts are zero.
+
+The same contact generation retains an older target `-776/592/14845` across
+adjacent node ownership because it remains independently safe. Once manual
+input grace ends, that stale face can reappear 639--850 units from the current
+contact result.
+
+Version `0.0.105` treats qualified pre-contact plus an existing latch as one
+continuous owner. When the submitted endpoint is minimum-distance usable and
+clear of current scene objects, a post-native clear intermediate still pins
+the submitted point into the native position history. During manual orbit, a
+usable incoming face may replace the retained adjacent-node target; the latch
+is still not rendered until input grace ends. Native walls/floors, first
+contact without an established latch, unsafe endpoints and authored cameras
+do not enter this pin path.
+
 ## Diagnostic run protocol
 
 Set `CameraProbe=1` and `DebugLog=1` under `[Diagnostics]`. For a useful short
