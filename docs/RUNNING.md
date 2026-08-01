@@ -130,18 +130,15 @@ the original durations. It does not affect menus, inventory selectors,
 animation, simulation, input or audio timing.
 
 For one diagnostic run, set `DebugLog=1`, enter actual gameplay and then close
-the game normally. The game directory should contain:
+the game normally. The game's `logs` directory should contain one new file:
 
 ```text
-deathtrap_native_render.log
-deathtrap_native_present.log
+deathtrap-native-YYYYMMDD-HHMMSS-mmm-pidNNNN.log
 ```
 
-The render log must begin with the `Deathtrap native render overlay 0.0.48`
-session line and later contain periodic `tick=` interpolation telemetry. The
-present log must contain `native-only D3D11 swapchain attached`, confirming
-that the required D3D11 path was observed. Return `DebugLog` to `0` after
-verification because synchronous logging is not meant for normal play.
+The shared session log must contain the version banner, periodic `tick=`
+interpolation telemetry and `native-only D3D11 swapchain attached`. A later
+process launch creates another file instead of appending to the old one.
 
 During gameplay, `F11` toggles only the native render-rate modification. This
 provides a direct visual A/B test without restarting the game.
@@ -152,6 +149,11 @@ fast-turn actions, so running with Shift+W no longer leaves mouse turning at
 the slow walking rate. Left click invokes the native primary attack and right
 click invokes parry. The DLL never writes action-table memory and leaves menu
 pointer/click handling on the original game path.
+
+The same installer adds native joystick equivalents for running, fast turning
+and all four directional jump actions. This is required because camera-relative
+movement deliberately uses `JOY_VERT_FORWARDS` rather than synthesizing W; the
+game can therefore resolve `A + left stick` as its original running jump.
 
 Mouse-wheel weapon cycling is implemented in 0.0.24. The retail input table
 has no wheel source, so the proxy observes relative wheel detents without
@@ -293,15 +295,19 @@ chalk and consumable selections require A. `SelectorRadius` and
 The validated 4:3 center is `SelectorCenterY=316`; the retail UI uses an
 upward-growing Y axis with its origin near the bottom edge, not D3D screen
 coordinates. `MovementThresholdPercent=14` is applied to the circular left-
-stick magnitude. `CameraRelativeMovement=0` is the stable shipped mapping and
-uses the game's native tank controls. Keep the experimental value at `0`:
-runtime `0.0.122` proved that `0x44DD0` is not revisited continuously during
-sustained locomotion, so a forward-only camera-relative bridge cannot keep the
-actor aligned with the requested direction.
-`CameraRelativeInvertY=1` corrects the tested controller's physical vertical
-axis before applying the camera basis; use `0` only when another controller
-mapper already supplies the opposite sign.
-`MovementTurnDegreesPerTick=12` limits the controlled per-source-tick turn.
+stick magnitude. Version 0.0.128 feeds forward magnitude through the game's
+native DirectInput joystick poll and `JOY_*` action bindings. With
+`CameraRelativeMovement=1`, desired screen-space direction becomes a bounded
+heading delta at the shared `+0x82750` ground-state dispatcher. The delta is
+published by the engine's own `+0x44DD0` dual writer; native joystick X stays
+neutral and native Y remains the forward/root-motion input. Disabling the
+option retains unmodified native
+joystick tank movement without restoring W/A/S/D. The verified runtime path
+requires `CameraRelativeInvertY=1` for physical up to mean away from the
+camera; this changes only the longitudinal component and leaves left/right
+unchanged. `MovementTurnDegreesPerTick=30` allows a full-speed 180-degree
+course correction in roughly six original game ticks (about 0.36 seconds),
+reducing the wide running arc without bypassing the native heading writer.
 Running engages at `RunThresholdPercent=50` and
 disengages only below `RunReleaseThresholdPercent=30`; this hysteresis prevents
 noisy diagonal samples from interrupting a run with a one-tick walk transition.
@@ -311,6 +317,9 @@ D-pad direction held, choose a slot, and press A to equip or use it; B or
 release cancels. This prevents accidental ranged changes, chalk marks or
 consumption. Set `XInput/Enabled=0` to disable the whole layer, or
 `XInput/BaseBindings=0` to test only the D-pad selector.
+
+With `Diagnostics/DebugLog=1`, render, input and D3D11 present diagnostics all
+use that single timestamped per-launch file under `logs`.
 
 The layout follows two established conventions: the right stick acts as a
 pointer in menus and as camera look in gameplay, while hold, select and release

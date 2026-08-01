@@ -113,9 +113,10 @@ D3D11 settings, first-run verification and troubleshooting.
 - `WeaponWheel/Enabled=0`: disable wheel weapon selection.
 - `WeaponWheel/Invert=1`: reverse wheel direction.
 - XInput controller 0 is enabled in the test config. In third person the left
-  stick selects a camera-relative heading. Large reversals use the native
-  turn-in-place state; locomotion keeps the game's original animation, speed
-  and collision path. Hold LB to use the native side-step actions. A jumps/climbs, X
+  stick selects a camera-relative heading. The shared ground-state dispatcher
+  applies a bounded turn through the engine's canonical heading writer, while
+  native forward locomotion keeps the original animation, speed and collision
+  path. Hold LB to use the native side-step actions. A jumps/climbs, X
   operates, RT attacks, LT blocks, RB casts, and Start opens the menu. Gameplay
   uses one persistent modern third-person camera. Tab enters the game's native
   first-person view, and R3 toggles that same Tab-driven mode; the right stick
@@ -176,13 +177,34 @@ D3D11 settings, first-run verification and troubleshooting.
   A clicks/confirms and skips movies, the left stick or D-pad emits arrow
   navigation, B/Start goes back, and X is an alternate loading/movie skip.
   `MenuRightStickPixelsPerTick=6` controls pointer speed independently.
-- The shipped preset retains the stable retail tank mapping on the left stick.
-  The experimental camera-relative native-heading bridge is disabled after its
-  first runtime tests did not take ownership of the live player turn. Set
-  `CameraRelativeMovement=1` only for a diagnostic build. LB and first person
-  retain the native side-step layout. Running engages at
+- Version 0.0.125 routes the left stick through the retail DirectInput
+  joystick poll and `JOY_*` action bindings instead of synthesizing W/A/S/D.
+  Third-person movement steers relative to the modern camera at the recurring
+  native locomotion callback; native root motion, collision, animation and
+  heading writers remain in charge. LB and first person retain the explicit
+  side-step layout. Running engages at
   `RunThresholdPercent=50` and remains latched until the stick falls below
   `RunReleaseThresholdPercent=30`.
+- Version 0.0.126 replaces the multi-owner ordinary camera with the transfer
+  documented in
+  [`docs/ARKHAM-ASYLUM-CAMERA-TRANSFER.md`](docs/ARKHAM-ASYLUM-CAMERA-TRANSFER.md).
+  The followed pivot now uses bounded chase position/velocity before
+  collision. Render-only follow, mesh presentation latching and old-world
+  tangent/previous-arm ownership no longer replace the accepted source-tick
+  camera transform.
+- Version 0.0.127 removes the intermittent `0x7E530` heading-hook/watchdog
+  movement path, but its replacement was invalid: the retail horizontal
+  joystick action has state-dependent turn semantics and did not converge on
+  a held desired course.
+- Version 0.0.128 uses the statically verified shared ground-state dispatcher
+  at `Dungeon.dll+0x82750`. Native joystick X is neutral, native Y retains
+  forward/root-motion ownership, and the dispatcher submits one bounded
+  shortest-course delta through the canonical dual heading writer at
+  `Dungeon.dll+0x44DD0` before the active state callback.
+- Version 0.0.129 changes only the camera-relative longitudinal sign after the
+  first `0.0.128` runtime proved that physical stick up/down arrived opposite
+  to the camera-space movement basis. Left/right and dispatcher steering are
+  unchanged.
 - D-pad selects the four native inventory categories: up close combat, right
   ranged, down spells, left potions/charms. A short tap cycles the next
   available entry. Holding for 225 ms opens a large radial selector; the right
@@ -197,9 +219,9 @@ D3D11 settings, first-run verification and troubleshooting.
   held; B or release cancels.
 - `XInput/BaseBindings=0` keeps only the category selector and leaves all base
   controller buttons untouched.
-- `Diagnostics/DebugLog=1`: write `deathtrap_native_render.log` and
-  `deathtrap_native_present.log`. Logging is normally off, but remains enabled
-  in the 0.0.41 diagnostic test config.
+- `Diagnostics/DebugLog=1`: write render, input and present diagnostics into
+  one timestamped file per process launch under the game's `logs` directory.
+  A later launch never appends to an earlier session.
 
 ## Building
 

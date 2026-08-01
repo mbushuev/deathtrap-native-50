@@ -2,6 +2,10 @@
 
 #include <cstdint>
 
+// One process session writes all render/input/present diagnostics to one
+// timestamped file under the game's logs subdirectory.
+const wchar_t* GetDeathtrapSessionLogPath();
+
 enum class DeathtrapNativeRenderPatchState : uint32_t {
   kNotAttempted,
   kDisabled,

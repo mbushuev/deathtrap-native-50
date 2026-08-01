@@ -25,6 +25,123 @@ void ExpectTicks(uint32_t actual, uint32_t expected, const char* label) {
 }  // namespace
 
 int main() {
+  const CameraRelativeHeadingTarget camera_behind =
+      CameraRelativeHeadingFromOrbit(0.0, 0.0, 1.0, 1024, false);
+  if (!camera_behind.valid || camera_behind.heading != 512) {
+    std::cerr << "stick-up did not select the course away from the camera\n";
+    return 1;
+  }
+  const CameraRelativeHeadingTarget screen_right =
+      CameraRelativeHeadingFromOrbit(0.0, 1.0, 0.0, 1024, false);
+  if (!screen_right.valid || screen_right.heading != 256) {
+    std::cerr << "stick-right did not select screen-right world heading\n";
+    return 1;
+  }
+  const CameraRelativeHeadingTarget screen_left =
+      CameraRelativeHeadingFromOrbit(0.0, -1.0, 0.0, 1024, false);
+  if (!screen_left.valid || screen_left.heading != 768) {
+    std::cerr << "stick-left did not select screen-left world heading\n";
+    return 1;
+  }
+  const CameraRelativeHeadingTarget stick_down =
+      CameraRelativeHeadingFromOrbit(0.0, 0.0, -1.0, 1024, false);
+  if (!stick_down.valid || stick_down.heading != 0) {
+    std::cerr << "stick-down did not select the course toward the camera\n";
+    return 1;
+  }
+  const CameraRelativeHeadingTarget quarter_orbit_up =
+      CameraRelativeHeadingFromOrbit(
+          3.14159265358979323846 / 2.0, 0.0, 1.0, 1024, false);
+  if (!quarter_orbit_up.valid || quarter_orbit_up.heading != 768) {
+    std::cerr << "camera rotation did not rotate the movement basis\n";
+    return 1;
+  }
+  const CameraRelativeHeadingTarget inverted_up =
+      CameraRelativeHeadingFromOrbit(0.0, 0.0, 1.0, 1024, true);
+  if (!inverted_up.valid || inverted_up.heading != 0) {
+    std::cerr << "camera-relative Y inversion was not isolated\n";
+    return 1;
+  }
+  if (CameraRelativeHeadingFromOrbit(
+          0.0, 0.0, 0.0, 1024, false).valid) {
+    std::cerr << "zero movement stick produced a heading\n";
+    return 1;
+  }
+  const CameraRelativeHeadingStep aligned_steering =
+      StepCameraRelativeHeading(0, 0, 1024, 34);
+  if (aligned_steering.heading_error != 0 ||
+      aligned_steering.heading_delta != 0) {
+    std::cerr << "aligned camera-relative heading changed\n";
+    return 1;
+  }
+  const CameraRelativeHeadingStep right_steering =
+      StepCameraRelativeHeading(256, 0, 1024, 34);
+  if (right_steering.heading_error != 256 ||
+      right_steering.heading_delta != 34) {
+    std::cerr << "right-angle heading was not bounded\n";
+    return 1;
+  }
+  const CameraRelativeHeadingStep wrapped_steering =
+      StepCameraRelativeHeading(1000, 20, 1024, 34);
+  if (wrapped_steering.heading_error != -44 ||
+      wrapped_steering.heading_delta != -34) {
+    std::cerr << "wrapped heading did not choose the shortest turn\n";
+    return 1;
+  }
+  const CameraRelativeHeadingStep near_target =
+      StepCameraRelativeHeading(10, 0, 1024, 34);
+  if (near_target.heading_error != 10 || near_target.heading_delta != 10) {
+    std::cerr << "near heading target overshot\n";
+    return 1;
+  }
+  for (int32_t target = 0; target < 1024; ++target) {
+    for (int32_t initial = 0; initial < 1024; initial += 31) {
+      int32_t current = initial;
+      int32_t previous_absolute_error = 1025;
+      bool converged = false;
+      for (int tick = 0; tick < 18; ++tick) {
+        const CameraRelativeHeadingStep step =
+            StepCameraRelativeHeading(target, current, 1024, 34);
+        const int32_t absolute_error = std::abs(step.heading_error);
+        if (absolute_error > previous_absolute_error) {
+          std::cerr << "bounded heading moved away from its target\n";
+          return 1;
+        }
+        previous_absolute_error = absolute_error;
+        current = (current + step.heading_delta) % 1024;
+        if (current < 0) {
+          current += 1024;
+        }
+        if (current == target) {
+          converged = true;
+          break;
+        }
+      }
+      if (!converged) {
+        std::cerr << "bounded heading did not converge\n";
+        return 1;
+      }
+    }
+  }
+
+  CameraChaseStep chase = StepCameraChase(
+      {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, {1000.0, 0.0, 0.0},
+      0.06, 2.0, 9000.0, 50000.0);
+  if (!(chase.position[0] > 0.0 && chase.position[0] < 1000.0) ||
+      chase.position[1] != 0.0 || chase.position[2] != 0.0 ||
+      chase.velocity[0] <= 0.0 || chase.velocity[0] > 9000.0) {
+    std::cerr << "camera chase did not make bounded target progress\n";
+    return 1;
+  }
+  const CameraChaseStep chase_invalid = StepCameraChase(
+      chase.position, chase.velocity, {1000.0, 0.0, 0.0},
+      0.0, 2.0, 9000.0, 50000.0);
+  if (chase_invalid.position != chase.position ||
+      chase_invalid.velocity != chase.velocity) {
+    std::cerr << "invalid chase timing changed state\n";
+    return 1;
+  }
+
   const CameraFloorLimit matched_floor = ResolveCameraFloorLimit(
       {-9103, -1400, 14999}, {-9103, -1800, 14999}, true);
   if (matched_floor.minimum_y != -1640 ||

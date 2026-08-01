@@ -1005,6 +1005,67 @@ must first identify the recurring engine-owned heading writer used throughout
 sustained locomotion; neither another input threshold nor another synthetic
 A/D/W combination is an acceptable substitute.
 
+Version `0.0.124` supplies that missing boundary. XInput axes now enter through
+the retail DirectInput joystick poll at `+0x51500` and the engine's own
+`JOY_*` action resolver. Sustained runtime probes identify `+0x7E530` as the
+recurring root-motion locomotion callback. It selects walk/run turn sources at
+controller `+0x130/+0x138` immediately before the original
+`+0x44EA0 -> +0x44DD0` heading path. The camera-relative layer temporarily
+substitutes only those values for the duration of the original callback and
+restores them afterward; W/A/S/D are no longer part of third-person movement.
+
+The first runtime pass through that design reached the recurring callback 57
+times but passed its nested UI-owner validation only once. Version `0.0.125`
+therefore carries the already validated controller identity from input
+sampling into locomotion and validates the callback against that exact value.
+If no successful steering call arrives within 250 ms, the input bridge
+automatically restores the physical native joystick axes for the remainder of
+that stick hold. This preserves controllable tank movement on any runtime
+validation failure instead of continuing a forward-only fallback.
+
+## Arkham Asylum ownership transfer (`0.0.126`)
+
+The previous incremental collision work accumulated several independent final
+position owners. Version `0.0.126` replaces that active topology using the
+verified `BmGame.R3rdPersonCamera` responsibility split: bounded chase
+position/velocity is applied to the followed target before collision, while
+collision contraction and recovery remain source-tick state. Render-only
+follow, render mesh latching, previous-world-point retention and tangent
+detours no longer replace the accepted ordinary camera transform.
+
+The evidence, constraints, algorithm and runtime test matrix are recorded in
+[`ARKHAM-ASYLUM-CAMERA-TRANSFER.md`](ARKHAM-ASYLUM-CAMERA-TRANSFER.md).
+
+## Deterministic native-axis steering (`0.0.127`)
+
+The `0.0.126` log proves that `0x7E530` is intermittent across normal stick
+holds: the 250 ms watchdog repeatedly changed a camera-relative request into
+physical tank axes. Version `0.0.127` removes both the hook and this semantic
+fallback. Desired camera-relative course is continuously converted to the
+retail joystick's horizontal turn and forward axes. Forward strength is the
+nonnegative alignment with the desired course, so rearward input first rotates
+in place and can never become native backward movement.
+
+Runtime rejects this design: native horizontal turn is not a continuous
+actuator. Its sign and step are owned by the current locomotion/turn state, so
+closed-loop joystick-axis feedback cannot guarantee convergence.
+
+## Shared dispatcher heading (`0.0.128`)
+
+All ordinary ground states register `Dungeon.dll+0x82750` as controller
+`+0x2EC`. It refreshes input actions and then invokes whichever movement
+callback is active at `+0x2F0`, including forward locomotion and both direct
+turn states. Version `0.0.128` hooks this common pre-state boundary. Left-stick
+magnitude remains native joystick forward input; horizontal joystick input is
+neutral. A bounded camera-relative course delta is applied through the retail
+`+0x44DD0` dual render/collision heading writer before the active callback.
+Special states outside the common ground dispatcher retain complete ownership.
+
+The first runtime validates convergence but shows the physical longitudinal
+axis reversed. Version `0.0.129` enables `CameraRelativeInvertY` by default;
+this is an isolated input-basis correction and does not alter the dispatcher,
+turn step, native forward path or horizontal mapping.
+
 ### Phase E: tuning and release
 
 - Expose sensitivity, inversion, pitch limits, shoulder side, distance,

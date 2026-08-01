@@ -125,6 +125,16 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
             Copy-Item -LiteralPath $path -Destination (Join-Path $backup $backupName) -Force
         }
     }
+    $logsDirectory = Join-Path $game 'logs'
+    New-Item -ItemType Directory -Force -Path $logsDirectory | Out-Null
+    foreach ($legacyLog in @('deathtrap_native_render.log', 'deathtrap_native_present.log')) {
+        $legacyPath = Join-Path $game $legacyLog
+        if (Test-Path -LiteralPath $legacyPath) {
+            $legacyBase = [System.IO.Path]::GetFileNameWithoutExtension($legacyLog)
+            $legacyDestination = Join-Path $logsDirectory "$legacyBase-legacy-$stamp.log"
+            Move-Item -LiteralPath $legacyPath -Destination $legacyDestination
+        }
+    }
     Copy-Item -LiteralPath $dll -Destination (Join-Path $game 'DINPUT.dll') -Force
     Copy-Item -LiteralPath $ini -Destination (Join-Path $game 'deathtrap_native.ini') -Force
     if (-not (Test-Path -LiteralPath $keys)) {
@@ -136,6 +146,20 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
         @('ACTION_TURN_RIGHT', 'MOUSE_HORIZ_RIGHT'),
         @('ACTION_TURN_FAST_LEFT', 'KEY_LSHIFT + MOUSE_HORIZ_LEFT'),
         @('ACTION_TURN_FAST_RIGHT', 'KEY_LSHIFT + MOUSE_HORIZ_RIGHT'),
+        @('ACTION_WALK_FORWARD', 'JOY_VERT_FORWARDS'),
+        @('ACTION_WALK_BACKWARD', 'JOY_VERT_BACKWARDS'),
+        @('ACTION_RUN_FORWARD', 'KEY_LSHIFT + JOY_VERT_FORWARDS'),
+        @('ACTION_RUN_BACKWARD', 'KEY_LSHIFT + JOY_VERT_BACKWARDS'),
+        @('ACTION_TURN_LEFT', 'JOY_HORIZ_LEFT'),
+        @('ACTION_TURN_RIGHT', 'JOY_HORIZ_RIGHT'),
+        @('ACTION_TURN_FAST_LEFT', 'KEY_LSHIFT + JOY_HORIZ_LEFT'),
+        @('ACTION_TURN_FAST_RIGHT', 'KEY_LSHIFT + JOY_HORIZ_RIGHT'),
+        @('ACTION_JUMP_FORWARD', 'KEY_SPACE + JOY_VERT_FORWARDS'),
+        @('ACTION_JUMP_BACKWARD', 'KEY_SPACE + JOY_VERT_BACKWARDS'),
+        @('ACTION_JUMP_LEFT', 'KEY_SPACE + JOY_HORIZ_LEFT'),
+        @('ACTION_JUMP_RIGHT', 'KEY_SPACE + JOY_HORIZ_RIGHT'),
+        @('ACTION_JUMP_LEFT', 'KEY_SPACE + KEY_J'),
+        @('ACTION_JUMP_RIGHT', 'KEY_SPACE + KEY_K'),
         @('ACTION_ATTACK_1', 'MOUSE_LBUTTON'),
         @('ACTION_PARRY', 'MOUSE_RBUTTON'),
         @('ACTION_1ST_PERSON_VIEW', 'KEY_TAB'),

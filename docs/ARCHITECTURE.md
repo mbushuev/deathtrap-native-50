@@ -39,6 +39,22 @@ between pre-collision and resolved positions while running into or alongside
 geometry. Camera, player, enemies, weapons and UI use independently validated
 render paths accumulated during the native-render investigation.
 
+## Modern camera ownership
+
+Version 0.0.126 gives the ordinary gameplay camera one final-position owner at
+the native source tick. A bounded chase position/velocity follows the native
+camera focus and produces the desired yaw/pitch orbit. Native room clipping
+and render-mesh swept-sphere collision then constrain that request; inward
+contraction is immediate and outward recovery is bounded. The accepted point
+is submitted once through the retail configure routine so sector, floor and
+orientation behavior remain native.
+
+Synthetic render phases interpolate that accepted rigid transform only. They
+do not carry an older camera point, latch a mesh face or run another follow
+filter. Explicit authored reveals and first person remain separate owners. The
+Arkham Asylum evidence and the exact Deathtrap transfer boundary are documented
+in [`ARKHAM-ASYLUM-CAMERA-TRANSFER.md`](ARKHAM-ASYLUM-CAMERA-TRANSFER.md).
+
 ## DirectDraw page restoration
 
 Rendering a synthetic phase rotates Deathtrap's legacy DirectDraw page chain.
@@ -134,11 +150,32 @@ creates the radial presentation from native game assets without copying icon
 textures or feeding overlay graphics into interpolation. The D3D11 layer no
 longer paints its old debug squares.
 
-Base controller bindings are emitted as ordinary foreground keyboard/mouse
-transitions. Dedicated J/K bindings call the retail side-step actions without
-the Ctrl+W diagonal collision. The right stick controls the persistent modern
-camera in gameplay and the relative-mouse pointer in menus. The retail action
-parser remains the sole owner of movement, combat, menus and collision.
+Version 0.0.128 feeds forward magnitude into the retail DirectInput joystick
+poll at `Dungeon.dll+0x51500`. The game's own `JOY_*` bindings, deadzone/action
+resolver, locomotion, animation and collision paths remain the movement
+authority; W/A/S/D are not synthesized. The horizontal joystick axis stays
+neutral because the retail turn action changes semantics between movement
+states. Camera-relative third-person steering runs at the verified common
+ground-state dispatcher `Dungeon.dll+0x82750` and submits one bounded
+shortest-angle delta through the canonical dual heading writer at `+0x44DD0`
+before the active state callback. Dedicated J/K bindings remain only
+for LB/first-person side-step because the legacy joystick exposes a single
+horizontal axis. Other controller buttons continue to use the established
+keyboard/mouse bridge. The right stick controls the persistent modern camera
+in gameplay and the relative-mouse pointer in menus.
+
+The shipped `MovementTurnDegreesPerTick=30` limit corresponds to about 500
+degrees per second at the original simulation rate. A half-turn therefore
+converges in approximately six source ticks: fast enough to avoid a broad
+running circle, but still bounded and submitted through the retail writer.
+
+The installer also gives every directional jump a native-axis equivalent.
+Camera-relative movement intentionally publishes only `JOY_VERT_FORWARDS`, so
+`A + left stick` reaches `ACTION_JUMP_FORWARD` after the heading dispatcher has
+steered the actor; native tank/first-person fallback retains forward, backward,
+left and right jump actions. J/K equivalents preserve directional jumping while
+LB or first-person side-step owns the horizontal input. Shift plus native
+horizontal input likewise reaches the retail fast-turn actions.
 
 Pause menus keep the live gameplay pointers, so Start maintains a small
 controller-only context latch rather than guessing from those pointers. Menu

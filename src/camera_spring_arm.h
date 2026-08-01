@@ -23,6 +23,137 @@ struct CameraFloorLimit {
   bool player_root_used = false;
 };
 
+struct CameraChaseStep {
+  std::array<double, 3> position{};
+  std::array<double, 3> velocity{};
+};
+
+struct CameraRelativeHeadingTarget {
+  int32_t heading = 0;
+  bool valid = false;
+};
+
+struct CameraRelativeHeadingStep {
+  int32_t heading_error = 0;
+  int32_t heading_delta = 0;
+};
+
+inline CameraRelativeHeadingTarget CameraRelativeHeadingFromOrbit(
+    double camera_yaw, double stick_x, double stick_y,
+    int32_t heading_units_per_turn, bool invert_y) {
+  CameraRelativeHeadingTarget result;
+  if (heading_units_per_turn <= 0 || !std::isfinite(camera_yaw) ||
+      !std::isfinite(stick_x) || !std::isfinite(stick_y)) {
+    return result;
+  }
+  const double forward_x = -std::sin(camera_yaw);
+  const double forward_z = -std::cos(camera_yaw);
+  const double right_x = -forward_z;
+  const double right_z = forward_x;
+  const double movement_y = invert_y ? -stick_y : stick_y;
+  const double desired_x = forward_x * movement_y + right_x * stick_x;
+  const double desired_z = forward_z * movement_y + right_z * stick_x;
+  if (std::hypot(desired_x, desired_z) <= 0.000001) {
+    return result;
+  }
+  int32_t heading = static_cast<int32_t>(std::lround(
+      std::atan2(desired_x, desired_z) *
+      static_cast<double>(heading_units_per_turn) /
+      (2.0 * 3.14159265358979323846)));
+  heading %= heading_units_per_turn;
+  if (heading < 0) {
+    heading += heading_units_per_turn;
+  }
+  result.heading = heading;
+  result.valid = true;
+  return result;
+}
+
+inline CameraRelativeHeadingStep StepCameraRelativeHeading(
+    int32_t target_heading, int32_t current_heading,
+    int32_t heading_units_per_turn, int32_t maximum_step) {
+  CameraRelativeHeadingStep result;
+  if (heading_units_per_turn <= 0 || maximum_step <= 0) {
+    return result;
+  }
+  const auto normalize = [heading_units_per_turn](int32_t value) {
+    int32_t normalized = value % heading_units_per_turn;
+    if (normalized < 0) {
+      normalized += heading_units_per_turn;
+    }
+    return normalized;
+  };
+  int32_t error = normalize(target_heading) - normalize(current_heading);
+  const int32_t half_turn = heading_units_per_turn / 2;
+  if (error > half_turn) {
+    error -= heading_units_per_turn;
+  } else if (error < -half_turn) {
+    error += heading_units_per_turn;
+  }
+  result.heading_error = error;
+  result.heading_delta = std::clamp(error, -maximum_step, maximum_step);
+  return result;
+}
+
+inline CameraChaseStep StepCameraChase(
+    const std::array<double, 3>& current,
+    const std::array<double, 3>& velocity,
+    const std::array<double, 3>& target,
+    double delta_seconds, double response_hz,
+    double maximum_speed, double maximum_acceleration) {
+  CameraChaseStep result{current, velocity};
+  if (!std::isfinite(delta_seconds) || delta_seconds <= 0.0 ||
+      delta_seconds > 0.25 || !std::isfinite(response_hz) ||
+      response_hz <= 0.0 || !std::isfinite(maximum_speed) ||
+      maximum_speed <= 0.0 || !std::isfinite(maximum_acceleration) ||
+      maximum_acceleration <= 0.0) {
+    return result;
+  }
+
+  // Critically damped chase state: smooth the followed pivot, never the
+  // collision result. This is the transferable part of Arkham Asylum's
+  // ChasePosition/ChaseVelocity architecture. Acceleration and velocity are
+  // bounded so one noisy target sample cannot become a visible camera cut.
+  const double omega = 2.0 * 3.14159265358979323846 * response_hz;
+  std::array<double, 3> acceleration{};
+  double acceleration_length_squared = 0.0;
+  for (size_t axis = 0; axis < 3; ++axis) {
+    if (!std::isfinite(current[axis]) || !std::isfinite(velocity[axis]) ||
+        !std::isfinite(target[axis])) {
+      return CameraChaseStep{target, {0.0, 0.0, 0.0}};
+    }
+    acceleration[axis] =
+        omega * omega * (target[axis] - current[axis]) -
+        2.0 * omega * velocity[axis];
+    acceleration_length_squared += acceleration[axis] * acceleration[axis];
+  }
+  const double acceleration_length = std::sqrt(acceleration_length_squared);
+  if (acceleration_length > maximum_acceleration) {
+    const double scale = maximum_acceleration / acceleration_length;
+    for (double& component : acceleration) {
+      component *= scale;
+    }
+  }
+
+  double velocity_length_squared = 0.0;
+  for (size_t axis = 0; axis < 3; ++axis) {
+    result.velocity[axis] += acceleration[axis] * delta_seconds;
+    velocity_length_squared +=
+        result.velocity[axis] * result.velocity[axis];
+  }
+  const double velocity_length = std::sqrt(velocity_length_squared);
+  if (velocity_length > maximum_speed) {
+    const double scale = maximum_speed / velocity_length;
+    for (double& component : result.velocity) {
+      component *= scale;
+    }
+  }
+  for (size_t axis = 0; axis < 3; ++axis) {
+    result.position[axis] += result.velocity[axis] * delta_seconds;
+  }
+  return result;
+}
+
 inline bool CameraMeshLatchRetainsPreviousTarget(
     bool same_camera, bool owner_changed, bool incoming_usable,
     bool manual_orbit_owned, bool authoritative_incoming) {

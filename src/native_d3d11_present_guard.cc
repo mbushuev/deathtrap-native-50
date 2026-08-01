@@ -63,9 +63,7 @@ void Log(const char* format, ...) {
   static HANDLE file = INVALID_HANDLE_VALUE;
   std::lock_guard<std::mutex> lock(mutex);
   if (file == INVALID_HANDLE_VALUE) {
-    const std::wstring path =
-        ModuleDirectory() + L"\\deathtrap_native_present.log";
-    file = CreateFileW(path.c_str(), FILE_APPEND_DATA,
+    file = CreateFileW(GetDeathtrapSessionLogPath(), FILE_APPEND_DATA,
                        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
                        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {

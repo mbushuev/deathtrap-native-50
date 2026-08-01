@@ -31,22 +31,46 @@ function Add-NativeBindingForTest {
 $sample = @(
     'define    ACTION_LEFT_SIDESTEP    DOWN      KEY_CTRL + KEY_A',
     'define    ACTION_RIGHT_SIDESTEP   DOWN      KEY_CTRL + KEY_D',
+    'define    ACTION_TURN_FAST_LEFT   DOWN      KEY_LSHIFT + KEY_A',
+    'define    ACTION_JUMP_FORWARD     DOWN      KEY_SPACE + KEY_W',
+    'define    ACTION_JUMP_BACKWARD    DOWN      KEY_SPACE + KEY_S',
+    'define    ACTION_JUMP_LEFT        DOWN      KEY_SPACE + KEY_A',
+    'define    ACTION_JUMP_RIGHT       DOWN      KEY_SPACE + KEY_D',
     ''
 ) -join "`r`n"
 
-$sample = Add-NativeBindingForTest -Text $sample `
-    -Action 'ACTION_LEFT_SIDESTEP' -Expression 'KEY_J'
-$sample = Add-NativeBindingForTest -Text $sample `
-    -Action 'ACTION_RIGHT_SIDESTEP' -Expression 'KEY_K'
+$bindings = @(
+    @('ACTION_LEFT_SIDESTEP', 'KEY_J'),
+    @('ACTION_RIGHT_SIDESTEP', 'KEY_K'),
+    @('ACTION_TURN_FAST_LEFT', 'KEY_LSHIFT + JOY_HORIZ_LEFT'),
+    @('ACTION_JUMP_FORWARD', 'KEY_SPACE + JOY_VERT_FORWARDS'),
+    @('ACTION_JUMP_BACKWARD', 'KEY_SPACE + JOY_VERT_BACKWARDS'),
+    @('ACTION_JUMP_LEFT', 'KEY_SPACE + JOY_HORIZ_LEFT'),
+    @('ACTION_JUMP_RIGHT', 'KEY_SPACE + JOY_HORIZ_RIGHT'),
+    @('ACTION_JUMP_LEFT', 'KEY_SPACE + KEY_J'),
+    @('ACTION_JUMP_RIGHT', 'KEY_SPACE + KEY_K')
+)
+foreach ($binding in $bindings) {
+    $sample = Add-NativeBindingForTest -Text $sample `
+        -Action $binding[0] -Expression $binding[1]
+}
+# A second pass must not duplicate any binding.
+foreach ($binding in $bindings) {
+    $sample = Add-NativeBindingForTest -Text $sample `
+        -Action $binding[0] -Expression $binding[1]
+}
 
 if ($sample.Contains("`r`r`n")) {
     throw 'Installer binding insertion produced CR-CR-LF.'
 }
-if ($sample -notmatch '(?m)^define\s+ACTION_LEFT_SIDESTEP\s+DOWN\s+KEY_J\r?$') {
-    throw 'KEY_J binding was not inserted.'
-}
-if ($sample -notmatch '(?m)^define\s+ACTION_RIGHT_SIDESTEP\s+DOWN\s+KEY_K\r?$') {
-    throw 'KEY_K binding was not inserted.'
+foreach ($binding in $bindings) {
+    $actionPattern = [regex]::Escape($binding[0])
+    $expressionPattern = [regex]::Escape($binding[1])
+    $pattern = "(?m)^define\s+$actionPattern\s+DOWN\s+$expressionPattern\r?$"
+    $count = [regex]::Matches($sample, $pattern).Count
+    if ($count -ne 1) {
+        throw "Expected exactly one $($binding[0]) / $($binding[1]) binding, found $count."
+    }
 }
 
 Write-Host 'Installer CRLF binding test passed.'

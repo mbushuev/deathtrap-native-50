@@ -1143,3 +1143,110 @@ ownership or vibration. The experimental hook is not installed while the
 option is disabled. Further camera-relative work is gated on read-only
 identification of the recurring sustained-locomotion heading writer rather
 than another synthetic key-state build.
+
+## 0.0.124 native joystick path and recurring locomotion steering
+
+The retail controller path is now traced end to end. `Dungeon.dll+0x51500`
+polls a `DIJOYSTATE`, returns X/Y in the configured `0..0x4000` range and packs
+16 buttons. `+0x5EC40` converts the axes into
+`JOY_HORIZ_LEFT/RIGHT` and `JOY_VERT_FORWARDS/BACKWARDS`; `+0x5EB20` then feeds
+those inputs into the same action table used by locomotion. The legacy engine
+digitizes the axes after its deadzone, but this remains its genuine joystick
+route rather than a keyboard approximation.
+
+Runtime movement probes also show that `Dungeon.dll+0x7E530` is the recurring
+forward-locomotion callback which produces root motion on sustained runs. On
+every invocation it selects `controller+0x130` or `+0x138` as the walk/run turn
+source and calls the canonical `+0x44EA0 -> +0x44DD0` heading writer. Version
+`0.0.124` hooks this recurring callback, temporarily places the bounded
+camera-relative delta in both native sources, calls the complete original
+callback, and restores them. XInput movement enters through a synthetic native
+joystick state and W/A/S/D remain released. Player position, speed, animation,
+collision, action storage and heading publication remain retail-owned.
+
+The first `0.0.124` run proved that the joystick bridge itself works, but the
+character still ran forward for every requested direction. The session
+contains 137 camera-relative target activations and 57 observed calls to
+`+0x7E530`, yet only one successful `locomotion_heading` record. Re-resolving
+the UI owner from inside the locomotion callback was therefore not a stable
+identity gate.
+
+Version `0.0.125` captures the exact movement-controller pointer alongside the
+input target and compares the recurring callback directly with that captured
+identity. Heading and turn sources are then read from the callback's own
+controller without another UI-owner lookup. A 250 ms runtime watchdog also
+fails closed to the real native joystick tank axes if no locomotion steering
+is confirmed; a failed camera-relative attempt can no longer leave every stick
+direction mapped to forward. All diagnostics now share one timestamped file
+per process launch under `logs/`.
+
+## 0.0.126 Arkham Asylum camera ownership transfer
+
+Read-only extraction of the installed Arkham Asylum GOTY `BmGame.u` produced
+the actual `BmGame.R3rdPersonCamera` class. It separates chase
+position/velocity and bounded smoothing from collision-distance history,
+multi-direction zoom probes, input assistance and authored camera states. The
+important transferable result is ownership: it smooths the followed target,
+not a second independently retained final camera point.
+
+Deathtrap's active ordinary camera previously allowed native history, spring
+radius, mesh correction, old-arm/tangent detours, a render mesh latch and a
+render-only follow filter to disagree. Version `0.0.126` removes the last four
+owners from the active path. A bounded chase target now feeds the current
+yaw/pitch request, then one source-tick solve contracts immediately, recovers
+outward at a bounded rate, calls native configure once and applies an exact
+post-native correction only for a positive qualified render-mesh hit. Detailed
+evidence and transfer limits are in
+[`ARKHAM-ASYLUM-CAMERA-TRANSFER.md`](ARKHAM-ASYLUM-CAMERA-TRANSFER.md).
+
+## 0.0.127 deterministic native-axis movement steering
+
+The `0.0.126` runtime finally makes the `0.0.125` failure deterministic. A
+single run repeatedly enters camera-relative intent, fails the 250 ms
+locomotion-steer watchdog and changes to physical native tank axes during the
+same stick hold. The log contains successful `locomotion_heading` calls as
+well as multiple `no_locomotion_steer` failures. Therefore `0x7E530` is not a
+valid universal per-hold steering boundary, regardless of controller identity.
+
+Version `0.0.127` removes that hook and watchdog from the installed path. It
+retains the proven native DirectInput joystick poll. Each input sample computes
+the desired camera-relative heading and live shortest-angle error. That error
+drives the native horizontal turn axis; the native forward axis is multiplied
+by nonnegative course alignment. An input behind the character consequently
+turns in place, then moves forward as alignment improves. No camera-relative
+direction can emit native backward or switch semantic model while held.
+
+## 0.0.127 result and shared ground-state dispatcher in 0.0.128
+
+The `0.0.127` runtime rejects native horizontal-axis feedback as a steering
+controller. Raw stick normalization and `JOY_HORIZ_LEFT/RIGHT` mapping are
+correct, but the held turn axis does not update heading with one stable law:
+`0x68970` and `0x68C20` apply fixed state-owned steps, while forward
+locomotion uses `0x7E530 -> 0x44EA0 -> 0x44DD0`. Consequently a desired course
+could keep moving forward, reverse apparent turn response, or fail to converge.
+
+Static registration analysis identifies the missing common boundary.
+`0x44EC0` stores an outer state dispatcher at controller `+0x2EC`; ordinary
+ground states register `0x82750` there. That dispatcher refreshes actions with
+`0x57760` and then invokes the current callbacks at `+0x2F0/+0x2F4`. The
+forward state `0x7E530`, 32-unit turn state `0x68970`, and 64-unit turn state
+`0x68C20` all sit underneath this same boundary.
+
+Version `0.0.128` therefore leaves native horizontal input neutral and uses
+native vertical forward input only. Immediately before the active ground-state
+callback, the `0x82750` hook computes one bounded shortest-course delta and
+submits it through the original `0x44DD0` writer. That writer advances
+`[controller+0x10]->node+0x1C` and mirrors heading plus the native accumulator
+to the engine-owned actor/collision publication. Non-ground and scripted states
+that do not use `0x82750` receive no forced heading update.
+
+## 0.0.129 verified longitudinal sign
+
+The first `0.0.128` run validates the shared dispatcher: every logged target
+converges without the former endless native turn state. It also isolates one
+basis error. With a nearly fixed camera, opposite full-scale Y samples select
+targets approximately 512 units apart, but the user's physical up/down result
+is reversed. Version `0.0.129` sets `CameraRelativeInvertY=1`. This negates only
+the longitudinal stick component before the camera-space heading calculation;
+screen-left/right, native forward magnitude and the dispatcher writer are
+unchanged.
