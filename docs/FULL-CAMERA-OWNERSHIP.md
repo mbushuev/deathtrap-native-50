@@ -118,3 +118,32 @@ The runtime hook is not enabled until all of these are true:
 The first in-game build of this architecture will therefore be diagnostic-only
 for room snapshots. It will preserve `0.0.172` behaviour until the memory
 contract is confirmed by one short user run.
+
+## 0.0.173 runtime validation
+
+The completed diagnostic run is
+`<game-directory>\logs\deathtrap-native-20260802-083200-637-pid15520.log`.
+It visited 64 distinct sectors and captured 456 plane records and 238 portal
+records. There are no invalid collection/header/sector records, no invalid
+neighbor pointers and no missing reciprocal portal links. All 64 captured
+focus points are on the contained side of every solid plane; the smallest
+measured signed distance is 51 units.
+
+Plane normals are direction vectors but are not consistently unit Q14. Their
+measured lengths range from 15537.2 to 18536.1. The runtime adapter therefore
+normalizes each vector before applying the 96-unit camera radius. Using a
+fixed `1/16384` scale here would distort the camera footprint by up to about
+13 percent and recreate angle-dependent contacts.
+
+Portal flags observed are `0x19`, `0x1B` and `0x31`. The first two have the
+verified traversal bit `0x08`; the two `0x31` records do not and also carry
+the room-trace skip bit `0x20`. The owned solver retains every portal plane:
+open records transition to their neighbor, while closed records collide as a
+solid face. A closed door cannot become a hole merely because its portal is
+not traversable.
+
+Version 0.0.174 builds and caches the complete normalized room graph, refreshes
+live portal flags on each source tick and runs the pure sphere sweep in shadow
+mode. It logs its endpoint, sector transitions, initial-overlap state and
+blocker next to the unchanged native/hybrid endpoint. No shadow result is
+published in this version.

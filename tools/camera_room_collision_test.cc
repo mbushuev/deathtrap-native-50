@@ -90,8 +90,6 @@ int main() {
     ExpectNear(through.position.x, 5.0, "portal endpoint");
 
     sectors[0].portals[0].open = false;
-    // A closed portal must have a matching solid plane in the runtime adapter.
-    sectors[0].solid_planes.push_back({{0, 0, 0}, {-1, 0, 0}});
     const auto closed = SweepSphereThroughRooms(
         sectors, 0, {-5, 0, 0}, {5, 0, 0}, 1.0, 0.0);
     if (!closed.valid || !closed.blocked) {

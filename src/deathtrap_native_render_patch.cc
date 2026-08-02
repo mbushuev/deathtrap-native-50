@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "camera_spring_arm.h"
+#include "camera_room_collision.h"
 
 namespace {
 
@@ -634,6 +635,18 @@ std::unordered_set<uintptr_t> g_camera_nonblocking_meshes_logged;
 std::unordered_set<uintptr_t> g_camera_renderer_skipped_nodes_logged;
 std::unordered_set<uint64_t> g_camera_room_sectors_logged;
 uintptr_t g_camera_room_collection_base = 0;
+
+struct RuntimeRoomGraphCache {
+  uintptr_t collection = 0;
+  uintptr_t sector_base = 0;
+  int32_t sector_count = 0;
+  std::vector<deathtrap_camera::RoomSector> sectors;
+  std::vector<std::vector<uintptr_t>> portal_addresses;
+  bool attempted = false;
+  bool valid = false;
+};
+
+RuntimeRoomGraphCache g_runtime_room_graph;
 uint64_t g_camera_mesh_cache_hits = 0;
 uint64_t g_camera_mesh_cache_misses = 0;
 uint64_t g_camera_mesh_sweeps = 0;
@@ -1462,6 +1475,246 @@ void LogCameraRoomSectorSnapshot(const std::array<int32_t, 3>& focus,
         reciprocal ? 1u : 0u, point[0], point[1], point[2], normal[0],
         normal[1], normal[2]);
   }
+}
+
+bool ReadRuntimeRoomCollection(uintptr_t* collection, int32_t* sector_count,
+                               uintptr_t* sector_base) {
+  if (!g_dungeon_base || !collection || !sector_count || !sector_base) {
+    return false;
+  }
+  uintptr_t manager = 0;
+  return SafeReadValue(g_dungeon_base + kRetailRoomManagerPointerRva,
+                       &manager) &&
+         manager &&
+         SafeReadValue(reinterpret_cast<const void*>(manager + 0x20u),
+                       collection) &&
+         *collection &&
+         SafeReadValue(reinterpret_cast<const void*>(*collection),
+                       sector_count) &&
+         *sector_count > 0 && *sector_count <= 8192 &&
+         SafeReadValue(reinterpret_cast<const void*>(*collection + 0x04u),
+                       sector_base) &&
+         *sector_base;
+}
+
+bool ReadRuntimeRoomPlane(uintptr_t address,
+                          deathtrap_camera::RoomPlane* plane,
+                          double* normal_length = nullptr) {
+  if (!address || !plane) {
+    return false;
+  }
+  std::array<int32_t, 3> point{};
+  std::array<int32_t, 3> normal{};
+  if (!SafeRead(reinterpret_cast<const void*>(address), point.data(),
+                sizeof(point)) ||
+      !SafeRead(reinterpret_cast<const void*>(address + 0x0Cu), normal.data(),
+                sizeof(normal))) {
+    return false;
+  }
+  const double length = std::sqrt(
+      static_cast<double>(normal[0]) * normal[0] +
+      static_cast<double>(normal[1]) * normal[1] +
+      static_cast<double>(normal[2]) * normal[2]);
+  if (!std::isfinite(length) || length < 1024.0 || length > 32768.0) {
+    return false;
+  }
+  plane->point = {static_cast<double>(point[0]),
+                  static_cast<double>(point[1]),
+                  static_cast<double>(point[2])};
+  plane->inward_normal = {
+      static_cast<double>(normal[0]) / length,
+      static_cast<double>(normal[1]) / length,
+      static_cast<double>(normal[2]) / length};
+  if (normal_length) {
+    *normal_length = length;
+  }
+  return true;
+}
+
+bool RefreshRuntimeRoomPortalFlags() {
+  RuntimeRoomGraphCache& cache = g_runtime_room_graph;
+  if (!cache.valid || cache.portal_addresses.size() != cache.sectors.size()) {
+    return false;
+  }
+  for (size_t sector = 0; sector < cache.sectors.size(); ++sector) {
+    if (cache.portal_addresses[sector].size() !=
+        cache.sectors[sector].portals.size()) {
+      return false;
+    }
+    for (size_t portal = 0;
+         portal < cache.portal_addresses[sector].size(); ++portal) {
+      uint32_t flags = 0;
+      if (!SafeReadValue(reinterpret_cast<const void*>(
+                             cache.portal_addresses[sector][portal] + 0x04u),
+                         &flags)) {
+        return false;
+      }
+      cache.sectors[sector].portals[portal].open = (flags & 0x08u) != 0u;
+    }
+  }
+  return true;
+}
+
+bool BuildRuntimeRoomGraph() {
+  uintptr_t collection = 0;
+  int32_t sector_count = 0;
+  uintptr_t sector_base = 0;
+  if (!ReadRuntimeRoomCollection(&collection, &sector_count, &sector_base)) {
+    g_runtime_room_graph = {};
+    return false;
+  }
+
+  RuntimeRoomGraphCache& cache = g_runtime_room_graph;
+  if (cache.attempted && cache.collection == collection &&
+      cache.sector_base == sector_base && cache.sector_count == sector_count) {
+    return cache.valid && RefreshRuntimeRoomPortalFlags();
+  }
+
+  RuntimeRoomGraphCache rebuilt;
+  rebuilt.collection = collection;
+  rebuilt.sector_base = sector_base;
+  rebuilt.sector_count = sector_count;
+  rebuilt.attempted = true;
+  rebuilt.sectors.resize(static_cast<size_t>(sector_count));
+  rebuilt.portal_addresses.resize(static_cast<size_t>(sector_count));
+  size_t plane_total = 0;
+  size_t portal_total = 0;
+  double minimum_normal_length = std::numeric_limits<double>::infinity();
+  double maximum_normal_length = 0.0;
+
+  for (int32_t index = 0; index < sector_count; ++index) {
+    const uintptr_t sector_address =
+        sector_base + static_cast<uintptr_t>(index) * 0x3Cu;
+    int32_t solid_count = 0;
+    uintptr_t planes = 0;
+    int32_t portal_count = 0;
+    uintptr_t portals = 0;
+    if (!SafeReadValue(reinterpret_cast<const void*>(sector_address + 0x14u),
+                       &solid_count) ||
+        !SafeReadValue(reinterpret_cast<const void*>(sector_address + 0x1Cu),
+                       &planes) ||
+        !SafeReadValue(reinterpret_cast<const void*>(sector_address + 0x20u),
+                       &portal_count) ||
+        !SafeReadValue(reinterpret_cast<const void*>(sector_address + 0x24u),
+                       &portals) ||
+        solid_count < 0 || solid_count > 128 || portal_count < 0 ||
+        portal_count > 128 || (solid_count != 0 && !planes) ||
+        (portal_count != 0 && !portals)) {
+      AppendNativeLog(
+          "camera_owned_room_graph result=SECTOR_HEADER_INVALID index=%d",
+          index);
+      cache = std::move(rebuilt);
+      return false;
+    }
+
+    deathtrap_camera::RoomSector& destination =
+        rebuilt.sectors[static_cast<size_t>(index)];
+    destination.key = sector_address;
+    destination.solid_planes.reserve(static_cast<size_t>(solid_count));
+    for (int32_t plane_index = 0; plane_index < solid_count; ++plane_index) {
+      deathtrap_camera::RoomPlane plane;
+      double normal_length = 0.0;
+      if (!ReadRuntimeRoomPlane(
+              planes + static_cast<uintptr_t>(plane_index) * 0x34u,
+              &plane, &normal_length)) {
+        AppendNativeLog(
+            "camera_owned_room_graph result=PLANE_INVALID sector=%d plane=%d",
+            index, plane_index);
+        cache = std::move(rebuilt);
+        return false;
+      }
+      destination.solid_planes.push_back(plane);
+      minimum_normal_length = std::min(minimum_normal_length, normal_length);
+      maximum_normal_length = std::max(maximum_normal_length, normal_length);
+      ++plane_total;
+    }
+
+    destination.portals.reserve(static_cast<size_t>(portal_count));
+    rebuilt.portal_addresses[static_cast<size_t>(index)].reserve(
+        static_cast<size_t>(portal_count));
+    for (int32_t portal_index = 0; portal_index < portal_count;
+         ++portal_index) {
+      const uintptr_t portal_address =
+          portals + static_cast<uintptr_t>(portal_index) * 0x44u;
+      uint32_t flags = 0;
+      uintptr_t neighbor = 0;
+      deathtrap_camera::RoomPlane plane;
+      if (!SafeReadValue(reinterpret_cast<const void*>(portal_address + 0x04u),
+                         &flags) ||
+          !ReadRoomNeighbor(portal_address, &neighbor) ||
+          neighbor < sector_base ||
+          neighbor >= sector_base +
+              static_cast<uintptr_t>(sector_count) * 0x3Cu ||
+          ((neighbor - sector_base) % 0x3Cu) != 0u ||
+          !ReadRuntimeRoomPlane(portal_address + 0x10u, &plane)) {
+        AppendNativeLog(
+            "camera_owned_room_graph result=PORTAL_INVALID sector=%d "
+            "portal=%d",
+            index, portal_index);
+        cache = std::move(rebuilt);
+        return false;
+      }
+      deathtrap_camera::RoomPortal portal;
+      portal.plane = plane;
+      portal.neighbor = (neighbor - sector_base) / 0x3Cu;
+      portal.open = (flags & 0x08u) != 0u;
+      portal.key = portal_address;
+      destination.portals.push_back(portal);
+      rebuilt.portal_addresses[static_cast<size_t>(index)].push_back(
+          portal_address);
+      ++portal_total;
+    }
+  }
+
+  rebuilt.valid = true;
+  cache = std::move(rebuilt);
+  AppendNativeLog(
+      "camera_owned_room_graph result=READY sectors=%d planes=%llu "
+      "portals=%llu normal=%.1f..%.1f",
+      sector_count, static_cast<unsigned long long>(plane_total),
+      static_cast<unsigned long long>(portal_total), minimum_normal_length,
+      maximum_normal_length);
+  return true;
+}
+
+bool SweepOwnedCameraAgainstRooms(
+    const std::array<int32_t, 3>& focus,
+    const std::array<int32_t, 3>& requested, uintptr_t seed_sector,
+    deathtrap_camera::RoomSweepResult* sweep,
+    std::array<int32_t, 3>* clipped) {
+  if (!sweep || !clipped || !g_resolve_camera_sector ||
+      !BuildRuntimeRoomGraph()) {
+    return false;
+  }
+  uintptr_t start_sector = 0;
+  __try {
+    start_sector = g_resolve_camera_sector(focus.data(), seed_sector);
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    start_sector = 0;
+  }
+  RuntimeRoomGraphCache& cache = g_runtime_room_graph;
+  if (!start_sector || start_sector < cache.sector_base ||
+      start_sector >= cache.sector_base +
+          static_cast<uintptr_t>(cache.sector_count) * 0x3Cu ||
+      ((start_sector - cache.sector_base) % 0x3Cu) != 0u) {
+    return false;
+  }
+  const size_t start_index = (start_sector - cache.sector_base) / 0x3Cu;
+  *sweep = deathtrap_camera::SweepSphereThroughRooms(
+      cache.sectors, start_index,
+      {static_cast<double>(focus[0]), static_cast<double>(focus[1]),
+       static_cast<double>(focus[2])},
+      {static_cast<double>(requested[0]), static_cast<double>(requested[1]),
+       static_cast<double>(requested[2])},
+      kCameraCollisionSphereRadius, 8.0, 32u);
+  if (!sweep->valid) {
+    return false;
+  }
+  *clipped = {
+      static_cast<int32_t>(std::lround(sweep->position.x)),
+      static_cast<int32_t>(std::lround(sweep->position.y)),
+      static_cast<int32_t>(std::lround(sweep->position.z))};
+  return true;
 }
 
 bool DeathtrapGameplayReady(bool require_selector_closed) {
@@ -5189,6 +5442,11 @@ void __cdecl HookMode3Camera(void* controller) {
   // each newly visited sector once and does not participate in the hybrid
   // 0.0.172 collision or publication path.
   LogCameraRoomSectorSnapshot(camera_focus, room_or_sector);
+  deathtrap_camera::RoomSweepResult owned_room_sweep;
+  std::array<int32_t, 3> owned_room_safe = orbit;
+  const bool owned_room_query_valid = g_debug_log &&
+      SweepOwnedCameraAgainstRooms(camera_focus, orbit, room_or_sector,
+                                   &owned_room_sweep, &owned_room_safe);
 
   // The untouched retail callback runs first so authored-camera arbitration
   // can inspect it. If a transient native query failure prevents a new modern
@@ -5247,6 +5505,42 @@ void __cdecl HookMode3Camera(void* controller) {
     AppendNativeLog("camera_native_spring clip_failed held=%u",
                     held ? 1u : 0u);
     return;
+  }
+
+  if (g_debug_log) {
+    static uint64_t owned_room_shadow_sequence = 0;
+    ++owned_room_shadow_sequence;
+    const double native_safe_radius =
+        CameraPositionDistance(camera_focus, hard_safe_endpoint);
+    const double owned_safe_radius =
+        CameraPositionDistance(camera_focus, owned_room_safe);
+    const bool ownership_differs = !owned_room_query_valid ||
+        owned_room_sweep.blocked != orbit_blocked ||
+        (owned_room_query_valid && std::isfinite(native_safe_radius) &&
+         std::isfinite(owned_safe_radius) &&
+         std::abs(native_safe_radius - owned_safe_radius) > 16.0);
+    if (ownership_differs || owned_room_sweep.blocked || orbit_blocked ||
+        (owned_room_shadow_sequence % 30u) == 1u) {
+      AppendNativeLog(
+          "camera_owned_room_shadow valid=%u blocked=%u/%u overlap=%u "
+          "transitions=%llu fraction=%.5f safe=%d/%d/%d "
+          "native=%d/%d/%d radius=%.1f/%.1f blocker=%llu",
+          owned_room_query_valid ? 1u : 0u,
+          owned_room_query_valid && owned_room_sweep.blocked ? 1u : 0u,
+          orbit_blocked ? 1u : 0u,
+          owned_room_query_valid && owned_room_sweep.started_overlapping
+              ? 1u : 0u,
+          static_cast<unsigned long long>(
+              owned_room_query_valid
+                  ? owned_room_sweep.portal_transitions
+                  : 0u),
+          owned_room_query_valid ? owned_room_sweep.fraction : 0.0,
+          owned_room_safe[0], owned_room_safe[1], owned_room_safe[2],
+          hard_safe_endpoint[0], hard_safe_endpoint[1],
+          hard_safe_endpoint[2], owned_safe_radius, native_safe_radius,
+          static_cast<unsigned long long>(
+              owned_room_query_valid ? owned_room_sweep.blocker_key : 0u));
+    }
   }
 
   // Treat a qualified scene mesh as the same persistent spring-arm
@@ -11425,9 +11719,9 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.173 preserves the 0.0.172 "
-      "hybrid camera while recording each live convex room sector once for "
-      "the isolated full-ownership solver; it uses one pre-history "
+      "Deathtrap native render overlay 0.0.174 preserves the 0.0.172 "
+      "hybrid camera while comparing its result against the normalized "
+      "convex-room swept-sphere solver; it uses one pre-history "
       "scene-mesh candidate owner before the retail position-ring average; "
       "accepted boundaries are validated against real render triangles, not "
       "conservative empty OBB space; post-native exact correction remains a "

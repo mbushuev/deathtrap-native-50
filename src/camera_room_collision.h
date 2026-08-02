@@ -161,6 +161,40 @@ inline RoomSweepResult SweepSphereThroughRooms(
       }
     }
 
+    for (const RoomPortal& portal : sector.portals) {
+      if (portal.open) {
+        continue;
+      }
+      const double start_distance = SignedDistance(portal.plane, start);
+      const double end_distance = SignedDistance(portal.plane, desired);
+      const double current_distance =
+          start_distance + (end_distance - start_distance) * current_fraction;
+      if (current_distance + detail::kRoomSweepEpsilon < radius) {
+        result.started_overlapping = true;
+        if (end_distance > current_distance + detail::kRoomSweepEpsilon) {
+          continue;
+        }
+        earliest_solid = current_fraction;
+        solid_key = portal.key;
+        break;
+      }
+      if (end_distance + detail::kRoomSweepEpsilon >= radius ||
+          end_distance >= current_distance) {
+        continue;
+      }
+      const double denominator = start_distance - end_distance;
+      if (denominator <= detail::kRoomSweepEpsilon) {
+        continue;
+      }
+      const double hit_fraction =
+          (start_distance - radius) / denominator;
+      if (hit_fraction + detail::kRoomSweepEpsilon >= current_fraction &&
+          hit_fraction < earliest_solid) {
+        earliest_solid = std::clamp(hit_fraction, current_fraction, 1.0);
+        solid_key = portal.key;
+      }
+    }
+
     double earliest_portal = std::numeric_limits<double>::infinity();
     const RoomPortal* selected_portal = nullptr;
     for (const RoomPortal& portal : sector.portals) {
