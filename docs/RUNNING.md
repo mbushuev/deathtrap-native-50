@@ -340,6 +340,14 @@ consumption. Set `XInput/Enabled=0` to disable the whole layer, or
 With `Diagnostics/DebugLog=1`, render, input and D3D11 present diagnostics all
 use that single timestamped per-launch file under `logs`.
 
+For the v0.0.194 head-mount capture, also keep `HeadJointProbe=1`. The probe is
+read-only and emits `head_joint_probe`/`head_joint_candidate` records only
+while the custom F10/SELECT first-person view is selected. A useful short run
+is: stand for two seconds, walk forward, run forward, walk backward, perform
+two or three attacks, then stand again. It preserves the v0.0.193 camera pose;
+its only purpose is to identify the animated head/neck node before changing
+camera ownership.
+
 The layout follows two established conventions: the right stick acts as a
 pointer in menus and as camera look in gameplay, while hold, select and release
 matches the standard radial-menu interaction.

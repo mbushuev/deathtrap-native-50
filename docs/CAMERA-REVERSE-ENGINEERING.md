@@ -2244,3 +2244,28 @@ Retail first person uses dispatcher mode 4. Synthetic presentation must not
 run mode-4 eye transforms through the modern third-person pivot/minimum-radius
 validator: rejection freezes both inserted phases at the previous full matrix.
 Mode 4 instead follows the generic translation/quaternion interpolation path.
+
+## Animated head attachment probe (v0.0.194)
+
+The custom first-person eye cannot be made body-relative by tuning another
+constant against the player root or `camera_focus`. Live v0.0.192/v0.0.193
+evidence shows those anchors remain stable while the rendered back, head and
+arms move through them. The player subtree captured for render interpolation
+already contains the animated joint world matrices, but packed assets and the
+retail binary expose no reliable textual head-bone name.
+
+Disassembly of the retail mode-4 wrapper at `Dungeon.dll+0x31190` shows why it
+cannot supply the missing mount. The wrapper mutates body visibility before
+calling the inner pose routine at `+0x31270`; the inner routine updates camera
+angles from mouse input and forms its eye from the coordinate reached through
+`controller+0x114`, plus fixed trigonometric offsets (and a fixed vertical
+subtraction). It is actor-relative rather than a verified head-joint transform.
+
+The v0.0.194 `HeadJointProbe` is therefore source-snapshot-only. It enumerates
+descendants of the resolved player render node, filters a generous upper-body
+neighbourhood, and logs the 24 highest/central candidates every ten source
+ticks. Address, parent, depth, child count, resource, flags, local/world
+translation, player-relative translation and bounds metadata are retained.
+The camera output itself remains behaviourally identical to v0.0.193; the next
+implementation must be selected from a short animated capture rather than
+from another static height guess.

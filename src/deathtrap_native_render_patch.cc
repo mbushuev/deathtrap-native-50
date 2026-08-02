@@ -595,6 +595,7 @@ bool g_music_track_fix_enabled = true;
 std::mutex g_native_log_mutex;
 HANDLE g_native_log_file = INVALID_HANDLE_VALUE;
 bool g_camera_probe_enabled = false;
+bool g_head_joint_probe_enabled = false;
 CameraProbeSnapshot g_camera_probe_previous;
 std::string g_camera_probe_log_buffer;
 bool g_third_person_orbit_enabled = false;
@@ -3493,6 +3494,134 @@ bool SceneNodeDescendsFrom(const SceneSnapshot& scene, uintptr_t node,
     node = entry->second.parent;
   }
   return false;
+}
+
+struct HeadJointProbeCandidate {
+  uintptr_t node = 0;
+  uintptr_t parent = 0;
+  uintptr_t resource = 0;
+  uint32_t flags = 0;
+  uint32_t depth = 0;
+  uint32_t children = 0;
+  int32_t relative_x = 0;
+  int32_t relative_y = 0;
+  int32_t relative_z = 0;
+  int64_t horizontal_distance_squared = 0;
+  const NodeTransform* transform = nullptr;
+};
+
+void ProbePlayerHeadJoints(const SceneSnapshot& scene, uint64_t source_tick) {
+  if (!g_head_joint_probe_enabled || !g_debug_log ||
+      !CustomHeadViewSelected() || !scene.player ||
+      (source_tick % 10u) != 0u) {
+    return;
+  }
+
+  const auto player_entry = scene.nodes.find(scene.player);
+  if (player_entry == scene.nodes.end()) {
+    AppendNativeLog("head_joint_probe tick=%llu valid=0 reason=PLAYER_NODE",
+                    static_cast<unsigned long long>(source_tick));
+    return;
+  }
+
+  std::unordered_map<uintptr_t, uint32_t> child_counts;
+  child_counts.reserve(scene.nodes.size());
+  for (const auto& [node, transform] : scene.nodes) {
+    if (node != scene.player && transform.parent) {
+      ++child_counts[transform.parent];
+    }
+  }
+
+  const auto& root_world = player_entry->second.world.values;
+  const int32_t root_x = root_world[9];
+  const int32_t root_y = root_world[10];
+  const int32_t root_z = root_world[11];
+  std::vector<HeadJointProbeCandidate> candidates;
+  candidates.reserve(32u);
+  for (const auto& [node, transform] : scene.nodes) {
+    if (node == scene.player || !SceneNodeDescendsFrom(scene, node,
+                                                       scene.player)) {
+      continue;
+    }
+
+    const int32_t relative_x = transform.world.values[9] - root_x;
+    const int32_t relative_y = transform.world.values[10] - root_y;
+    const int32_t relative_z = transform.world.values[11] - root_z;
+    const int64_t horizontal_distance_squared =
+        static_cast<int64_t>(relative_x) * relative_x +
+        static_cast<int64_t>(relative_z) * relative_z;
+    // Keep the complete torso/head neighbourhood. The generous limits retain
+    // animated hands and weapons as negative examples, while excluding the
+    // rest of the room and keeping each diagnostic session compact.
+    if (relative_y < 0 || relative_y > 1400 ||
+        horizontal_distance_squared > 900LL * 900LL) {
+      continue;
+    }
+
+    uint32_t depth = 0;
+    uintptr_t ancestor = node;
+    for (; ancestor && depth < 128u; ++depth) {
+      if (ancestor == scene.player) {
+        break;
+      }
+      const auto ancestor_entry = scene.nodes.find(ancestor);
+      if (ancestor_entry == scene.nodes.end() ||
+          ancestor_entry->second.parent == ancestor) {
+        break;
+      }
+      ancestor = ancestor_entry->second.parent;
+    }
+    if (ancestor != scene.player) {
+      continue;
+    }
+
+    candidates.push_back({
+        node, transform.parent, transform.render_resource_handle,
+        transform.flags, depth, child_counts[node], relative_x, relative_y,
+        relative_z, horizontal_distance_squared, &transform});
+  }
+
+  std::sort(candidates.begin(), candidates.end(),
+            [](const HeadJointProbeCandidate& left,
+               const HeadJointProbeCandidate& right) {
+              if (left.relative_y != right.relative_y) {
+                return left.relative_y > right.relative_y;
+              }
+              if (left.horizontal_distance_squared !=
+                  right.horizontal_distance_squared) {
+                return left.horizontal_distance_squared <
+                       right.horizontal_distance_squared;
+              }
+              return left.node < right.node;
+            });
+
+  constexpr size_t kMaximumLoggedCandidates = 24u;
+  const size_t logged =
+      std::min(candidates.size(), kMaximumLoggedCandidates);
+  AppendNativeLog(
+      "head_joint_probe tick=%llu valid=1 player=%08llX root=%d/%d/%d "
+      "candidates=%zu logged=%zu",
+      static_cast<unsigned long long>(source_tick),
+      static_cast<unsigned long long>(scene.player), root_x, root_y, root_z,
+      candidates.size(), logged);
+  for (size_t rank = 0; rank < logged; ++rank) {
+    const HeadJointProbeCandidate& candidate = candidates[rank];
+    const auto& world = candidate.transform->world.values;
+    const auto& local = candidate.transform->local.values;
+    AppendNativeLog(
+        "head_joint_candidate tick=%llu rank=%zu node=%08llX "
+        "parent=%08llX depth=%u children=%u resource=%08llX flags=%08X "
+        "local=%d/%d/%d world=%d/%d/%d rel=%d/%d/%d bounds=%u/%d",
+        static_cast<unsigned long long>(source_tick), rank,
+        static_cast<unsigned long long>(candidate.node),
+        static_cast<unsigned long long>(candidate.parent), candidate.depth,
+        candidate.children,
+        static_cast<unsigned long long>(candidate.resource), candidate.flags,
+        local[9], local[10], local[11], world[9], world[10], world[11],
+        candidate.relative_x, candidate.relative_y, candidate.relative_z,
+        candidate.transform->bounds_valid ? 1u : 0u,
+        candidate.transform->bounds_radius);
+  }
 }
 
 Vec3 CameraMeshPointToWorld(const Matrix3x4& matrix,
@@ -13210,6 +13339,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
       const uint64_t source_tick =
           g_source_ticks.fetch_add(1, std::memory_order_relaxed) + 1;
       ProbeCameraState(context, exact, source_tick);
+      ProbePlayerHeadJoints(exact, source_tick);
       if (exact.nodes.empty() || !exact.root) {
         ResetSceneHistory();
       } else if (!g_previous_snapshot.nodes.empty() &&
@@ -13253,6 +13383,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   const uint64_t source_tick =
       g_source_ticks.fetch_add(1, std::memory_order_relaxed) + 1;
   ProbeCameraState(context, current, source_tick);
+  ProbePlayerHeadJoints(current, source_tick);
   SampleUiEligibility();
   if (scene_history_boundary) {
     CallOriginalRenderPresentWait(context, wait);
@@ -13551,6 +13682,8 @@ void InitializePatchState() {
       ConfiguredInteger(L"Audio", L"FixMusicTracks", 1) != 0;
   g_camera_probe_enabled =
       ConfiguredInteger(L"Diagnostics", L"CameraProbe", 0) != 0;
+  g_head_joint_probe_enabled =
+      ConfiguredInteger(L"Diagnostics", L"HeadJointProbe", 0) != 0;
   g_weapon_wheel_enabled = ConfiguredWeaponWheelEnabled();
   g_weapon_wheel_invert = ConfiguredWeaponWheelInvert();
   g_xinput_enabled =
@@ -13767,7 +13900,9 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.193 binds the immersive eye to "
+      "Deathtrap native render overlay 0.0.194 adds a read-only animated "
+      "head-joint probe while preserving the 0.0.193 immersive camera; "
+      "0.0.193 binds the immersive eye to "
       "the stable player focus, corrects its look-at orientation and keeps "
       "the body-visible placement; "
       "it keeps the Steam "
@@ -13855,6 +13990,8 @@ void InitializePatchState() {
       g_ui_message_lifetime_patched ? 1u : 0u,
       g_pst_message_lifetime_ticks,
       g_pst_message_lifetime_patched ? 1u : 0u);
+  AppendNativeLog("diagnostics head_joint_probe=%u interval=10 max_candidates=24",
+                  g_head_joint_probe_enabled ? 1u : 0u);
   g_state.store(DeathtrapNativeRenderPatchState::kActive,
                 std::memory_order_release);
 }

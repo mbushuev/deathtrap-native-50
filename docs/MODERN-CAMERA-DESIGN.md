@@ -2057,3 +2057,26 @@ Retail first person is presentation state, not a third-person spring arm. Its
 mode-4 matrices use generic quaternion interpolation and never enter the
 pivot-relative validation/fallback branch that intentionally constrains the
 modern mode-3 orbit.
+
+## 0.0.194: skeletal attachment must precede another placement change
+
+The live v0.0.193 result proves that `camera_focus` is rigid relative to the
+player root but not to the visible animated upper body. Raising or advancing
+that anchor again cannot solve the defect: the spine, neck, head, arms and
+weapon continue to animate inside the root transform, so the model visibly
+slides through a root-relative eye during locomotion.
+
+The next camera owner must consume a world-space head or neck joint from the
+exact captured player subtree, apply a small offset in that joint's local
+forward/up basis, and begin collision from the resulting animated eye. The
+retail mode-4 code is not a shortcut: disassembly shows it also constructs its
+eye from an actor-relative coordinate plus trigonometric offsets, while its
+wrapper hides the body.
+
+Version 0.0.194 deliberately preserves the v0.0.193 pose and adds a read-only
+source-tick probe. While custom first person is active it samples plausible
+player-subtree nodes every ten source ticks and records parent, depth, direct
+child count, resource, flags, local/world translation and player-relative
+translation. Idle, forward, backward and attack samples distinguish a stable
+head/neck branch from hands, sword and decorative meshes before any joint is
+allowed to own the camera.
