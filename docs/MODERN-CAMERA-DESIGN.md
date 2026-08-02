@@ -2328,3 +2328,16 @@ thread-local stage ownership and active F10 movement are all required. This
 covers walking, running and state transitions without enumerating animation
 callbacks, while non-player transforms and collision correction remain
 retail-owned.
+
+## 0.0.209: locate the host-side endpoint writer before changing ownership
+
+The complete movement-stage implementation still leaves a large forward
+endpoint change between successive DLL update calls. Since every observed
+root contribution inside `+0x810A0` is now redirected correctly, extending
+the transaction again would be an unbounded guess.
+
+Version 0.0.209 preserves v0.0.208 behavior and uses a one-shot protected-page
+watch between `cache_1CCC0` and the next movement stage. It records the exact
+instruction and module of the first hidden player-root write, then removes
+itself. The result decides whether the final solution belongs at a host-side
+animation publication, collision endpoint, or presentation boundary.

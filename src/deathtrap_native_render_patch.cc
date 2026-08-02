@@ -10432,6 +10432,174 @@ struct MovementStageSample {
   bool bounds_b_valid = false;
 };
 
+struct HiddenPlayerRootWriteWatch {
+  uintptr_t page = 0;
+  uintptr_t player_root = 0;
+  uintptr_t write_address = 0;
+  uintptr_t instruction = 0;
+  DWORD original_protection = 0;
+  DWORD thread_id = 0;
+  DWORD rearm_thread_id = 0;
+  bool armed = false;
+  bool rearm_after_single_step = false;
+  bool hit = false;
+};
+
+HiddenPlayerRootWriteWatch g_hidden_root_write_watch{};
+PVOID g_hidden_root_write_veh = nullptr;
+std::atomic<bool> g_hidden_root_writer_identified{false};
+
+LONG CALLBACK HiddenPlayerRootWriteVectoredHandler(
+    EXCEPTION_POINTERS* exception) {
+  if (!exception || !exception->ExceptionRecord ||
+      !exception->ContextRecord) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  HiddenPlayerRootWriteWatch& watch = g_hidden_root_write_watch;
+  const DWORD code = exception->ExceptionRecord->ExceptionCode;
+  if (code == EXCEPTION_SINGLE_STEP &&
+      watch.rearm_after_single_step && watch.page &&
+      watch.rearm_thread_id == GetCurrentThreadId()) {
+    DWORD ignored = 0;
+    VirtualProtect(reinterpret_cast<void*>(watch.page), 4096u,
+                   PAGE_READONLY, &ignored);
+    watch.rearm_after_single_step = false;
+    watch.rearm_thread_id = 0;
+#if defined(_M_IX86)
+    exception->ContextRecord->EFlags &= ~0x100u;
+#endif
+    return EXCEPTION_CONTINUE_EXECUTION;
+  }
+  if (code != EXCEPTION_ACCESS_VIOLATION || !watch.armed || !watch.page ||
+      exception->ExceptionRecord->NumberParameters < 2u ||
+      exception->ExceptionRecord->ExceptionInformation[0] != 1u) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+
+  const uintptr_t address = static_cast<uintptr_t>(
+      exception->ExceptionRecord->ExceptionInformation[1]);
+  if (address < watch.page || address >= watch.page + 4096u) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+
+  DWORD ignored = 0;
+  VirtualProtect(reinterpret_cast<void*>(watch.page), 4096u,
+                 watch.original_protection, &ignored);
+  if (address >= watch.player_root &&
+      address < watch.player_root + 3u * sizeof(int32_t)) {
+    watch.write_address = address;
+#if defined(_M_IX86)
+    watch.instruction = exception->ContextRecord->Eip;
+#endif
+    watch.hit = true;
+    watch.thread_id = GetCurrentThreadId();
+    watch.armed = false;
+    watch.rearm_after_single_step = false;
+    return EXCEPTION_CONTINUE_EXECUTION;
+  }
+
+  watch.rearm_after_single_step = true;
+  watch.rearm_thread_id = GetCurrentThreadId();
+#if defined(_M_IX86)
+  exception->ContextRecord->EFlags |= 0x100u;
+#endif
+  return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+void FlushHiddenPlayerRootWriteWatch() {
+  HiddenPlayerRootWriteWatch& watch = g_hidden_root_write_watch;
+  if (watch.armed && watch.page) {
+    DWORD ignored = 0;
+    VirtualProtect(reinterpret_cast<void*>(watch.page), 4096u,
+                   watch.original_protection, &ignored);
+  }
+  watch.armed = false;
+  watch.rearm_after_single_step = false;
+  if (!watch.hit) {
+    watch = {};
+    return;
+  }
+
+  uintptr_t module_base = 0;
+  const char* module_name = "UNKNOWN";
+  const uintptr_t dungeon_base =
+      reinterpret_cast<uintptr_t>(g_dungeon_base);
+  const uintptr_t executable_base = reinterpret_cast<uintptr_t>(
+      GetModuleHandleW(nullptr));
+  if (watch.instruction >= dungeon_base &&
+      watch.instruction < dungeon_base + 0x00400000u) {
+    module_base = dungeon_base;
+    module_name = "DUNGEON";
+  } else if (executable_base && watch.instruction >= executable_base &&
+             watch.instruction < executable_base + 0x01000000u) {
+    module_base = executable_base;
+    module_name = "DD_CD";
+  }
+  AppendNativeLog(
+      "immersive hidden_root_writer instruction=%p module=%s rva=%08llX "
+      "address=%p offset=%llu thread=%lu",
+      reinterpret_cast<void*>(watch.instruction), module_name,
+      static_cast<unsigned long long>(
+          module_base ? watch.instruction - module_base : 0u),
+      reinterpret_cast<void*>(watch.write_address),
+      static_cast<unsigned long long>(
+          watch.write_address - watch.player_root),
+      static_cast<unsigned long>(watch.thread_id));
+  g_hidden_root_writer_identified.store(true, std::memory_order_release);
+  watch = {};
+}
+
+void ArmHiddenPlayerRootWriteWatch() {
+  if (!g_debug_log || !CustomHeadViewSelected() ||
+      g_hidden_root_writer_identified.load(std::memory_order_acquire)) {
+    return;
+  }
+  ImmersiveLocomotionPlan plan;
+  if (!ResolveImmersiveLocomotionPlan(&plan)) {
+    return;
+  }
+  uintptr_t controller = 0;
+  uintptr_t render_link = 0;
+  uintptr_t player_root = 0;
+  if (!ResolveLivePlayerMovementController(nullptr, &controller) ||
+      !SafeReadValue(reinterpret_cast<const void*>(
+                         controller + kPlayerRenderLinkOffset),
+                     &render_link) ||
+      !render_link ||
+      !SafeReadValue(reinterpret_cast<const void*>(render_link),
+                     &player_root) ||
+      !player_root) {
+    return;
+  }
+
+  if (!g_hidden_root_write_veh) {
+    g_hidden_root_write_veh = AddVectoredExceptionHandler(
+        1u, HiddenPlayerRootWriteVectoredHandler);
+  }
+  if (!g_hidden_root_write_veh) {
+    return;
+  }
+
+  SYSTEM_INFO system_info{};
+  GetSystemInfo(&system_info);
+  const uintptr_t page_size = system_info.dwPageSize;
+  if (page_size != 4096u) {
+    return;
+  }
+  HiddenPlayerRootWriteWatch& watch = g_hidden_root_write_watch;
+  watch = {};
+  watch.page = player_root & ~(page_size - 1u);
+  watch.player_root = player_root;
+  DWORD old_protection = 0;
+  if (!VirtualProtect(reinterpret_cast<void*>(watch.page), page_size,
+                      PAGE_READONLY, &old_protection)) {
+    watch = {};
+    return;
+  }
+  watch.original_protection = old_protection;
+  watch.armed = true;
+}
+
 struct MovementStageProbeStats {
   uint64_t calls = 0;
   uint64_t root_changes = 0;
@@ -10828,6 +10996,9 @@ __declspec(naked) uintptr_t MovementVtableCallbackProbeThunk() {
 
 template <size_t Index, uintptr_t TargetRva>
 uintptr_t __cdecl HookMovementStageNoArg() {
+  if constexpr (Index == 2u) {
+    FlushHiddenPlayerRootWriteWatch();
+  }
   MovementStageSample before;
   MovementStageSample after;
   CaptureMovementStageSample(&before);
@@ -10852,6 +11023,9 @@ uintptr_t __cdecl HookMovementStageOneArg(uintptr_t argument) {
       reinterpret_cast<Fn>(g_dungeon_base + TargetRva)(argument);
   CaptureMovementStageSample(&after);
   RecordMovementStageProbe(Index, before, after);
+  if constexpr (Index == 29u) {
+    ArmHiddenPlayerRootWriteWatch();
+  }
   return result;
 }
 

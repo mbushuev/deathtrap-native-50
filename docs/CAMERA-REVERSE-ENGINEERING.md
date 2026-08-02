@@ -2555,3 +2555,22 @@ horizontal root contribution made for the verified live player node during
 that exact thread-local stage. Calls for equipment, other actors and every
 call outside active F10 locomotion pass straight through. Direct collision
 projection writers such as `+0x68390` remain native and are not redirected.
+
+## Hidden between-tick root writer probe (v0.0.209)
+
+The v0.0.208 run proves that both full-stage hooks are active and that every
+root change observed inside `+0x810A0` follows the requested A/D course.
+Nevertheless successive stage-entry endpoints still advance roughly 35--40
+units per tick along body-forward, while the stage itself contributes only
+4--5 lateral units. None of the 95 instrumented calls inside `+0x57CD0`
+changes the root after `+0x810A0`; the remaining writer therefore runs after
+the gameplay DLL update returns and before its next invocation.
+
+Version 0.0.209 changes no locomotion behavior. After `cache_1CCC0` has copied
+the accepted root, a one-shot read-only page watch remains active until the
+next `+0x810A0`. Its vectored handler records the first instruction that
+writes one of the three root coordinates, restores the original protection
+and permanently disables the probe for the process. Non-root writes on the
+same page are single-stepped and re-armed without being logged. This yields
+the actual hidden writer address instead of expanding movement ownership into
+unrelated host/render code.
