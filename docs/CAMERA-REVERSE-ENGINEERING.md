@@ -2638,3 +2638,13 @@ restores body heading before camera-cache work. It does not author coordinates
 or change magnitude. `update_truth` remains enabled for the validation run.
 Head-view entry now also resets inherited third-person pitch to neutral zero;
 v0.0.211 proved a retained `55` degrees caused the reported upward opening.
+
+## Immersive lateral handedness (v0.0.213)
+
+The v0.0.212 user run accepts both the neutral head entry and full-speed
+strafe, but reports A/D mirrored. The endpoint trace is unambiguous: A
+(`keyboard=-1/0`) produces total `+34 X`, while D (`keyboard=+1/0`) produces
+`-36 X`. W/S remain visually correct. Version 0.0.213 mirrors only the lateral
+component at the shared immersive keyboard/stick intent boundary. Root
+magnitude, longitudinal input, camera orientation and non-immersive controls
+are unchanged; diagonals inherit the corrected side automatically.

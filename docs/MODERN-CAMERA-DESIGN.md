@@ -2394,3 +2394,12 @@ animation magnitude, collision endpoint or coordinate writer.
 Immersive entry owns both initial view axes. Yaw is seeded from live body
 heading as in v0.0.211; pitch is initialized to zero instead of inheriting an
 arbitrary third-person orbit elevation such as the measured 55 degrees.
+
+## 0.0.213: physical left/right owns lateral sign
+
+The complete v0.0.212 transaction exposes one final coordinate-convention
+boundary: scene-cache root publication mirrors the visible head-view screen X
+axis. Runtime totals map A to positive X and D to negative X even though speed
+and longitudinal direction are correct. The immersive intent builder now
+mirrors its lateral input for both keyboard and left stick before course
+normalization. No camera, renderer, animation or third-person axis changes.

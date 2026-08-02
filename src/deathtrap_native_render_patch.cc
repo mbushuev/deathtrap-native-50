@@ -9611,11 +9611,16 @@ bool ResolveImmersiveLocomotionPlan(ImmersiveLocomotionPlan* plan) {
   const int32_t keyboard_y = g_immersive_keyboard_movement_y.load(
       std::memory_order_acquire);
   if (keyboard_x != 0 || keyboard_y != 0) {
-    lateral = static_cast<double>(std::clamp(keyboard_x, -1, 1));
+    // Dungeon's scene-cache root publication uses the opposite horizontal
+    // handedness from the physical head-view screen axis. The complete live
+    // v0.0.212 endpoint proves A and D are mirrored while W/S are correct.
+    // Mirror only the requested lateral component at the shared keyboard/
+    // stick intent boundary so pure and diagonal movement retain one mapping.
+    lateral = -static_cast<double>(std::clamp(keyboard_x, -1, 1));
     longitudinal = static_cast<double>(std::clamp(keyboard_y, -1, 1));
     native_backward = keyboard_y < 0;
   } else {
-    lateral = static_cast<double>(
+    lateral = -static_cast<double>(
         g_immersive_xinput_movement_x_milli.load(
             std::memory_order_acquire)) / 1000.0;
     longitudinal = static_cast<double>(
