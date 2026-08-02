@@ -2513,3 +2513,23 @@ After the original transaction returns, `+0x44DD0` restores the preserved
 eye-facing body course. Backward W/S state uses the opposite temporary
 collision course while retaining the requested root world direction. No
 coordinate, speed or collision result is written by the overlay.
+
+## Correlated immersive movement truth probe (v0.0.207)
+
+The v0.0.206 aggregate was not sufficient to validate visible A/D movement.
+`stage_810A0` accumulated as many as 120 source ticks and could combine W, S,
+A and D intervals, while the sampled transaction and root-route messages were
+not tied to the final root endpoint of the same source tick. A predominantly
+lateral aggregate therefore did not prove that the user's A/D interval was
+the lateral contributor. Live observation confirms that A/D still appears as
+ordinary forward locomotion with only a very weak lateral drift.
+
+Version 0.0.207 deliberately changes no input, movement, animation, collision
+or camera behaviour. At the complete `+0x810A0` boundary it records one
+compact `immersive movement_truth` sample on an input transition and every
+fifteen active samples. Each record contains the physical keyboard/stick
+vector, requested course, restored body course, exact render-root delta, its
+projection onto requested and body-forward courses, and simultaneous cached
+object/bounds deltas. This makes the next short run capable of identifying
+whether direction is lost inside the dispatcher, by a later native writer, or
+between the render root and the authoritative gameplay object.

@@ -10503,6 +10503,116 @@ void RecordMovementStageProbe(size_t index,
                            after);
 }
 
+void LogImmersiveMovementTruth(const MovementStageSample& before,
+                               const MovementStageSample& after) {
+  if (!g_debug_log || !before.root_valid || !after.root_valid ||
+      !CustomHeadViewSelected()) {
+    return;
+  }
+
+  const int32_t keyboard_x = g_immersive_keyboard_movement_x.load(
+      std::memory_order_acquire);
+  const int32_t keyboard_y = g_immersive_keyboard_movement_y.load(
+      std::memory_order_acquire);
+  const int32_t stick_x = g_immersive_xinput_movement_x_milli.load(
+      std::memory_order_acquire);
+  const int32_t stick_y = g_immersive_xinput_movement_y_milli.load(
+      std::memory_order_acquire);
+  const bool keyboard_active = keyboard_x != 0 || keyboard_y != 0;
+  const bool stick_active = stick_x != 0 || stick_y != 0;
+  if (!keyboard_active && !stick_active) {
+    return;
+  }
+
+  ImmersiveLocomotionPlan plan;
+  if (!ResolveImmersiveLocomotionPlan(&plan)) {
+    return;
+  }
+
+  static int32_t previous_keyboard_x = 0;
+  static int32_t previous_keyboard_y = 0;
+  static int32_t previous_stick_x = 0;
+  static int32_t previous_stick_y = 0;
+  static uint64_t active_samples = 0;
+  ++active_samples;
+  const bool input_changed =
+      keyboard_x != previous_keyboard_x ||
+      keyboard_y != previous_keyboard_y || stick_x != previous_stick_x ||
+      stick_y != previous_stick_y;
+  previous_keyboard_x = keyboard_x;
+  previous_keyboard_y = keyboard_y;
+  previous_stick_x = stick_x;
+  previous_stick_y = stick_y;
+  if (!input_changed && (active_samples % 15u) != 1u) {
+    return;
+  }
+
+  int32_t body_heading = 0;
+  const bool body_heading_valid = ReadLivePlayerHeading(&body_heading);
+  const int64_t delta_x =
+      static_cast<int64_t>(after.root[0]) - before.root[0];
+  const int64_t delta_y =
+      static_cast<int64_t>(after.root[1]) - before.root[1];
+  const int64_t delta_z =
+      static_cast<int64_t>(after.root[2]) - before.root[2];
+  auto projection_milli = [delta_x, delta_z](int32_t heading) {
+    const double radians = static_cast<double>(heading) *
+        2.0 * 3.14159265358979323846 /
+        static_cast<double>(kPlayerHeadingUnitsPerTurn);
+    return static_cast<long long>(std::llround(
+        (std::sin(radians) * static_cast<double>(delta_x) +
+         std::cos(radians) * static_cast<double>(delta_z)) *
+        1000.0));
+  };
+  const long long desired_projection =
+      projection_milli(plan.motion_heading);
+  const long long body_projection = body_heading_valid
+      ? projection_milli(body_heading)
+      : 0;
+
+  AppendNativeLog(
+      "immersive movement_truth tick=%llu keyboard=%d/%d stick=%d/%d "
+      "course=%d body=%d/%u root=%d/%d/%d->%d/%d/%d "
+      "delta=%lld/%lld/%lld projection_milli=%lld/%lld "
+      "cache_delta=%lld/%lld/%lld bounds_a_delta=%lld/%lld/%lld "
+      "bounds_b_delta=%lld/%lld/%lld",
+      static_cast<unsigned long long>(
+          g_source_ticks.load(std::memory_order_relaxed)),
+      keyboard_x, keyboard_y, stick_x, stick_y, plan.motion_heading,
+      body_heading, body_heading_valid ? 1u : 0u, before.root[0],
+      before.root[1], before.root[2], after.root[0], after.root[1],
+      after.root[2], static_cast<long long>(delta_x),
+      static_cast<long long>(delta_y), static_cast<long long>(delta_z),
+      desired_projection, body_projection,
+      before.cache_valid && after.cache_valid
+          ? static_cast<long long>(after.cache[0]) - before.cache[0]
+          : 0,
+      before.cache_valid && after.cache_valid
+          ? static_cast<long long>(after.cache[1]) - before.cache[1]
+          : 0,
+      before.cache_valid && after.cache_valid
+          ? static_cast<long long>(after.cache[2]) - before.cache[2]
+          : 0,
+      before.bounds_a_valid && after.bounds_a_valid
+          ? static_cast<long long>(after.bounds_a[0]) - before.bounds_a[0]
+          : 0,
+      before.bounds_a_valid && after.bounds_a_valid
+          ? static_cast<long long>(after.bounds_a[1]) - before.bounds_a[1]
+          : 0,
+      before.bounds_a_valid && after.bounds_a_valid
+          ? static_cast<long long>(after.bounds_a[2]) - before.bounds_a[2]
+          : 0,
+      before.bounds_b_valid && after.bounds_b_valid
+          ? static_cast<long long>(after.bounds_b[0]) - before.bounds_b[0]
+          : 0,
+      before.bounds_b_valid && after.bounds_b_valid
+          ? static_cast<long long>(after.bounds_b[1]) - before.bounds_b[1]
+          : 0,
+      before.bounds_b_valid && after.bounds_b_valid
+          ? static_cast<long long>(after.bounds_b[2]) - before.bounds_b[2]
+          : 0);
+}
+
 MovementCallbackProbeStats* FindMovementCallbackProbeStats(
     uintptr_t target, uintptr_t entry) {
   MovementCallbackProbeStats* empty = nullptr;
@@ -10675,6 +10785,9 @@ uintptr_t __cdecl HookMovementStageNoArg() {
       reinterpret_cast<Fn>(g_dungeon_base + TargetRva)();
   CaptureMovementStageSample(&after);
   RecordMovementStageProbe(Index, before, after);
+  if constexpr (Index == 2u) {
+    LogImmersiveMovementTruth(before, after);
+  }
   return result;
 }
 

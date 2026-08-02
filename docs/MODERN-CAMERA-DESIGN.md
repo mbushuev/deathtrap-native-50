@@ -2297,3 +2297,17 @@ root direction agree for the complete native transaction, while no temporary
 course survives into rendering. Native backward uses the opposite collision
 course because S root motion travels opposite actor heading; its root endpoint
 still follows the requested camera-relative world vector.
+
+## 0.0.207: movement diagnosis uses same-tick end-to-end evidence
+
+The user-visible result invalidates the behavioral conclusion drawn from the
+v0.0.206 periodic aggregates: A/D still looks like forward motion with only a
+small, Shift-scaled lateral drift. The old records mixed multiple inputs in a
+120-tick bucket and did not correlate a physical key vector with the final
+player state from that exact tick.
+
+Version 0.0.207 is diagnostic-only. It preserves the v0.0.206 implementation
+and records physical input, requested course and final `+0x810A0` root/cache/
+bounds deltas together. No further locomotion mechanism is accepted or
+changed until this probe identifies the layer that discards the lateral
+course.
