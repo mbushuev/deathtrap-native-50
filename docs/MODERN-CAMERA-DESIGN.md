@@ -2205,3 +2205,18 @@ both measured profiles and nothing beyond their immediate range. The resolver
 still requires the complete structure and geometry; this is not a highest-node
 heuristic or a character pointer/resource allowlist. The two input corrections
 accepted from 0.0.199 are unchanged.
+
+## 0.0.201: animation pose is not head identity
+
+The v0.0.200 action run disproves the remaining local-geometry gate. The same
+Chaindog head changes from rest `-1/100/21` to attack-frame `-1/99/13` while
+its bounds and complete ancestry remain unchanged. Rejecting the latter is
+what makes immersive view visibly alternate with third person during attacks
+and jumps.
+
+Version 0.0.201 removes all local translation fields from the resolver. The
+stable contract is bounds radius, ancestry depth, zero-or-one child,
+resource-free neck parent and a three-child chest grandparent. Selection is
+unique-or-fail rather than scored by pose proximity. This applies equally to
+Red Lotus and Chaindog and covers every animation without enumerating action
+offsets. Accepted v0.0.199 input behavior is unchanged.

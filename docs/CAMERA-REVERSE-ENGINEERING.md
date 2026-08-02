@@ -2385,3 +2385,26 @@ actual female `0/71/34`, radius-76 braid head and male `-1/100/21`, radius-90
 leaf head, plus rejection immediately beyond the observed envelope. Pointer
 addresses and resource IDs remain diagnostic evidence rather than runtime
 keys.
+
+## v0.0.200 action-frame rejection (v0.0.201)
+
+The v0.0.200 acceptance log is
+`<game-directory>\logs\deathtrap-native-20260802-192930-171-pid18256.log`.
+Chaindog's standing head view now succeeds, but attacks and jumps alternate
+between valid immersive publication and `HEAD_JOINT` fallback.
+
+The one-shot candidate capture at tick 194 identifies the same male head node
+`05DE2688` with unchanged depth 5, zero children, resource-free neck parent,
+three-child chest grandparent and radius 90. Only its local pose changed from
+the standing `-1/100/21` to `-1/99/13`. The v0.0.200 Z>=15 gate therefore
+rejected the actual head at Z=13. This proves local translation is animation
+state, not identity, for Chaindog; merely widening its range would continue
+the same failure mode on unobserved attacks or on Red Lotus.
+
+Version 0.0.201 removes local XYZ from head identity completely. Resolution
+uses only stable bounds and topology, and it succeeds only when exactly one
+candidate matches. It no longer scores ambiguous nodes by closeness to a
+female rest pose. The existing live candidate sets for both characters each
+contain exactly one structural match, so attacks, jumps and other animation
+poses cannot change the selected node while a genuinely ambiguous future
+skeleton still fails closed.

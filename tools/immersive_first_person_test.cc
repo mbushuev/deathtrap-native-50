@@ -23,19 +23,22 @@ int main() {
   constexpr double kPi = 3.14159265358979323846;
   const std::array<int32_t, 3> root = {100, 200, 300};
 
-  const std::array<int32_t, 3> female_head_local = {0, 71, 34};
-  const std::array<int32_t, 3> male_head_local = {-1, 100, 21};
-  Require(MatchesImmersiveHeadJoint(1, 0, 3, female_head_local, 76, 5),
+  Require(MatchesImmersiveHeadJoint(1, 0, 3, 76, 5),
           "female head with one braid child must resolve");
-  Require(MatchesImmersiveHeadJoint(0, 0, 3, male_head_local, 90, 5),
+  Require(MatchesImmersiveHeadJoint(0, 0, 3, 90, 5),
           "measured male leaf head must resolve without a braid child");
-  Require(!MatchesImmersiveHeadJoint(2, 0, 3, female_head_local, 76, 5),
+  // Pose coordinates are intentionally absent from the predicate, so the
+  // measured attack transition from -1/100/21 to -1/99/13 cannot alter
+  // structural head identity.
+  Require(!MatchesImmersiveHeadJoint(2, 0, 3, 76, 5),
           "branching hand or equipment node must not resolve as a head");
-  Require(!MatchesImmersiveHeadJoint(0, 1, 3, female_head_local, 76, 5),
+  Require(!MatchesImmersiveHeadJoint(0, 1, 3, 76, 5),
           "render-bearing parent must not resolve as a neck anchor");
-  Require(!MatchesImmersiveHeadJoint(
-              0, 0, 3, std::array<int32_t, 3>{0, 106, 21}, 90, 5),
-          "unobserved head height beyond both character profiles must fail");
+  Require(!MatchesImmersiveHeadJoint(0, 0, 2, 90, 5),
+          "non-branching torso ancestry must not resolve as a head");
+  Require(!MatchesImmersiveHeadJoint(0, 0, 3, 44, 5) &&
+              !MatchesImmersiveHeadJoint(0, 0, 3, 116, 5),
+          "out-of-envelope bounds must not resolve as a head");
   Require(ImmersivePhysicalMouseVerticalSign(false) == -1.0,
           "default immersive physical mouse Y must reverse at look-at");
   Require(ImmersivePhysicalMouseVerticalSign(true) == 1.0,

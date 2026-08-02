@@ -3548,7 +3548,6 @@ uintptr_t ResolvePlayerHeadJoint(const SceneSnapshot& scene) {
   }
 
   uintptr_t selected = 0;
-  int64_t selected_score = std::numeric_limits<int64_t>::max();
   for (const auto& [node, transform] : scene.nodes) {
     if (node == scene.player ||
         !SceneNodeDescendsFrom(scene, node, scene.player) ||
@@ -3559,8 +3558,6 @@ uintptr_t ResolvePlayerHeadJoint(const SceneSnapshot& scene) {
     if (parent == scene.nodes.end()) {
       continue;
     }
-    const auto& local = transform.local.values;
-
     uint32_t depth = 0;
     uintptr_t ancestor = node;
     for (; ancestor && depth < 128u; ++depth) {
@@ -3573,24 +3570,21 @@ uintptr_t ResolvePlayerHeadJoint(const SceneSnapshot& scene) {
       }
       ancestor = entry->second.parent;
     }
-    const std::array<int32_t, 3> local_translation = {
-        local[9], local[10], local[11]};
     if (ancestor != scene.player ||
         !MatchesImmersiveHeadJoint(
             child_counts[node], parent->second.render_resource_handle,
-            child_counts[parent->second.parent], local_translation,
-            transform.bounds_radius, depth)) {
+            child_counts[parent->second.parent], transform.bounds_radius,
+            depth)) {
       continue;
     }
 
-    const int64_t score =
-        static_cast<int64_t>(std::abs(local[9])) * 4 +
-        std::abs(local[10] - 71) + std::abs(local[11] - 34) +
-        std::abs(transform.bounds_radius - 76);
-    if (score < selected_score) {
-      selected = node;
-      selected_score = score;
+    // Topology and bounds must identify exactly one animated head. Do not
+    // score ambiguous candidates by their current animation pose: that would
+    // reintroduce frame-dependent identity and visible camera fallbacks.
+    if (selected != 0) {
+      return 0;
     }
+    selected = node;
   }
   return selected;
 }

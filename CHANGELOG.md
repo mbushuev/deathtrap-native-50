@@ -1,6 +1,6 @@
 # User-facing changelog
 
-## 0.0.200 — changes from the original Steam release
+## 0.0.201 — changes from the original Steam release
 
 This is a consolidated list of the changes players can see or use. Reverted
 experiments and internal development changes are intentionally omitted.
@@ -44,6 +44,8 @@ experiments and internal development changes are intentionally omitted.
 - Resolves the distinct animated head geometry of both Red Lotus and Chaindog
   rather than treating Red Lotus's braid and shorter head offset as universal
   skeleton requirements.
+- Keeps immersive first person attached during attacks, jumps and other
+  animations instead of treating the animated head translation as identity.
 - Restores native keyboard steering immediately after leaving immersive first
   person and uses a conventional physical-mouse vertical look direction.
 
