@@ -625,6 +625,10 @@ struct ThirdPersonOrbitState {
   // The endpoint is never retained: it is rebuilt from the current focus,
   // requested ray and current object transform every source tick.
   CameraMeshContactPreference mesh_contact_preference{};
+  // Diagnostic state for the full-owned room solver. This is an angular
+  // candidate identity, never a retained world-space camera endpoint.
+  size_t owned_room_shadow_candidate_index =
+      std::numeric_limits<size_t>::max();
 };
 
 ThirdPersonOrbitState g_third_person_orbit_state;
@@ -1677,14 +1681,10 @@ bool BuildRuntimeRoomGraph() {
   return true;
 }
 
-bool SweepOwnedCameraAgainstRooms(
-    const std::array<int32_t, 3>& focus,
-    const std::array<int32_t, 3>& requested, uintptr_t seed_sector,
-    deathtrap_camera::RoomSweepResult* sweep,
-    std::array<int32_t, 3>* clipped) {
-  if (!sweep || !clipped || !g_resolve_camera_sector ||
-      !BuildRuntimeRoomGraph()) {
-    return false;
+uintptr_t ResolveOwnedCameraStartSector(
+    const std::array<int32_t, 3>& focus, uintptr_t seed_sector) {
+  if (!g_resolve_camera_sector) {
+    return 0;
   }
   uintptr_t start_sector = 0;
   __try {
@@ -1692,6 +1692,21 @@ bool SweepOwnedCameraAgainstRooms(
   } __except (EXCEPTION_EXECUTE_HANDLER) {
     start_sector = 0;
   }
+  return start_sector;
+}
+
+bool SweepOwnedCameraAgainstRooms(
+    const std::array<int32_t, 3>& focus,
+    const std::array<int32_t, 3>& requested, uintptr_t seed_sector,
+    deathtrap_camera::RoomSweepResult* sweep,
+    std::array<int32_t, 3>* clipped,
+    deathtrap_camera::RoomOrbitPlan* orbit_plan = nullptr,
+    size_t previous_candidate_index = std::numeric_limits<size_t>::max()) {
+  if (!sweep || !clipped || !BuildRuntimeRoomGraph()) {
+    return false;
+  }
+  const uintptr_t start_sector =
+      ResolveOwnedCameraStartSector(focus, seed_sector);
   RuntimeRoomGraphCache& cache = g_runtime_room_graph;
   if (!start_sector || start_sector < cache.sector_base ||
       start_sector >= cache.sector_base +
@@ -1700,13 +1715,55 @@ bool SweepOwnedCameraAgainstRooms(
     return false;
   }
   const size_t start_index = (start_sector - cache.sector_base) / 0x3Cu;
-  *sweep = deathtrap_camera::SweepSphereThroughRooms(
-      cache.sectors, start_index,
-      {static_cast<double>(focus[0]), static_cast<double>(focus[1]),
-       static_cast<double>(focus[2])},
-      {static_cast<double>(requested[0]), static_cast<double>(requested[1]),
-       static_cast<double>(requested[2])},
-      kCameraCollisionSphereRadius, 8.0, 32u);
+  const deathtrap_camera::RoomVec3 room_focus{
+      static_cast<double>(focus[0]), static_cast<double>(focus[1]),
+      static_cast<double>(focus[2])};
+  const deathtrap_camera::RoomVec3 room_requested{
+      static_cast<double>(requested[0]), static_cast<double>(requested[1]),
+      static_cast<double>(requested[2])};
+  if (orbit_plan) {
+    constexpr double kDegreesToRadians =
+        3.14159265358979323846 / 180.0;
+    static const std::vector<deathtrap_camera::RoomOrbitCandidateOffset>
+        kCandidateOffsets = {
+            {0.0, 0.0},
+            {15.0 * kDegreesToRadians, 0.0},
+            {-15.0 * kDegreesToRadians, 0.0},
+            {30.0 * kDegreesToRadians, 0.0},
+            {-30.0 * kDegreesToRadians, 0.0},
+            {45.0 * kDegreesToRadians, 0.0},
+            {-45.0 * kDegreesToRadians, 0.0},
+            {60.0 * kDegreesToRadians, 0.0},
+            {-60.0 * kDegreesToRadians, 0.0},
+            {90.0 * kDegreesToRadians, 0.0},
+            {-90.0 * kDegreesToRadians, 0.0},
+            {0.0, 15.0 * kDegreesToRadians},
+            {0.0, -15.0 * kDegreesToRadians},
+            {0.0, 30.0 * kDegreesToRadians},
+            {0.0, -30.0 * kDegreesToRadians},
+            {30.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
+            {30.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
+            {-30.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
+            {-30.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
+            {60.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
+            {60.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
+            {-60.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
+            {-60.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
+        };
+    *orbit_plan = deathtrap_camera::SelectRoomOrbitPlan(
+        cache.sectors, start_index, room_focus, room_requested,
+        kCameraCollisionSphereRadius, g_third_person_orbit_min_radius,
+        kCandidateOffsets, previous_candidate_index,
+        kCameraCollisionSphereRadius, 8.0, 32u);
+    if (!orbit_plan->valid || orbit_plan->candidates.empty()) {
+      return false;
+    }
+    *sweep = orbit_plan->candidates[0].sweep;
+  } else {
+    *sweep = deathtrap_camera::SweepSphereThroughRooms(
+        cache.sectors, start_index, room_focus, room_requested,
+        kCameraCollisionSphereRadius, 8.0, 32u);
+  }
   if (!sweep->valid) {
     return false;
   }
@@ -5443,10 +5500,21 @@ void __cdecl HookMode3Camera(void* controller) {
   // 0.0.172 collision or publication path.
   LogCameraRoomSectorSnapshot(camera_focus, room_or_sector);
   deathtrap_camera::RoomSweepResult owned_room_sweep;
+  deathtrap_camera::RoomOrbitPlan owned_room_plan;
   std::array<int32_t, 3> owned_room_safe = orbit;
   const bool owned_room_query_valid = g_debug_log &&
       SweepOwnedCameraAgainstRooms(camera_focus, orbit, room_or_sector,
-                                   &owned_room_sweep, &owned_room_safe);
+                                   &owned_room_sweep, &owned_room_safe,
+                                   &owned_room_plan,
+                                   g_third_person_orbit_state
+                                       .owned_room_shadow_candidate_index);
+  if (owned_room_query_valid && owned_room_plan.valid) {
+    g_third_person_orbit_state.owned_room_shadow_candidate_index =
+        owned_room_plan.selected_index;
+  } else {
+    g_third_person_orbit_state.owned_room_shadow_candidate_index =
+        std::numeric_limits<size_t>::max();
+  }
 
   // The untouched retail callback runs first so authored-camera arbitration
   // can inspect it. If a transient native query failure prevents a new modern
@@ -5540,6 +5608,28 @@ void __cdecl HookMode3Camera(void* controller) {
           hard_safe_endpoint[2], owned_safe_radius, native_safe_radius,
           static_cast<unsigned long long>(
               owned_room_query_valid ? owned_room_sweep.blocker_key : 0u));
+    }
+    if (owned_room_query_valid && owned_room_plan.valid &&
+        owned_room_plan.selected_index < owned_room_plan.candidates.size()) {
+      const auto& selected =
+          owned_room_plan.candidates[owned_room_plan.selected_index];
+      if (owned_room_plan.avoidance_required || owned_room_sweep.blocked ||
+          (owned_room_shadow_sequence % 30u) == 1u) {
+        AppendNativeLog(
+            "camera_owned_shot_shadow selected=%llu retained=%u "
+            "offset=%.1f/%.1f direct=%.1f selected=%.1f "
+            "blocked=%u transitions=%llu endpoint=%.1f/%.1f/%.1f",
+            static_cast<unsigned long long>(owned_room_plan.selected_index),
+            owned_room_plan.retained_previous ? 1u : 0u,
+            selected.offset.yaw_radians * 180.0 / kOrbitPi,
+            selected.offset.pitch_radians * 180.0 / kOrbitPi,
+            owned_room_plan.candidates[0].safe_distance,
+            selected.safe_distance, selected.sweep.blocked ? 1u : 0u,
+            static_cast<unsigned long long>(
+                selected.sweep.portal_transitions),
+            selected.sweep.position.x, selected.sweep.position.y,
+            selected.sweep.position.z);
+      }
     }
   }
 
@@ -11719,9 +11809,9 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.174 preserves the 0.0.172 "
-      "hybrid camera while comparing its result against the normalized "
-      "convex-room swept-sphere solver; it uses one pre-history "
+      "Deathtrap native render overlay 0.0.175 preserves the 0.0.172 "
+      "hybrid camera while shadow-planning a useful collision-safe room "
+      "shot around the current focus; it uses one pre-history "
       "scene-mesh candidate owner before the retail position-ring average; "
       "accepted boundaries are validated against real render triangles, not "
       "conservative empty OBB space; post-native exact correction remains a "

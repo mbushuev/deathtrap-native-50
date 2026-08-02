@@ -8,9 +8,11 @@
 namespace {
 
 using deathtrap_camera::RoomPlane;
+using deathtrap_camera::RoomOrbitCandidateOffset;
 using deathtrap_camera::RoomPortal;
 using deathtrap_camera::RoomSector;
 using deathtrap_camera::RoomVec3;
+using deathtrap_camera::SelectRoomOrbitPlan;
 using deathtrap_camera::SweepSphereThroughRooms;
 
 void ExpectNear(double actual, double expected, const char* label) {
@@ -116,6 +118,46 @@ int main() {
       return 1;
     }
     ExpectNear(deeper.position.x, 9.5, "overlap pin");
+  }
+
+  {
+    const std::vector<RoomSector> sectors = {
+        Box(-2, 2, -10, 10, -10, 10, 20)};
+    constexpr double kHalfPi = 1.5707963267948966;
+    const std::vector<RoomOrbitCandidateOffset> offsets = {
+        {0.0, 0.0}, {kHalfPi, 0.0}, {-kHalfPi, 0.0}};
+    const auto plan = SelectRoomOrbitPlan(
+        sectors, 0, {0, 0, 0}, {8, 0, 0}, 0.5, 5.0, offsets,
+        std::numeric_limits<size_t>::max(), 0.0, 0.0);
+    if (!plan.valid || !plan.avoidance_required ||
+        plan.selected_index != 1u) {
+      std::cerr << "near-pivot orbit escape was not selected\n";
+      return 1;
+    }
+    ExpectNear(plan.candidates[0].safe_distance, 1.5,
+               "direct near-pivot distance");
+    ExpectNear(plan.candidates[1].safe_distance, 8.0,
+               "escaped orbit distance");
+
+    const auto retained = SelectRoomOrbitPlan(
+        sectors, 0, {0, 0, 0}, {8, 0, 0}, 0.5, 5.0, offsets, 2u, 1.0,
+        0.0);
+    if (!retained.valid || !retained.retained_previous ||
+        retained.selected_index != 2u) {
+      std::cerr << "safe angular-side hysteresis was not retained\n";
+      return 1;
+    }
+
+    const std::vector<RoomSector> open_sector = {
+        Box(-10, 10, -10, 10, -10, 10, 21)};
+    const auto direct = SelectRoomOrbitPlan(
+        open_sector, 0, {0, 0, 0}, {0, 0, 8}, 0.5, 5.0, offsets, 2u,
+        1.0, 0.0);
+    if (!direct.valid || direct.avoidance_required ||
+        direct.selected_index != 0u || direct.candidates.size() != 1u) {
+      std::cerr << "useful direct shot did not release avoidance\n";
+      return 1;
+    }
   }
 
   std::cout << "camera room collision tests passed\n";

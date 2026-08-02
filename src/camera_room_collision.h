@@ -71,6 +71,27 @@ struct RoomSweepResult {
   size_t portal_transitions = 0;
 };
 
+struct RoomOrbitCandidateOffset {
+  double yaw_radians = 0.0;
+  double pitch_radians = 0.0;
+};
+
+struct RoomOrbitCandidate {
+  RoomOrbitCandidateOffset offset{};
+  RoomVec3 requested{};
+  RoomSweepResult sweep{};
+  double safe_distance = 0.0;
+  double angular_cost = 0.0;
+};
+
+struct RoomOrbitPlan {
+  std::vector<RoomOrbitCandidate> candidates;
+  size_t selected_index = std::numeric_limits<size_t>::max();
+  bool valid = false;
+  bool avoidance_required = false;
+  bool retained_previous = false;
+};
+
 namespace detail {
 
 constexpr double kRoomSweepEpsilon = 1.0e-7;
@@ -273,6 +294,127 @@ inline RoomSweepResult SweepSphereThroughRooms(
   result.sector = current_sector;
   result.fraction = current_fraction;
   return result;
+}
+
+inline RoomVec3 RotateRoomOrbit(const RoomVec3& focus,
+                                const RoomVec3& requested,
+                                const RoomOrbitCandidateOffset& offset) {
+  const RoomVec3 delta = requested - focus;
+  const double requested_radius = Length(delta);
+  const double horizontal = std::hypot(delta.x, delta.z);
+  if (!std::isfinite(requested_radius) ||
+      requested_radius <= detail::kRoomSweepEpsilon ||
+      !std::isfinite(offset.yaw_radians) ||
+      !std::isfinite(offset.pitch_radians)) {
+    return requested;
+  }
+
+  const double yaw = std::atan2(delta.x, delta.z) + offset.yaw_radians;
+  constexpr double kMaximumPitch = 1.3089969389957472;  // 75 degrees.
+  const double pitch = std::clamp(
+      std::atan2(delta.y, std::max(horizontal, detail::kRoomSweepEpsilon)) +
+          offset.pitch_radians,
+      -kMaximumPitch, kMaximumPitch);
+  const double rotated_horizontal = requested_radius * std::cos(pitch);
+  return {
+      focus.x + std::sin(yaw) * rotated_horizontal,
+      focus.y + std::sin(pitch) * requested_radius,
+      focus.z + std::cos(yaw) * rotated_horizontal,
+  };
+}
+
+// Chooses a collision-safe shot around the current focus without retaining a
+// world-space camera point. The caller owns the candidate order: index zero is
+// expected to be the unmodified requested orbit, followed by progressively
+// less desirable angular alternatives. A candidate first earns up to the
+// preferred useful distance; only then does angular displacement break ties.
+// This prevents a tiny 15-degree adjustment that still leaves the camera on
+// the player's shoulder from beating a wider, actually useful escape shot.
+inline RoomOrbitPlan SelectRoomOrbitPlan(
+    const std::vector<RoomSector>& sectors, size_t start_sector,
+    const RoomVec3& focus, const RoomVec3& requested, double sphere_radius,
+    double preferred_useful_distance,
+    const std::vector<RoomOrbitCandidateOffset>& offsets,
+    size_t previous_selected_index = std::numeric_limits<size_t>::max(),
+    double switch_hysteresis_distance = 0.0,
+    double contact_backoff = 1.0,
+    size_t maximum_portal_transitions = 16) {
+  RoomOrbitPlan plan;
+  if (offsets.empty() || !std::isfinite(preferred_useful_distance) ||
+      preferred_useful_distance < 0.0 ||
+      !std::isfinite(switch_hysteresis_distance) ||
+      switch_hysteresis_distance < 0.0) {
+    return plan;
+  }
+
+  plan.candidates.reserve(offsets.size());
+  size_t best_index = std::numeric_limits<size_t>::max();
+  double best_quality = -1.0;
+  double best_cost = std::numeric_limits<double>::infinity();
+  for (size_t index = 0; index < offsets.size(); ++index) {
+    RoomOrbitCandidate candidate;
+    candidate.offset = offsets[index];
+    candidate.requested = RotateRoomOrbit(focus, requested, offsets[index]);
+    candidate.sweep = SweepSphereThroughRooms(
+        sectors, start_sector, focus, candidate.requested, sphere_radius,
+        contact_backoff, maximum_portal_transitions);
+    candidate.safe_distance = candidate.sweep.valid
+        ? Length(candidate.sweep.position - focus)
+        : 0.0;
+    candidate.angular_cost = std::hypot(
+        offsets[index].yaw_radians, offsets[index].pitch_radians);
+    plan.candidates.push_back(candidate);
+
+    if (!candidate.sweep.valid || !std::isfinite(candidate.safe_distance)) {
+      continue;
+    }
+    if (index == 0u &&
+        candidate.safe_distance + detail::kRoomSweepEpsilon >=
+            preferred_useful_distance) {
+      plan.selected_index = 0u;
+      plan.valid = true;
+      return plan;
+    }
+    const double quality =
+        std::min(candidate.safe_distance, preferred_useful_distance);
+    const bool better_quality = quality > best_quality + 1.0e-6;
+    const bool equal_quality = std::abs(quality - best_quality) <= 1.0e-6;
+    if (better_quality ||
+        (equal_quality && candidate.angular_cost < best_cost - 1.0e-9)) {
+      best_index = index;
+      best_quality = quality;
+      best_cost = candidate.angular_cost;
+    }
+  }
+
+  if (best_index == std::numeric_limits<size_t>::max()) {
+    return plan;
+  }
+
+  // A completely useful direct shot is always the recovery target. Side
+  // hysteresis is only for choosing between competing avoidance shots; it
+  // must not turn an old angular offset into a permanent alternate orbit.
+  if (best_index != 0u &&
+      previous_selected_index < plan.candidates.size() &&
+      plan.candidates[previous_selected_index].sweep.valid) {
+    const RoomOrbitCandidate& previous =
+        plan.candidates[previous_selected_index];
+    const double previous_quality =
+        std::min(previous.safe_distance, preferred_useful_distance);
+    const bool escaping_collapsed_shot =
+        previous.safe_distance + detail::kRoomSweepEpsilon < sphere_radius &&
+        best_quality > previous_quality + detail::kRoomSweepEpsilon;
+    if (!escaping_collapsed_shot &&
+        previous_quality + switch_hysteresis_distance >= best_quality) {
+      best_index = previous_selected_index;
+      plan.retained_previous = true;
+    }
+  }
+
+  plan.selected_index = best_index;
+  plan.valid = true;
+  plan.avoidance_required = best_index != 0u;
+  return plan;
 }
 
 }  // namespace deathtrap_camera

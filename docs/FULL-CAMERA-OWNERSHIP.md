@@ -147,3 +147,30 @@ live portal flags on each source tick and runs the pure sphere sweep in shadow
 mode. It logs its endpoint, sector transitions, initial-overlap state and
 blocker next to the unchanged native/hybrid endpoint. No shadow result is
 published in this version.
+
+## 0.0.174 shadow result and near-pivot response
+
+The completed run is
+`<game-directory>\logs\deathtrap-native-20260802-084232-977-pid1420.log`.
+The graph built successfully with 746 sectors, 2519 normalized solid planes
+and 2812 live portals. Across 620 sampled source ticks the owned and native
+blocked states were `(owned,native) = (1,1): 306, (1,0): 279, (0,0): 32,
+(0,1): 3`. The owned sweep therefore closes the verified same-sector hole in
+the retail portal trace, which explains the hybrid camera's remaining wall
+and ceiling penetration.
+
+Direct radial contraction is not itself a complete camera response. The owned
+safe radius reached zero in 19 samples and fell below 120 units in 46 samples.
+Publishing those points would be collision-safe but visually unusable. This is
+now treated as a shot-selection problem, not as permission to restore the
+retail alternate-position ring or a retained world-space fallback point.
+
+Version 0.0.175 adds a pure deterministic near-pivot planner. Every candidate
+is rebuilt from the current focus, requested orbit and an angular offset, then
+swept through the same complete graph. The score first maximizes usable arm
+length up to the configured 650-unit minimum and then minimizes angular
+deviation. A one-camera-radius hysteresis can retain the previous angular side
+only while competing avoidance shots remain necessary; a useful direct shot
+always becomes the recovery target. No camera endpoint or invisible orbit
+centre is retained. The runtime remains shadow-only and logs the selected
+offset and safe radius as `camera_owned_shot_shadow`.
