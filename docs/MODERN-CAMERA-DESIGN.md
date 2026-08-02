@@ -1898,3 +1898,6 @@ decision after angular selection, radial response and revalidation. It makes a
 future candidate alternation distinguishable from scene-contact flicker and
 from publication failure without reconstructing state from unrelated legacy
 logs.
+
+Implementation commit is `7faae22`. Build/dist/installed x86 SHA-256 is
+`49ACBB5103FA1F7CC325DD53169C4FEF0D09E79ED704BAE7447B6272DD2EE8AA`.

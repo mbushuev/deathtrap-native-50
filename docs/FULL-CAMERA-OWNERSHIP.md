@@ -419,3 +419,9 @@ that the owned radius stays fixed until the longer evidence window is met.
 New `camera_owned_solution` records join selected candidate, room/scene
 contacts, revalidated radius, resource/triangle, blocker and cut in one line;
 `camera_owned_scene_pivot_exit` distinguishes clean exit from real re-entry.
+
+Implementation commit is `7faae22`. Build/dist/installed x86 SHA-256 is
+`49ACBB5103FA1F7CC325DD53169C4FEF0D09E79ED704BAE7447B6272DD2EE8AA`.
+Rollback v0.0.181 is
+`<game-directory>\back\deathtrap-native50-overlay-20260802-104700`.
+External game/dgVoodoo hashes are unchanged and Codex did not launch the game.
