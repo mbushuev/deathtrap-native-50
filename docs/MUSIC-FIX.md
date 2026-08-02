@@ -71,3 +71,18 @@ music_redbook route=STEAM_MP3 cd_track=N mp3=M ...
 The route invariant is `M = N - 2`. Music must change with the level while
 sound effects, volume control, pause/resume and movies remain functional.
 
+## Live validation
+
+The user accepted the level-to-level music change on 2026-08-02. The live
+v0.0.189 sessions recorded distinct engine requests and the expected routing:
+
+```text
+music_redbook route=STEAM_MP3 cd_track=5 mp3=3 start=0 end=0
+music_redbook route=STEAM_MP3 cd_track=2 mp3=0 start=0 end=0
+```
+
+The first level, Spire, may begin in silence by design; its first music request
+is CD track 2 and therefore plays `Sounds/0.mp3`. The user confirmed that
+different levels now play different music. Music volume, pause/resume and movie
+playback remain useful regression checks, but were not separately asserted in
+that confirmation.
