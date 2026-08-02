@@ -2226,3 +2226,21 @@ position.
 The x86 build, spring-arm state test, DirectInput proxy smoke test and
 installer CRLF test pass. Installed/build/dist SHA-256 is
 `9F25C74A6BDDD5435917DC999BB27B6BABE524ADEB93153074AE3428FC197A54`.
+
+## 0.0.188 owner-target convergence and retail mode 4
+
+The scripted owner pointer at `controller+0x1B8` is broad, but its associated
+`controller+0x180` bit `0x20` has a precise narrower meaning. In
+`Dungeon.dll+0x2E9CA..0x2EA9D`, an active owner updates the requested camera
+target. When the residual distance is above 110, the engine advances toward it
+and sets bit `0x08`; once the residual is at most 110 it sets bit `0x20` and
+clears `0x08`. The no-owner branch clears `0x20`. Thus `0x20` is verified
+owner-target convergence, not camera mode 3, a cutscene flag or controller
+input. Combined with a recent explicit operate sequence and stationary player,
+its rising edge identifies delayed owned reveals that do not change owner
+inside the former 1500 ms window.
+
+Retail first person uses dispatcher mode 4. Synthetic presentation must not
+run mode-4 eye transforms through the modern third-person pivot/minimum-radius
+validator: rejection freezes both inserted phases at the previous full matrix.
+Mode 4 instead follows the generic translation/quaternion interpolation path.

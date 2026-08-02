@@ -2003,3 +2003,23 @@ evidence that a 300-unit arm may extend. The owned path now counts consecutive
 samples whose safe distance remains beyond the current published radius. A
 sample that reaches the current radius resets evidence, and inward contraction
 remains immediate. The legacy hybrid policy is unchanged.
+
+## 0.0.188: authored ownership needs convergence and lifecycle bounds
+
+An interaction alone does not authorize a retail view, and an owner pointer
+alone is shared by ordinary fixed-camera volumes. A delayed authored takeover
+requires their temporal conjunction with the verified rising edge of retail
+owner-target convergence (`controller+0x180 & 0x20`). This admits lever scripts
+that begin late without turning the broad six-second interaction window into a
+fixed-camera permission window.
+
+The lifecycle has two additional bounds. A completed owner identity cannot
+replay later in the same process after an unrelated operate press, and a
+persistent owner with a quiet endpoint returns control after a bounded 2.6
+second tail rather than holding until the emergency timeout. Native owner
+release remains authoritative when it arrives normally.
+
+Retail first person is presentation state, not a third-person spring arm. Its
+mode-4 matrices use generic quaternion interpolation and never enter the
+pivot-relative validation/fallback branch that intentionally constrains the
+modern mode-3 orbit.
