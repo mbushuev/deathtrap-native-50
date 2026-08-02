@@ -2154,3 +2154,19 @@ pitch range, and uses the same non-inverted right-stick vertical convention as
 modern third person. Future work must preserve this behaviour and must not
 restore root-relative placement, parent-identity gating or the 0.5 horizontal
 projection threshold.
+
+## 0.0.198: compact diagnostics preserve the accepted camera
+
+The accepted v0.0.197 run produced a 6,051,700-byte log with 16,509 lines.
+`camera_probe` contributed 3,917,264 characters across 3,280 records;
+`head_joint_candidate` plus its summaries contributed about 1.29 MB across
+7,215 records. Those two streams were temporary reverse-engineering tools and
+now have completed their purpose.
+
+Version 0.0.198 changes no camera, input, collision, animation, interpolation
+or audio behaviour. `DebugLog=1` remains enabled so every process gets its own
+timestamped support log. The production INI sets `CameraProbe=0` and
+`HeadJointProbe=0`, reducing the representative session to roughly 0.8 MB
+while retaining operational state changes, errors, fallbacks, collision/input
+events and periodic summaries. Either deep probe remains runtime-selectable
+for a targeted investigation without rebuilding the DLL.

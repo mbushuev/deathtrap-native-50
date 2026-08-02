@@ -14019,7 +14019,9 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.197 keeps the animated head mount "
+      "Deathtrap native render overlay 0.0.198 uses compact per-launch "
+      "diagnostics while preserving the accepted camera and controls; "
+      "0.0.197 keeps the animated head mount "
       "through the complete configured pitch range; "
       "0.0.196 keeps the animated head mount "
       "through neck translation and aligns its right-stick vertical axis; "

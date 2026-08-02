@@ -1,12 +1,13 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.197` (the stable fully owned camera and
+Current development version: `0.0.198` (the accepted fully owned camera and
 Steam music-routing fix plus an independent body-visible immersive
 first-person view with corrected look-at orientation and rigid player-focus
 attachment, now replaced by a structurally resolved animated head mount whose
 eye sits just in front of the face while rotation remains user-controlled;
 animated neck translation and the full ±75-degree pitch range no longer drop
-the view to third person).
+the view to third person; normal per-launch logs now omit the two heavy
+reverse-engineering probe streams).
 
 The `modern-third-person-camera` branch contains the native modern-camera
 implementation. It takes ownership at the mode-3 dispatcher, composes the
@@ -418,6 +419,9 @@ D3D11 settings, first-run verification and troubleshooting.
 - `Diagnostics/DebugLog=1`: write render, input and present diagnostics into
   one timestamped file per process launch under the game's `logs` directory.
   A later launch never appends to an earlier session.
+- `Diagnostics/CameraProbe=0` and `HeadJointProbe=0`: normal compact logging.
+  Set either to `1` only when a requested reverse-engineering capture needs
+  per-tick camera fields or the complete animated head candidate list.
 
 Version 0.0.158 separates gameplay features from optional presentation
 multiplication. Modern camera, XInput, selectors, retail first person and

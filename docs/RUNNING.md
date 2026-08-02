@@ -118,6 +118,8 @@ Subframes=3
 
 [Diagnostics]
 DebugLog=1
+CameraProbe=0
+HeadJointProbe=0
 ```
 
 `Subframes=3` produces two render-only phases plus the real endpoint, or about
@@ -139,6 +141,13 @@ deathtrap-native-YYYYMMDD-HHMMSS-mmm-pidNNNN.log
 The shared session log must contain the version banner, periodic `tick=`
 interpolation telemetry and `native-only D3D11 swapchain attached`. A later
 process launch creates another file instead of appending to the old one.
+
+`CameraProbe` and `HeadJointProbe` are heavy reverse-engineering streams, not
+normal support logging. Version 0.0.198 keeps both at `0`: the accepted camera,
+input, collision, transition, error and periodic summary records remain, while
+a representative 6.05 MB session loses about 5.21 MB of probe-only data. Set
+one probe to `1` only for a specifically requested capture; no DLL rebuild is
+required.
 
 During gameplay, `F11` toggles only the native render-rate modification. This
 provides a direct visual A/B test without restarting the game.
@@ -367,8 +376,9 @@ past +/-60 degrees must no longer expose third person. The eye's 55-unit
 forward placement remains horizontal; only the user-owned view direction
 pitches up/down.
 
-The v0.0.197 live result is accepted as the stable immersive first-person
-baseline. No additional diagnostic sequence is pending.
+The v0.0.197 camera result remains the stable immersive first-person baseline
+in v0.0.198. No additional diagnostic sequence is pending, so both heavy
+probes are disabled in the installed production preset.
 
 The layout follows two established conventions: the right stick acts as a
 pointer in menus and as camera look in gameplay, while hold, select and release
