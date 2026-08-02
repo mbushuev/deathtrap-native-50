@@ -3334,13 +3334,12 @@ bool BuildThirdPersonOrbitPosition(void* controller,
     // with modern third-person controls; the INI flags reverse each axis only
     // when explicitly requested.
     const double horizontal_sign = g_third_person_orbit_invert_x ? -1.0 : 1.0;
-    // A head-mounted view uses the opposite camera-orbit convention from a
-    // trailing spring arm: stick-up must look up, not move the arm upward
-    // while continuing to look at the player. Preserve the approved trailing
-    // camera direction and correct only the custom head mode.
-    const double vertical_sign = custom_head_view
-        ? (g_third_person_orbit_invert_y ? 1.0 : -1.0)
-        : (g_third_person_orbit_invert_y ? -1.0 : 1.0);
+    // The immersive endpoint now publishes Dungeon's true camera-forward
+    // convention. It therefore uses the same physical right-stick vertical
+    // direction as the approved third-person orbit; the old mode-specific
+    // reversal made stick-up look down after the v0.0.195 orientation fix.
+    const double vertical_sign =
+        g_third_person_orbit_invert_y ? -1.0 : 1.0;
     g_third_person_orbit_state.yaw +=
         g_third_person_orbit_state.filtered_input_x * horizontal_sign *
         g_third_person_orbit_horizontal_radians *
@@ -3539,12 +3538,8 @@ uintptr_t ResolvePlayerHeadJoint(const SceneSnapshot& scene) {
       continue;
     }
     const auto& local = transform.local.values;
-    const auto& parent_local = parent->second.local.values;
     if (std::abs(local[9]) > 8 || local[10] < 55 || local[10] > 90 ||
-        local[11] < 15 || local[11] > 55 ||
-        std::abs(parent_local[9]) > 8 ||
-        std::abs(parent_local[10]) > 8 ||
-        std::abs(parent_local[11]) > 8) {
+        local[11] < 15 || local[11] > 55) {
       continue;
     }
 
@@ -14020,7 +14015,9 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.195 mounts the immersive eye on "
+      "Deathtrap native render overlay 0.0.196 keeps the animated head mount "
+      "through neck translation and aligns its right-stick vertical axis; "
+      "0.0.195 mounts the immersive eye on "
       "the structurally resolved animated head joint and advances it in "
       "front of the face while preserving user-owned rotation; "
       "0.0.193 bound the immersive eye to "

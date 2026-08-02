@@ -2106,3 +2106,22 @@ sickness. Both room and scene-mesh collision sweeps now begin at the animated
 head pivot rather than the old root-relative focus. A missing or ambiguous
 joint fails closed to the accepted modern third-person owner; it never guesses
 a different skeletal node.
+
+## 0.0.196: animated parents are not identity nodes
+
+The v0.0.195 live run repeatedly emits 215 `HEAD_JOINT` failures and falls
+back to modern third person while strafing, reversing and turning. The head
+itself remains unambiguous on every diagnostic sample: local `0/71/34`, radius
+76, depth 5, one braid child, resource-free parent and a three-child
+grandparent. The rejected field is the parent's local translation. It is zero
+in the neutral pose but legitimately becomes values such as `28/0/14` and
+`-32/0/23` when the neck/head branch follows locomotion.
+
+Version 0.0.196 removes only that invalid identity-transform requirement.
+Head-local geometry, bounds, ancestry, child topology and resource-free neck
+branch remain mandatory, so the resolver cannot switch to a hand, weapon or
+braid node. The same run also proves that the v0.0.195 endpoint correction
+changed the effective vertical convention: the custom-mode-only right-stick
+reversal now makes physical up look down. Custom head and approved third-
+person modes therefore share the `InvertY` sign in v0.0.196; third-person
+behaviour is unchanged.

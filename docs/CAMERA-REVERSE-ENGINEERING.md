@@ -2297,3 +2297,22 @@ current root translation comes from current `camera_focus`. The head-relative
 animation offset is therefore retained without inheriting skeletal rotation.
 Collision origin, exact publication and subsequent x2/x3 endpoint
 interpolation all use the head-mounted source pose.
+
+## v0.0.195 live rejection: neck translation is animation (v0.0.196)
+
+The live log is
+`<game-directory>\logs\deathtrap-native-20260802-144017-984-pid29268.log`.
+It records 88 successful immersive publications but 215
+`valid=0 reason=HEAD_JOINT` failures, followed by visible
+`fallback=MODERN_THIRD_PERSON` transitions. At tick 1110 the verified head is
+still `05E00688`, local `0/71/34`, radius 76. Its resource-free parent
+`05DFE8D8` is no longer local identity: it is `28/0/14`; at tick 1120 it is
+`-32/0/23`. When it returns to zero at tick 1130, publication succeeds again.
+
+Thus the parent is a real animated neck/head anchor, not a static dummy whose
+translation may be validated as zero. The persistent identifier remains the
+head's own invariant local transform plus radius, depth, child count,
+resource-free parent and three-child grandparent. v0.0.196 retains all those
+checks and permits the parent to animate. No latch or last-known node is
+needed, and no failure-driven camera-mode cut should remain in these movement
+states.

@@ -355,6 +355,12 @@ longer offsets from the player root or `camera_focus`. Keep `HeadJointProbe=1`
 for the first acceptance run; it remains read-only and confirms the resolved
 branch while the camera log records the selected node and head centre.
 
+In v0.0.196 the head resolver accepts the neck translation produced by
+sideways/backward locomotion; it must no longer switch to third person during
+those animations. The right stick now uses the same vertical convention in
+custom head and modern third person. With the default `InvertY=0`, physical
+stick-up looks up in both; setting `InvertY=1` reverses both.
+
 The layout follows two established conventions: the right stick acts as a
 pointer in menus and as camera look in gameplay, while hold, select and release
 matches the standard radial-menu interaction.
