@@ -871,7 +871,10 @@ inline CameraSpringArmStep StepCameraSpringArm(
     uint32_t previous_blocked_release_ticks,
     double previous_blocked_candidate_distance = 0.0,
     uint64_t previous_blocker_key = 0,
-    uint64_t current_blocker_key = 0) {
+    uint64_t current_blocker_key = 0,
+    uint32_t clear_ticks_before_release = 4u,
+    uint32_t blocked_ticks_before_release = 3u,
+    double release_step = 64.0) {
   CameraSpringArmStep result;
   if (!std::isfinite(desired_distance) || desired_distance <= 0.0) {
     return result;
@@ -880,10 +883,12 @@ inline CameraSpringArmStep StepCameraSpringArm(
       hard_safe_distance, 0.0, desired_distance);
   const double previous = std::clamp(
       previous_radius, 0.0, desired_distance);
-  constexpr double kReleaseStep = 64.0;
   constexpr double kBlockedCandidateRegressionTolerance = 2.0;
-  constexpr uint32_t kClearTicksBeforeRelease = 4u;
-  constexpr uint32_t kBlockedTicksBeforeRelease = 3u;
+  clear_ticks_before_release = std::max(clear_ticks_before_release, 1u);
+  blocked_ticks_before_release = std::max(blocked_ticks_before_release, 1u);
+  if (!std::isfinite(release_step) || release_step <= 0.0) {
+    release_step = 64.0;
+  }
 
   if (safe + 0.5 < previous) {
     // Pull-in is hard and immediate. No submitted camera point may cross the
@@ -913,8 +918,8 @@ inline CameraSpringArmStep StepCameraSpringArm(
               : 1u;
     }
     result.radius = previous;
-    if (result.blocked_release_ticks >= kBlockedTicksBeforeRelease) {
-      result.radius = std::min(safe, previous + kReleaseStep);
+    if (result.blocked_release_ticks >= blocked_ticks_before_release) {
+      result.radius = std::min(safe, previous + release_step);
     }
     result.clear_ticks = 0;
     result.blocked_candidate_distance = safe;
@@ -927,8 +932,8 @@ inline CameraSpringArmStep StepCameraSpringArm(
     result.clear_ticks = std::min(previous_clear_ticks + 1u, 120u);
     result.blocked_release_ticks = 0;
     result.radius = previous;
-    if (result.clear_ticks >= kClearTicksBeforeRelease) {
-      result.radius = std::min(desired_distance, previous + kReleaseStep);
+    if (result.clear_ticks >= clear_ticks_before_release) {
+      result.radius = std::min(desired_distance, previous + release_step);
     }
     result.blocked_candidate_distance =
         previous_blocked_candidate_distance;

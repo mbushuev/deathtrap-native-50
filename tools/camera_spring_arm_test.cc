@@ -663,6 +663,47 @@ int main() {
   ExpectTicks(step.blocked_release_ticks, 1,
               "regressing clearance restarts confirmation");
 
+  // The fully-owned camera uses a longer evidence window than the frozen
+  // hybrid. A boundary that alternates hit/clear every few source ticks must
+  // not create a release-then-contract sawtooth.
+  step = StepCameraSpringArm(1400.0, 700.0, 1400.0, true, 0, 0,
+                             0.0, 0u, kMeshBlocker,
+                             10u, 8u, 64.0);
+  ExpectNear(step.radius, 700.0, "owned policy contracts immediately");
+  for (uint32_t clear_tick = 1; clear_tick < 10; ++clear_tick) {
+    step = StepCameraSpringArm(1400.0, 1400.0, step.radius, false,
+                               step.clear_ticks,
+                               step.blocked_release_ticks,
+                               step.blocked_candidate_distance,
+                               step.blocker_key, 0u,
+                               10u, 8u, 64.0);
+    ExpectNear(step.radius, 700.0,
+               "owned policy holds intermittent clear evidence");
+  }
+  step = StepCameraSpringArm(1400.0, 1400.0, step.radius, false,
+                             step.clear_ticks,
+                             step.blocked_release_ticks,
+                             step.blocked_candidate_distance,
+                             step.blocker_key, 0u,
+                             10u, 8u, 64.0);
+  ExpectNear(step.radius, 764.0,
+             "owned policy releases after sustained clear evidence");
+  step = StepCameraSpringArm(1400.0, 900.0, 700.0, true, 0, 0,
+                             700.0, kMeshBlocker, kMeshBlocker,
+                             10u, 8u, 64.0);
+  for (uint32_t blocked_tick = 1; blocked_tick < 8; ++blocked_tick) {
+    ExpectNear(step.radius, 700.0,
+               "owned policy holds moving boundary evidence");
+    step = StepCameraSpringArm(1400.0, 900.0, step.radius, true,
+                               step.clear_ticks,
+                               step.blocked_release_ticks,
+                               step.blocked_candidate_distance,
+                               step.blocker_key, kMeshBlocker,
+                               10u, 8u, 64.0);
+  }
+  ExpectNear(step.radius, 764.0,
+             "owned moving boundary releases after confirmation");
+
   if (!CameraPreNativeEscapeOwnsFinalTarget(
           true, false, true, true, true, true) ||
       CameraPreNativeEscapeOwnsFinalTarget(

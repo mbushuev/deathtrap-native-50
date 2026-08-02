@@ -4027,6 +4027,63 @@ bool SweepOwnedCameraAgainstSceneMeshesInSnapshots(
       continue;
     }
 
+    if (initial_overlap) {
+      // A zero-distance triangle contact only says the 96-unit sphere around
+      // the player-side pivot currently overlaps this render mesh. It does
+      // not make every outward orbit ray invalid. Skip exactly the interval
+      // needed to leave the mesh's expanded bounds, then sweep the remaining
+      // ray against the real triangles. A later re-entry still blocks; a
+      // clean exit cannot collapse the owned camera to the focus or force a
+      // one-frame hybrid fallback.
+      double pivot_exit_distance = 0.0;
+      size_t pivot_exit_axis = std::numeric_limits<size_t>::max();
+      if (CameraMeshContainedPivotRayExitDistance(
+              *mesh, current.world, origin, direction,
+              kCameraCollisionSphereRadius, kContactBackoff,
+              nearest_contact, &pivot_exit_distance, &pivot_exit_axis)) {
+        constexpr double kPostExitStartMargin = 1.0;
+        const double post_exit_start = std::min(
+            nearest_contact, pivot_exit_distance + kPostExitStartMargin);
+        bool post_exit_hit = false;
+        double post_exit_distance = nearest_contact;
+        CameraMeshHitDiagnostic post_exit_diagnostic;
+        if (post_exit_start + 0.5 < nearest_contact) {
+          post_exit_hit = CameraMeshSweepDistance(
+              *mesh, current.world, origin, direction,
+              kCameraCollisionSphereRadius, post_exit_start,
+              nearest_contact, &post_exit_distance, nullptr,
+              &post_exit_diagnostic);
+        }
+        if (!post_exit_hit) {
+          if (g_debug_log) {
+            AppendNativeLog(
+                "camera_owned_scene_pivot_exit result=CLEAR node=%08llX "
+                "resource=%llu exit=%.1f requested=%.1f axis=%llu",
+                static_cast<unsigned long long>(node),
+                static_cast<unsigned long long>(
+                    current.render_resource_handle),
+                pivot_exit_distance, requested_distance,
+                static_cast<unsigned long long>(pivot_exit_axis));
+          }
+          continue;
+        }
+        contact_distance = post_exit_distance;
+        initial_overlap = false;
+        diagnostic = post_exit_diagnostic;
+        if (g_debug_log) {
+          AppendNativeLog(
+              "camera_owned_scene_pivot_exit result=REENTRY node=%08llX "
+              "resource=%llu exit=%.1f contact=%.1f requested=%.1f "
+              "axis=%llu",
+              static_cast<unsigned long long>(node),
+              static_cast<unsigned long long>(
+                  current.render_resource_handle),
+              pivot_exit_distance, contact_distance, requested_distance,
+              static_cast<unsigned long long>(pivot_exit_axis));
+        }
+      }
+    }
+
     nearest_contact = contact_distance;
     nearest_initial_overlap = initial_overlap;
     nearest_diagnostic = diagnostic;
@@ -5506,7 +5563,8 @@ bool ResolveOwnedCameraSpringArm(
       state.owned_collision_clear_ticks,
       state.owned_collision_blocked_release_ticks,
       state.owned_collision_blocked_candidate_distance,
-      state.owned_collision_blocker_key, blocker_key);
+      state.owned_collision_blocker_key, blocker_key,
+      10u, 8u, 64.0);
   state.owned_collision_radius = step.radius;
   state.owned_collision_clear_ticks = step.clear_ticks;
   state.owned_collision_blocked_release_ticks =
@@ -6680,6 +6738,48 @@ void __cdecl HookMode3Camera(void* controller) {
                  std::isfinite(revalidated_safe_distance)) {
         g_third_person_orbit_state.owned_collision_radius =
             revalidated_safe_distance;
+      }
+
+      if (g_debug_log && owned_spring_valid) {
+        static uint64_t owned_solution_sequence = 0;
+        ++owned_solution_sequence;
+        const auto& selected_solution = owned_combined_plan.candidates[
+            owned_combined_plan.selected_index];
+        if (combined_obstructed || owned_spring_room.blocked ||
+            owned_spring_scene.blocked || owned_transition_cut ||
+            (owned_solution_sequence % 30u) == 1u) {
+          AppendNativeLog(
+              "camera_owned_solution selected=%llu retained=%u "
+              "direct=%.1f selected=%.1f combined=%.1f spring=%.1f "
+              "revalidated=%.1f room=%u/%u scene=%u/%u overlap=%u "
+              "resource=%llu tri=%llu motion=%.1f blocker=%llu cut=%u",
+              static_cast<unsigned long long>(
+                  owned_combined_plan.selected_index),
+              owned_combined_plan.retained_previous ? 1u : 0u,
+              owned_combined_plan.candidates[0].safe_distance,
+              selected_solution.safe_distance, combined_safe_distance,
+              CameraPositionDistance(camera_focus, owned_spring_position),
+              revalidated_safe_distance,
+              owned_room_applied_sweep.blocked ? 1u : 0u,
+              owned_spring_room.blocked ? 1u : 0u,
+              owned_scene_sweep.blocked ? 1u : 0u,
+              owned_spring_scene.blocked ? 1u : 0u,
+              (owned_scene_sweep.initial_overlap ||
+               owned_spring_scene.initial_overlap) ? 1u : 0u,
+              static_cast<unsigned long long>(
+                  owned_spring_scene.blocked
+                      ? owned_spring_scene.diagnostic.resource
+                      : owned_scene_sweep.diagnostic.resource),
+              static_cast<unsigned long long>(
+                  owned_spring_scene.blocked
+                      ? owned_spring_scene.diagnostic.triangle_index
+                      : owned_scene_sweep.diagnostic.triangle_index),
+              owned_spring_scene.blocked
+                  ? owned_spring_scene.diagnostic.bounds_motion
+                  : owned_scene_sweep.diagnostic.bounds_motion,
+              static_cast<unsigned long long>(combined_blocker_key),
+              owned_transition_cut ? 1u : 0u);
+        }
       }
 
       if (owned_spring_valid && PublishOwnedCameraEndpoint(
@@ -13108,10 +13208,11 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.181 publishes one fully-owned "
+      "Deathtrap native render overlay 0.0.182 publishes one fully-owned "
       "collision-safe room+scene gameplay-camera pose per source tick, with "
       "detached matrix construction, atomic verified live publication, "
-      "immediate contraction, damped radial release and presentation cuts "
+      "initial-overlap ray exit, immediate contraction, sustained-evidence "
+      "radial release and presentation cuts "
       "across disconnected safe shots; scripted reveals remain native and a "
       "transaction failure explicitly falls back to the 0.0.172 hybrid; "
       "it uses one pre-history "

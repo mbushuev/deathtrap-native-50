@@ -1872,3 +1872,29 @@ collision or mutating gameplay-camera history.
 
 Implementation commit is `ba3df97`. Build/dist/installed x86 SHA-256 is
 `08E5C1CADFF419A74F576BE2C0FE442F211BC4534EC3DF21801A8E1046B3CF29`.
+
+## 0.0.182: volume exit and sustained release evidence
+
+The first live-owned log separates publication correctness from collision
+response. All sampled live transactions are exact, but initial overlap in the
+dynamic triangle channel can still report a zero-distance obstruction when the
+player-side pivot is inside a block's 96-unit shell. That is a topological
+exit, not a valid inward spring endpoint. The owned channel now removes only
+the interval required to leave the complete mesh's expanded OBB and resumes
+the real triangle sweep after it. A later re-entry is preserved as collision;
+a clean exit cannot collapse the camera to the focus or force hybrid ownership.
+
+Collision evidence near a mesh silhouette is not perfectly continuous at
+20 Hz. Four clear ticks allowed the radius to expand twice between recurring
+contacts, creating a visible contraction sawtooth even though every individual
+endpoint was safe. Owned gameplay therefore uses ten clear ticks and eight
+monotonic moving-boundary ticks before recovery. This changes temporal
+confidence only: immediate inward safety, maximum recovery speed, collision
+radius and mesh qualification are unchanged. The frozen hybrid retains the
+original generic policy.
+
+The new diagnostic unit is `camera_owned_solution`, which records the complete
+decision after angular selection, radial response and revalidation. It makes a
+future candidate alternation distinguishable from scene-contact flicker and
+from publication failure without reconstructing state from unrelated legacy
+logs.

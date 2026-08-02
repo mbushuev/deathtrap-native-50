@@ -378,3 +378,44 @@ Rollback v0.0.180 is
 `<game-directory>\back\deathtrap-native50-overlay-20260802-103443`.
 The game was not launched by Codex and external game/dgVoodoo hashes are
 unchanged.
+
+## 0.0.181 live result and 0.0.182 overlap/release correction
+
+The first live run is
+`<game-directory>\logs\deathtrap-native-20260802-103632-932-pid14240.log`.
+Wall ownership is materially correct: the user reports no wall penetration.
+The narrow publication transaction also passes. There are 109 sampled
+successful `camera_owned_publish_live` records; every one has matching sectors,
+exact detached matrices, `untouched=1/1/1` and `commit=1`. No transaction
+rollback fails and scripted takeover/release both occur once.
+
+The remaining sticking and jitter are collision-state defects, not matrix
+publication defects. Seven source ticks reject radial revalidation. Their
+positive evidence is a direction-qualified initial overlap at contact distance
+zero (resources 11432, 12613 and 13676), which collapses the combined result to
+the focus and temporarily selects hybrid. The same run contains 52 owned safe
+cuts, including repeated alternation between the same two nearby targets. At
+the end, one stable dynamic blocker repeatedly alternates a roughly 600--750
+unit contact with a clear 1400-unit ray. The four-tick generic release policy
+therefore produces a measured sawtooth such as
+`692 -> 756 -> 820 -> 692`.
+
+Version 0.0.182 corrects both mechanisms generally:
+
+- When the 96-unit pivot sphere initially overlaps a qualified render mesh,
+  the owned sweep computes the ray exit from that mesh's expanded oriented
+  bounds and resumes the real triangle sweep just after the exit. A clean exit
+  is allowed; a later triangle re-entry remains blocking. This is the same
+  idempotent topology already proved in the older diagnostic path, now applied
+  to the clean owned dynamic channel.
+- The owned spring uses its own sustained-evidence policy: ten completely
+  clear source ticks before radial recovery and eight monotonic samples before
+  following an outward-moving blocked boundary. Inward contraction remains
+  immediate and recovery remains bounded at 64 units per source tick.
+
+The generic spring policy remains unchanged for the frozen hybrid fallback.
+Deterministic tests reproduce the intermittent hit/clear sequence and verify
+that the owned radius stays fixed until the longer evidence window is met.
+New `camera_owned_solution` records join selected candidate, room/scene
+contacts, revalidated radius, resource/triangle, blocker and cut in one line;
+`camera_owned_scene_pivot_exit` distinguishes clean exit from real re-entry.
