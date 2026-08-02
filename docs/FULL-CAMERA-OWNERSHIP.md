@@ -371,3 +371,10 @@ midpoint interpolation.
 Runtime evidence is `camera_owned_publish_live`. Acceptance for the first live
 run is: no `valid=0`, no `HYBRID_FALLBACK` after warm-up, `commit=1`, unchanged
 player bytes, preserved scripted lever transitions, and no wall/block escape.
+
+Implementation commit is `ba3df97`. Build/dist/installed x86 SHA-256 is
+`08E5C1CADFF419A74F576BE2C0FE442F211BC4534EC3DF21801A8E1046B3CF29`.
+Rollback v0.0.180 is
+`<game-directory>\back\deathtrap-native50-overlay-20260802-103443`.
+The game was not launched by Codex and external game/dgVoodoo hashes are
+unchanged.

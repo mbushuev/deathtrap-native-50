@@ -1869,3 +1869,6 @@ native configure path, so full-owned and hybrid/native positions never combine
 within one source state. Synthetic x2/x3 renders continue to interpolate only
 completed exact snapshots and consume an owned safe-cut marker without running
 collision or mutating gameplay-camera history.
+
+Implementation commit is `ba3df97`. Build/dist/installed x86 SHA-256 is
+`08E5C1CADFF419A74F576BE2C0FE442F211BC4534EC3DF21801A8E1046B3CF29`.
