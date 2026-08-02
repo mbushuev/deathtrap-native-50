@@ -76,6 +76,11 @@ bool DeathtrapModernCameraConsumesMouse();
 // the already-installed J/K side-step actions without changing keys.cfg.
 bool DeathtrapImmersiveFirstPersonActive();
 
+// Publishes physical-keyboard lateral intent independently from XInput. The
+// render patch combines both sources only while its immersive first-person
+// view is active; retail and third-person side-step speeds are untouched.
+void SubmitDeathtrapImmersiveKeyboardStrafe(bool active, bool run);
+
 // Marks an explicit operate/use input from either the controller bridge or
 // the physical DirectInput keyboard. The camera uses this narrow signal to
 // allow only authored lever/switch reveal shots through the retail rig.

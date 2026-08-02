@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.201` (the accepted fully owned camera and
+Current development version: `0.0.202` (the accepted fully owned camera and
 Steam music-routing fix plus an independent body-visible immersive
 first-person view with corrected look-at orientation and rigid player-focus
 attachment, now replaced by a structurally resolved animated head mount whose
@@ -10,6 +10,11 @@ the view to third person; both playable skeletons are supported, immersive
 heading ownership is released on exit, and physical-mouse vertical look uses
 the conventional direction; normal per-launch logs omit the two heavy
 reverse-engineering probe streams).
+
+Immersive first person now accelerates the retail side-step state through its
+native motion/collision channels: lateral walking defaults to 150% and lateral
+running to 200% of the original side-step speed. This is scoped to F10/SELECT;
+third person, retail Tab/R3 and LB side-step retain their original speed.
 
 See the [user-facing changelog](CHANGELOG.md) for the consolidated differences
 from the original Steam release.
@@ -163,6 +168,10 @@ D3D11 settings, first-run verification and troubleshooting.
   `Camera/InvertX=1` and `Camera/InvertY=1` reverse the conventional default
   camera axes. `Camera/PreferredRadius=1400` controls the unobstructed camera
   distance; the native collision resolver may pull it closer near geometry.
+  `Camera/HeadStrafeWalkPercent=150` and
+  `Camera/HeadStrafeRunPercent=200` control only immersive-view lateral
+  movement. Full lateral stick deflection participates in the same run
+  threshold and hysteresis as forward movement.
 - The native orbit camera engages as soon as gameplay becomes valid, whether
   input comes from a mouse, controller, or no controller at all. Inventory
   selection suppresses look input without replacing or resetting the rig.

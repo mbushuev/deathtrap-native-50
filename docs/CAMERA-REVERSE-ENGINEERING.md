@@ -2408,3 +2408,27 @@ female rest pose. The existing live candidate sets for both characters each
 contain exactly one structural match, so attacks, jumps and other animation
 poses cannot change the selected node while a genuinely ambiguous future
 skeleton still fails closed.
+
+## Native side-step motion path (v0.0.202)
+
+Static disassembly closes the lateral-speed path without guessing at actor
+coordinates. The input resolver at `Dungeon.dll+0x871B0` maps action 7/8 to
+controller flags `0x100/0x200`. The shared ground dispatcher reaches
+`+0x5F4F0/+0x5F520`, which install the left/right side-step state with a
+direction value of `-1/+1` at controller offset `+0x19C`.
+
+Both states schedule `+0x5F650` every two source ticks. That callback sets the
+native response fields at `+0x244/+0x248` to `100/50`, derives signed
+velocities `150/50` from `+0x19C`, and calls the engine motion channels at
+`+0x442F0/+0x443B0`. Those functions feed the existing locomotion/collision
+publication; no separate run-left/run-right action flag exists in the action
+table.
+
+Version 0.0.202 therefore changes neither action flags nor player transforms.
+An exact-prologue MinHook on `+0x5F650` calls the same two channel functions
+with configured scaled values only when the callback belongs to the live
+player and overlay-owned immersive first person is selected. It falls back to
+the original callback on any signature, controller, direction or write
+failure. Pure horizontal XInput now participates in the circular-magnitude run
+latch; physical Shift+A/D selects the same faster scale after A/D is mapped to
+J/K.

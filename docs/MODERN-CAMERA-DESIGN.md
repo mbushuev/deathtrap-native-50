@@ -2220,3 +2220,27 @@ resource-free neck parent and a three-child chest grandparent. Selection is
 unique-or-fail rather than scored by pose proximity. This applies equally to
 Red Lotus and Chaindog and covers every animation without enumerating action
 offsets. Accepted v0.0.199 input behavior is unchanged.
+
+## 0.0.202: immersive-only lateral walk and run
+
+Immersive view keeps the actor heading aligned with the user-owned eye yaw, so
+horizontal movement must remain a real strafe rather than a camera-relative
+turn followed by forward motion. The existing J/K actions already enter the
+retail left/right side-step states, but their fixed speed is substantially
+below ordinary locomotion and the XInput run latch previously inspected only
+the stick's vertical component.
+
+The replacement is intentionally below input mapping and above no transform
+writer. `Dungeon.dll+0x5F650`, the periodic callback installed by both retail
+side-step states, writes signed `150/50` values through the engine's primary
+and secondary motion/collision channels at `+0x442F0/+0x443B0`. Version
+0.0.202 hooks only that callback, verifies the live player controller and the
+active F10/SELECT view, then submits configured scaled values through those
+same native functions. Default walking is 150% and running is 200%. The
+original callback is called unchanged for every other view or actor.
+
+Keyboard and XInput publish independent atomic lateral intent so one device's
+poll cannot cancel the other. In head view the circular left-stick magnitude,
+not `abs(Y)`, owns the existing run threshold and release hysteresis. This
+allows pure horizontal walking and running while preserving the retail state,
+animation lifetime, collision and render/collision publication.

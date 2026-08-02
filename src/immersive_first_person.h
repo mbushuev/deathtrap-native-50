@@ -10,6 +10,30 @@ struct ImmersiveFirstPersonPose {
   bool valid = false;
 };
 
+struct ImmersiveStrafeMotion {
+  int32_t primary = 0;
+  int32_t secondary = 0;
+  bool active = false;
+};
+
+// Dungeon.dll+0x5F650 feeds the retail side-step state into the same two
+// motion/collision channels used by ordinary locomotion. The original values
+// are 150/50 for a direction of -1 or +1. Scaling those inputs preserves the
+// native state, animation and collision path instead of moving the actor by
+// an overlay-owned transform.
+inline ImmersiveStrafeMotion BuildImmersiveStrafeMotion(
+    int32_t direction, int32_t scale_percent) {
+  ImmersiveStrafeMotion motion;
+  if ((direction != -1 && direction != 1) || scale_percent < 100 ||
+      scale_percent > 400) {
+    return motion;
+  }
+  motion.primary = direction * 150 * scale_percent / 100;
+  motion.secondary = direction * 50 * scale_percent / 100;
+  motion.active = true;
+  return motion;
+}
+
 // Both playable characters share the central chest/neck/head structure, but
 // only Red Lotus has a braid descending from the head node. Local head
 // translation is deliberately absent from this contract: live action frames

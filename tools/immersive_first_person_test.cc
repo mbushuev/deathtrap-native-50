@@ -44,6 +44,20 @@ int main() {
   Require(ImmersivePhysicalMouseVerticalSign(true) == 1.0,
           "InvertY must reverse the immersive physical mouse default");
 
+  const ImmersiveStrafeMotion walk_left =
+      BuildImmersiveStrafeMotion(-1, 150);
+  Require(walk_left.active && walk_left.primary == -225 &&
+              walk_left.secondary == -75,
+          "immersive walking strafe must scale both native motion channels");
+  const ImmersiveStrafeMotion run_right =
+      BuildImmersiveStrafeMotion(1, 200);
+  Require(run_right.active && run_right.primary == 300 &&
+              run_right.secondary == 100,
+          "immersive running strafe must preserve direction and run faster");
+  Require(!BuildImmersiveStrafeMotion(0, 200).active &&
+              !BuildImmersiveStrafeMotion(1, 99).active,
+          "invalid side-step direction or scale must fail closed");
+
   const ImmersiveFirstPersonPose forward =
       BuildImmersiveFirstPersonPose(root, 0.0, 0.0, 60, 120);
   Require(forward.valid, "forward pose must be valid");

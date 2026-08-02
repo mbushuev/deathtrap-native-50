@@ -180,6 +180,8 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     if (DeathtrapImmersiveFirstPersonActive()) {
       const bool left = (keyboard[DIK_A] & 0x80u) != 0u;
       const bool right = (keyboard[DIK_D] & 0x80u) != 0u;
+      const bool run = (keyboard[DIK_LSHIFT] & 0x80u) != 0u;
+      SubmitDeathtrapImmersiveKeyboardStrafe(left || right, run);
       keyboard[DIK_A] &= static_cast<uint8_t>(~0x80u);
       keyboard[DIK_D] &= static_cast<uint8_t>(~0x80u);
       if (left) {
@@ -188,6 +190,8 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
       if (right) {
         keyboard[DIK_K] |= 0x80u;
       }
+    } else {
+      SubmitDeathtrapImmersiveKeyboardStrafe(false, false);
     }
   }
   // Deathtrap uses the standard relative mouse state. Preserve the physical

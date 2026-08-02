@@ -384,6 +384,13 @@ those animations. The right stick now uses the same vertical convention in
 custom head and modern third person. With the default `InvertY=0`, physical
 stick-up looks up in both; setting `InvertY=1` reverses both.
 
+Version 0.0.202 gives the F10/SELECT head view separate lateral walk and run
+speeds. `HeadStrafeWalkPercent=150` and `HeadStrafeRunPercent=200` under
+`[Camera]` scale only its native side-step motion. A full horizontal stick now
+crosses `RunThresholdPercent` just like a full forward stick. Keyboard uses
+Shift+A/D for the faster lateral state. Third person, retail Tab/R3 and LB
+side-step keep retail speed.
+
 Version 0.0.197 keeps the custom head view active through the complete
 `HeadMinimumPitchDegrees=-75` to `HeadMaximumPitchDegrees=75` range. Looking
 past +/-60 degrees must no longer expose third person. The eye's 55-unit
