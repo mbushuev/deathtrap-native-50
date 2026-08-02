@@ -2767,9 +2767,10 @@ bool EvaluateRetailCameraTakeover(
     // Inside the explicit interaction window the verified active owner is a
     // safe immediate signal.  Outside that window it remains ambiguous and
     // cannot steal the modern camera (ordinary room cameras set it too).
+    constexpr uint64_t kImmediateOwnerRevealWindowMs = 1500u;
     const bool owner_reveal =
         !state.interaction_consumed && player_stationary &&
-        recent_interaction && owner != 0 &&
+        interaction_age_ms <= kImmediateOwnerRevealWindowMs && owner != 0 &&
         state.interaction_owner_transition_seen;
     const bool travelling_reveal =
         !state.interaction_consumed && player_stationary && recent_interaction &&
@@ -2787,9 +2788,11 @@ bool EvaluateRetailCameraTakeover(
       state.interaction_consumed = true;
       AppendNativeLog(
           "camera_script takeover=ON owner=%08llX player_motion=%.1f "
-          "native_motion=%.1f accumulated=%.1f",
+          "native_motion=%.1f accumulated=%.1f age=%llu reason=%s",
           static_cast<unsigned long long>(owner), player_motion,
-          native_motion, state.stationary_native_motion);
+          native_motion, state.stationary_native_motion,
+          static_cast<unsigned long long>(interaction_age_ms),
+          owner_reveal ? "OWNER" : "TRAVELLING");
     }
   }
 
@@ -3891,15 +3894,20 @@ bool SweepOwnedCameraAgainstSceneMeshesInSnapshots(
   const Vec3 delta = CameraVectorSubtract(endpoint, origin);
   const double requested_distance =
       std::sqrt(CameraVectorDot(delta, delta));
-  if (!std::isfinite(requested_distance) || requested_distance < 1.0 ||
-      requested_distance > 5000.0) {
+  if (!std::isfinite(requested_distance) || requested_distance > 5000.0) {
     return false;
   }
-  const Vec3 direction = CameraVectorScale(delta, 1.0 / requested_distance);
   result->requested_distance = requested_distance;
   result->contact_distance = requested_distance;
   result->safe_distance = requested_distance;
   result->valid = true;
+  // A fully collapsed arm is a valid direction-preserving near-pivot shot,
+  // not a failed mesh query. There is no segment to sweep; the player-side
+  // pivot is already the terminal endpoint and the player mesh is excluded.
+  if (requested_distance < 1.0) {
+    return true;
+  }
+  const Vec3 direction = CameraVectorScale(delta, 1.0 / requested_distance);
 
   constexpr double kContactBackoff = 8.0;
   double nearest_contact = requested_distance;
@@ -4103,7 +4111,7 @@ bool SelectOwnedCameraCombinedPlan(
     const auto& room = room_plan.candidates[index];
     combined.evaluated = true;
     combined.safe_distance = room.sweep.valid ? room.safe_distance : 0.0;
-    if (!room.sweep.valid || room.safe_distance < 1.0) {
+    if (!room.sweep.valid) {
       return true;
     }
     const std::array<int32_t, 3> room_position = {
@@ -4219,79 +4227,21 @@ bool SelectOwnedCameraCombinedPlan(
   return true;
 }
 
-struct OwnedNearPivotCameraPose {
-  std::array<int32_t, 3> position{};
-  std::array<double, 3> view_forward{};
-  double safe_distance = 0.0;
-  bool room_blocked = false;
-  bool scene_blocked = false;
-  bool valid = false;
-};
-
-bool BuildOwnedNearPivotCameraPose(
-    const SceneSnapshot& scene, const SceneSnapshot& stable_scene,
+bool BuildOwnedCameraViewForward(
     const std::array<int32_t, 3>& focus,
     const std::array<int32_t, 3>& requested,
-    size_t start_sector_index, OwnedNearPivotCameraPose* pose) {
-  if (!pose || !g_runtime_room_graph.valid ||
-      start_sector_index >= g_runtime_room_graph.sectors.size()) {
+    std::array<double, 3>* view_forward) {
+  if (!view_forward) {
     return false;
   }
-  *pose = {};
   const double dx = static_cast<double>(requested[0] - focus[0]);
   const double dy = static_cast<double>(requested[1] - focus[1]);
   const double dz = static_cast<double>(requested[2] - focus[2]);
-  const double horizontal = std::hypot(dx, dz);
-  const double distance = std::hypot(horizontal, dy);
-  if (!std::isfinite(distance) || !std::isfinite(horizontal) ||
-      distance < 1.0 || horizontal < 1.0) {
+  const double distance = std::hypot(std::hypot(dx, dz), dy);
+  if (!std::isfinite(distance) || distance < 1.0) {
     return false;
   }
-
-  // The normal third-person endpoint lies along +direction and looks back
-  // along -direction. When +direction has no usable room, place the camera a
-  // short distance along the same view-forward vector's horizontal projection.
-  // This changes third/near presentation, never yaw or movement authority.
-  const double near_distance = static_cast<double>(
-      std::max(g_custom_head_forward_offset,
-               static_cast<int32_t>(kThirdPersonMinimumCameraDistance)));
-  const deathtrap_camera::RoomVec3 room_focus{
-      static_cast<double>(focus[0]), static_cast<double>(focus[1]),
-      static_cast<double>(focus[2])};
-  const deathtrap_camera::RoomVec3 near_requested{
-      room_focus.x - dx / horizontal * near_distance,
-      room_focus.y,
-      room_focus.z - dz / horizontal * near_distance};
-  const deathtrap_camera::RoomSweepResult room =
-      deathtrap_camera::SweepSphereThroughRooms(
-          g_runtime_room_graph.sectors, start_sector_index, room_focus,
-          near_requested, kCameraCollisionSphereRadius, 8.0, 32u);
-  if (!room.valid) {
-    return false;
-  }
-  std::array<int32_t, 3> position = {
-      static_cast<int32_t>(std::lround(room.position.x)),
-      static_cast<int32_t>(std::lround(room.position.y)),
-      static_cast<int32_t>(std::lround(room.position.z))};
-  OwnedCameraSceneSweepResult scene_sweep;
-  if (!SweepOwnedCameraAgainstSceneMeshesInSnapshots(
-          scene, stable_scene, focus, position, &scene_sweep)) {
-    return false;
-  }
-  if (scene_sweep.blocked) {
-    position = scene_sweep.position;
-  }
-  const double safe_distance = CameraPositionDistance(focus, position);
-  if (!std::isfinite(safe_distance) || safe_distance < 1.0) {
-    return false;
-  }
-
-  pose->position = position;
-  pose->view_forward = {-dx / distance, -dy / distance, -dz / distance};
-  pose->safe_distance = safe_distance;
-  pose->room_blocked = room.blocked;
-  pose->scene_blocked = scene_sweep.blocked;
-  pose->valid = true;
+  *view_forward = {-dx / distance, -dy / distance, -dz / distance};
   return true;
 }
 
@@ -5603,25 +5553,38 @@ bool ResolveThirdPersonSpringArm(
 
 bool ResolveOwnedCameraSpringArm(
     const std::array<int32_t, 3>& focus,
+    const std::array<int32_t, 3>& requested,
     const std::array<int32_t, 3>& collision_safe,
-    double desired_distance, bool obstruction_present,
-    uint64_t blocker_key, std::array<int32_t, 3>* submitted) {
-  if (!submitted || !g_third_person_orbit_state.engaged ||
-      !std::isfinite(desired_distance) ||
+    bool obstruction_present, uint64_t blocker_key,
+    std::array<int32_t, 3>* submitted) {
+  if (!submitted || !g_third_person_orbit_state.engaged) {
+    return false;
+  }
+  const double desired_dx = static_cast<double>(requested[0] - focus[0]);
+  const double desired_dy = static_cast<double>(requested[1] - focus[1]);
+  const double desired_dz = static_cast<double>(requested[2] - focus[2]);
+  const double desired_distance = std::hypot(
+      std::hypot(desired_dx, desired_dz), desired_dy);
+  if (!std::isfinite(desired_distance) ||
       desired_distance < kThirdPersonMinimumCameraDistance ||
       desired_distance > 5000.0) {
     return false;
   }
-  const double dx = static_cast<double>(collision_safe[0] - focus[0]);
-  const double dy = static_cast<double>(collision_safe[1] - focus[1]);
-  const double dz = static_cast<double>(collision_safe[2] - focus[2]);
-  const double safe_distance = std::hypot(std::hypot(dx, dz), dy);
-  if (!std::isfinite(safe_distance) || safe_distance < 1.0 ||
+  const double safe_dx = static_cast<double>(collision_safe[0] - focus[0]);
+  const double safe_dy = static_cast<double>(collision_safe[1] - focus[1]);
+  const double safe_dz = static_cast<double>(collision_safe[2] - focus[2]);
+  const double safe_distance = std::hypot(
+      std::hypot(safe_dx, safe_dz), safe_dy);
+  if (!std::isfinite(safe_distance) ||
       safe_distance > desired_distance + 2.0) {
     return false;
   }
+  // A collision endpoint only supplies radial clearance. Its integer-rounded
+  // direction becomes unstable as the arm approaches the pivot, so always
+  // reconstruct the submitted point on the exact user-requested orbit ray.
   const std::array<double, 3> direction = {
-      dx / safe_distance, dy / safe_distance, dz / safe_distance};
+      desired_dx / desired_distance, desired_dy / desired_distance,
+      desired_dz / desired_distance};
   ThirdPersonOrbitState& state = g_third_person_orbit_state;
   if (!state.owned_publication_active) {
     state.owned_collision_radius = safe_distance;
@@ -5629,7 +5592,13 @@ bool ResolveOwnedCameraSpringArm(
     state.owned_collision_blocked_release_ticks = 0;
     state.owned_collision_blocked_candidate_distance = safe_distance;
     state.owned_collision_blocker_key = blocker_key;
-    *submitted = collision_safe;
+    *submitted = {
+        focus[0] + static_cast<int32_t>(
+                       std::lround(direction[0] * safe_distance)),
+        focus[1] + static_cast<int32_t>(
+                       std::lround(direction[1] * safe_distance)),
+        focus[2] + static_cast<int32_t>(
+                       std::lround(direction[2] * safe_distance))};
     return true;
   }
 
@@ -6762,34 +6731,23 @@ void __cdecl HookMode3Camera(void* controller) {
           near_pivot_step.active;
       g_third_person_orbit_state.owned_near_pivot_direct_clear_ticks =
           near_pivot_step.direct_clear_ticks;
-      OwnedNearPivotCameraPose near_pivot_pose;
       std::array<int32_t, 3> owned_look_target = camera_focus;
+      std::array<double, 3> owned_view_forward{};
       const std::array<double, 3>* owned_fixed_view_forward = nullptr;
       std::array<int32_t, 3> owned_spring_position{};
-      bool owned_spring_valid = false;
       if (near_pivot_step.active) {
-        owned_spring_valid = BuildOwnedNearPivotCameraPose(
-            g_previous_snapshot, g_older_snapshot, camera_focus, orbit,
-            owned_room_start_index, &near_pivot_pose);
-        if (owned_spring_valid) {
-          owned_spring_position = near_pivot_pose.position;
-          owned_fixed_view_forward = &near_pivot_pose.view_forward;
-          g_third_person_orbit_state.owned_collision_radius =
-              near_pivot_pose.safe_distance;
-          g_third_person_orbit_state.owned_collision_clear_ticks = 0;
-          g_third_person_orbit_state
-              .owned_collision_blocked_release_ticks = 0;
-          g_third_person_orbit_state
-              .owned_collision_blocked_candidate_distance =
-              near_pivot_pose.safe_distance;
-          g_third_person_orbit_state.owned_collision_blocker_key = 0;
+        if (BuildOwnedCameraViewForward(
+                camera_focus, orbit, &owned_view_forward)) {
+          owned_fixed_view_forward = &owned_view_forward;
         }
-      } else {
-        owned_spring_valid = ResolveOwnedCameraSpringArm(
-            camera_focus, owned_combined_position, desired_distance,
-            combined_obstructed, combined_blocker_key,
-            &owned_spring_position);
       }
+      const bool owned_spring_valid_initial =
+          (!near_pivot_step.active || owned_fixed_view_forward) &&
+          ResolveOwnedCameraSpringArm(
+              camera_focus, orbit, owned_combined_position,
+              combined_obstructed, combined_blocker_key,
+              &owned_spring_position);
+      bool owned_spring_valid = owned_spring_valid_initial;
 
       // Radial recovery is another intermediate source pose. Re-run both
       // collision channels on that exact rounded point; a shorter radius is
@@ -13334,11 +13292,11 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.185 publishes one fully-owned "
+      "Deathtrap native render overlay 0.0.186 publishes one fully-owned "
       "collision-safe room+scene gameplay-camera pose per source tick, with "
       "detached matrix construction, atomic verified live publication, "
-      "initial-overlap ray exit, direction-preserving near-pivot view, "
-      "no automatic gameplay yaw, immediate contraction, sustained-margin "
+      "initial-overlap ray exit, radial near-pivot collapse, bounded scripted "
+      "takeover, no automatic gameplay yaw, immediate contraction, sustained-margin "
       "radial release and presentation cuts "
       "across disconnected safe shots; scripted reveals remain native and a "
       "transaction failure explicitly falls back to the 0.0.172 hybrid; "
