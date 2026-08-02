@@ -27,6 +27,7 @@
 
 #include "camera_spring_arm.h"
 #include "camera_room_collision.h"
+#include "deathtrap_music_route.h"
 
 namespace {
 
@@ -57,6 +58,11 @@ constexpr uintptr_t kPstMessageLifetimeImmediateRva = 0x000781C8u;
 constexpr uintptr_t kUiCountdownStateRva = 0x001D89F0u;
 constexpr uintptr_t kUiOwnerPointerRva = 0x0034F9D0u;
 constexpr uintptr_t kEngineFrameCounterRva = 0x001D24DCu;
+// The retail music selector stores the currently requested Redbook track here
+// before passing that track's start/end pair to AIL_redbook_play.  Steam's
+// legacy MP3 wrapper discards the pair, so this engine-owned value is the only
+// reliable track identity left at playback time.
+constexpr uintptr_t kCurrentRedbookTrackRva = 0x00104C10u;
 constexpr uintptr_t kPublishedCameraMatrixRva = 0x001D4110u;
 constexpr uintptr_t kRetailCameraManagerPointerRva = 0x001F11C0u;
 // Global room manager used by the retail point-sector resolver. manager+0x20
@@ -565,6 +571,7 @@ std::atomic<bool> g_spell_cast_hook_installed{false};
 std::atomic<bool> g_ranged_weapon_hook_installed{false};
 std::atomic<bool> g_consumable_hook_installed{false};
 std::atomic<bool> g_camera_orbit_hook_installed{false};
+std::atomic<bool> g_music_track_fix_installed{false};
 std::atomic<bool> g_movement_stage_probes_installed{false};
 std::atomic<bool> g_movement_callback_probe_installed{false};
 std::atomic<int32_t> g_pending_weapon_wheel_detents{0};
@@ -583,6 +590,7 @@ SceneSnapshot g_previous_snapshot;
 SceneSnapshot g_older_snapshot;
 LARGE_INTEGER g_qpc_frequency{};
 bool g_debug_log = false;
+bool g_music_track_fix_enabled = true;
 std::mutex g_native_log_mutex;
 HANDLE g_native_log_file = INVALID_HANDLE_VALUE;
 bool g_camera_probe_enabled = false;
@@ -952,6 +960,9 @@ using CameraLookAtFn = void(__cdecl*)(const int32_t* camera_position,
                                       int32_t* angles);
 using CameraHistoryAddFn = int32_t*(__cdecl*)(void* history,
                                               const int32_t* position);
+using RedbookTracksFn = uint32_t(__stdcall*)(void* handle);
+using RedbookPlayFn = int32_t(__stdcall*)(void* handle, uint32_t start,
+                                          uint32_t end);
 
 RenderPresentWaitFn g_original_render_present_wait = nullptr;
 RendererFn g_renderer = nullptr;
@@ -980,6 +991,10 @@ CameraVolumeVisibleFn g_camera_volume_visible = nullptr;
 CameraRoomTraceVisibleFn g_camera_room_trace_visible = nullptr;
 CameraLookAtFn g_original_camera_look_at = nullptr;
 CameraHistoryAddFn g_original_camera_history_add = nullptr;
+RedbookTracksFn g_original_redbook_tracks = nullptr;
+RedbookPlayFn g_original_redbook_play = nullptr;
+uint32_t* g_steam_mss_mp3_track_index = nullptr;
+std::atomic<int32_t> g_last_routed_music_track{-1};
 
 struct CameraLookAtCapture {
   bool active = false;
@@ -1368,6 +1383,195 @@ void AppendNativeLogBlock(const std::string& block) {
     return;
   }
   WriteNativeLogBytes(block.data(), block.size());
+}
+
+uint32_t __stdcall HookRedbookTracks(void*) {
+  // Track 1 is the retail data track.  Steam ships all fifteen audio tracks
+  // as MP3 files, so the CD-compatible count is 16, not the wrapper's
+  // hard-coded 9.
+  return deathtrap_music::kRedbookTrackCount;
+}
+
+int32_t __stdcall HookRedbookPlay(void* handle, uint32_t start,
+                                  uint32_t end) {
+  uint32_t selected_cd_track = 0;
+  const bool selected_read =
+      g_dungeon_base &&
+      SafeReadValue(g_dungeon_base + kCurrentRedbookTrackRva,
+                    &selected_cd_track);
+  const deathtrap_music::TrackRoute route =
+      deathtrap_music::RouteCdTrackToSteamMp3(selected_cd_track);
+  bool routed = false;
+  if (selected_read && route.valid && g_steam_mss_mp3_track_index) {
+    routed = SafeWrite(g_steam_mss_mp3_track_index, &route.mp3_index,
+                       sizeof(route.mp3_index));
+  }
+
+  const int32_t previous = g_last_routed_music_track.exchange(
+      routed ? static_cast<int32_t>(selected_cd_track) : -1,
+      std::memory_order_acq_rel);
+  if (g_debug_log &&
+      previous != (routed ? static_cast<int32_t>(selected_cd_track) : -1)) {
+    AppendNativeLog(
+        "music_redbook route=%s cd_track=%u mp3=%u start=%u end=%u",
+        routed ? "STEAM_MP3" : "ORIGINAL", selected_cd_track,
+        route.valid ? route.mp3_index : 0u, start, end);
+  }
+
+  return g_original_redbook_play
+             ? g_original_redbook_play(handle, start, end)
+             : 0;
+}
+
+bool IsKnownSteamMssWrapper(HMODULE module, uint8_t* tracks,
+                            uint8_t* play, uint8_t* track_info,
+                            uint32_t** track_index) {
+  if (!module || !tracks || !play || !track_info || !track_index) {
+    return false;
+  }
+
+  wchar_t path[MAX_PATH] = {};
+  WIN32_FILE_ATTRIBUTE_DATA attributes = {};
+  const DWORD path_length = GetModuleFileNameW(module, path, MAX_PATH);
+  if (!path_length || path_length >= MAX_PATH ||
+      !GetFileAttributesExW(path, GetFileExInfoStandard, &attributes) ||
+      attributes.nFileSizeHigh != 0u || attributes.nFileSizeLow != 25600u) {
+    return false;
+  }
+
+  constexpr std::array<uint8_t, 12> kExpectedTracks = {
+      0x55, 0x8B, 0xEC, 0xB8, 0x09, 0x00,
+      0x00, 0x00, 0x5D, 0xC2, 0x04, 0x00};
+  std::array<uint8_t, kExpectedTracks.size()> tracks_bytes{};
+  if (!SafeRead(tracks, tracks_bytes.data(), tracks_bytes.size()) ||
+      tracks_bytes != kExpectedTracks) {
+    return false;
+  }
+
+  constexpr std::array<uint8_t, 5> kExpectedPlayPrefix = {
+      0x55, 0x8B, 0xEC, 0xC7, 0x05};
+  std::array<uint8_t, kExpectedPlayPrefix.size()> play_bytes{};
+  if (!SafeRead(play, play_bytes.data(), play_bytes.size()) ||
+      play_bytes != kExpectedPlayPrefix) {
+    return false;
+  }
+
+  std::array<uint8_t, 12> track_info_bytes{};
+  if (!SafeRead(track_info, track_info_bytes.data(),
+                track_info_bytes.size()) ||
+      track_info_bytes[0] != 0x55 || track_info_bytes[1] != 0x8B ||
+      track_info_bytes[2] != 0xEC || track_info_bytes[3] != 0x51 ||
+      track_info_bytes[4] != 0xA1 || track_info_bytes[9] != 0x3B ||
+      track_info_bytes[10] != 0x45 || track_info_bytes[11] != 0x0C) {
+    return false;
+  }
+
+  uint32_t storage_address = 0;
+  std::memcpy(&storage_address, track_info_bytes.data() + 5,
+              sizeof(storage_address));
+  auto* const storage = reinterpret_cast<uint32_t*>(
+      static_cast<uintptr_t>(storage_address));
+
+  const auto* const base = reinterpret_cast<const uint8_t*>(module);
+  IMAGE_DOS_HEADER dos = {};
+  if (!SafeRead(base, &dos, sizeof(dos)) ||
+      dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0) {
+    return false;
+  }
+  IMAGE_NT_HEADERS32 nt = {};
+  if (!SafeRead(base + static_cast<uintptr_t>(dos.e_lfanew), &nt,
+                sizeof(nt)) ||
+      nt.Signature != IMAGE_NT_SIGNATURE ||
+      nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+    return false;
+  }
+  const uintptr_t module_begin = reinterpret_cast<uintptr_t>(base);
+  const uintptr_t module_end = module_begin + nt.OptionalHeader.SizeOfImage;
+  const uintptr_t storage_value = reinterpret_cast<uintptr_t>(storage);
+  if (storage_value < module_begin ||
+      storage_value + sizeof(uint32_t) > module_end) {
+    return false;
+  }
+  MEMORY_BASIC_INFORMATION memory = {};
+  if (VirtualQuery(storage, &memory, sizeof(memory)) != sizeof(memory) ||
+      memory.State != MEM_COMMIT ||
+      (memory.Protect & (PAGE_READWRITE | PAGE_WRITECOPY |
+                         PAGE_EXECUTE_READWRITE |
+                         PAGE_EXECUTE_WRITECOPY)) == 0u) {
+    return false;
+  }
+  *track_index = storage;
+  return true;
+}
+
+bool InstallDeathtrapMusicTrackFix() {
+  if (!g_music_track_fix_enabled) {
+    AppendNativeLog("music_redbook fix=disabled");
+    return true;
+  }
+  if (g_music_track_fix_installed.load(std::memory_order_acquire)) {
+    return true;
+  }
+
+  HMODULE const mss = GetModuleHandleW(L"MSS32.DLL");
+  auto* const tracks = reinterpret_cast<uint8_t*>(
+      mss ? GetProcAddress(mss, "_AIL_redbook_tracks@4") : nullptr);
+  auto* const play = reinterpret_cast<uint8_t*>(
+      mss ? GetProcAddress(mss, "_AIL_redbook_play@12") : nullptr);
+  auto* const track_info = reinterpret_cast<uint8_t*>(
+      mss ? GetProcAddress(mss, "_AIL_redbook_track_info@16") : nullptr);
+  uint32_t* track_index = nullptr;
+  if (!IsKnownSteamMssWrapper(mss, tracks, play, track_info, &track_index)) {
+    AppendNativeLog(
+        "music_redbook fix=skipped reason=unsupported_mss_wrapper");
+    return false;
+  }
+
+  const MH_STATUS create_play = MH_CreateHook(
+      play, reinterpret_cast<void*>(&HookRedbookPlay),
+      reinterpret_cast<void**>(&g_original_redbook_play));
+  const MH_STATUS create_tracks = MH_CreateHook(
+      tracks, reinterpret_cast<void*>(&HookRedbookTracks),
+      reinterpret_cast<void**>(&g_original_redbook_tracks));
+  const bool play_created =
+      create_play == MH_OK || create_play == MH_ERROR_ALREADY_CREATED;
+  const bool tracks_created =
+      create_tracks == MH_OK || create_tracks == MH_ERROR_ALREADY_CREATED;
+  if (!play_created || !tracks_created) {
+    AppendNativeLog(
+        "music_redbook fix=failed stage=create play=%d tracks=%d",
+        static_cast<int>(create_play), static_cast<int>(create_tracks));
+    return false;
+  }
+
+  g_steam_mss_mp3_track_index = track_index;
+  // Playback routing must become active before the expanded track count. If
+  // either enable fails, remove both hooks so the stock wrapper remains
+  // internally consistent rather than exposing tracks it cannot route.
+  const MH_STATUS enable_play = MH_EnableHook(play);
+  const bool play_enabled =
+      enable_play == MH_OK || enable_play == MH_ERROR_ENABLED;
+  const MH_STATUS enable_tracks =
+      play_enabled ? MH_EnableHook(tracks) : enable_play;
+  const bool tracks_enabled =
+      enable_tracks == MH_OK || enable_tracks == MH_ERROR_ENABLED;
+  if (!play_enabled || !tracks_enabled) {
+    MH_DisableHook(tracks);
+    MH_DisableHook(play);
+    g_steam_mss_mp3_track_index = nullptr;
+    AppendNativeLog(
+        "music_redbook fix=failed stage=enable play=%d tracks=%d",
+        static_cast<int>(enable_play), static_cast<int>(enable_tracks));
+    return false;
+  }
+
+  g_music_track_fix_installed.store(true, std::memory_order_release);
+  AppendNativeLog(
+      "music_redbook fix=active cd_tracks=%u mp3_files=%u "
+      "mapping=cd_track_minus_2",
+      deathtrap_music::kRedbookTrackCount,
+      deathtrap_music::kMp3TrackCount);
+  return true;
 }
 
 bool ReadRoomNeighbor(uintptr_t portal, uintptr_t* neighbor) {
@@ -13180,6 +13384,8 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
 
 void InitializePatchState() {
   g_debug_log = ConfiguredDebugLog();
+  g_music_track_fix_enabled =
+      ConfiguredInteger(L"Audio", L"FixMusicTracks", 1) != 0;
   g_camera_probe_enabled =
       ConfiguredInteger(L"Diagnostics", L"CameraProbe", 0) != 0;
   g_weapon_wheel_enabled = ConfiguredWeaponWheelEnabled();
@@ -13396,7 +13602,8 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.188 publishes one fully-owned "
+      "Deathtrap native render overlay 0.0.189 fixes Steam Redbook-to-MP3 "
+      "track routing and publishes one fully-owned "
       "collision-safe room+scene gameplay-camera pose per source tick, with "
       "detached matrix construction, atomic verified live publication, "
       "initial-overlap ray exit, radial near-pivot collapse, bounded scripted "
@@ -13649,6 +13856,10 @@ bool InstallDeathtrapNativeRenderHooks() {
       !g_dungeon_base || !IsExpectedDungeonImage(g_dungeon_base)) {
     return false;
   }
+
+  // Optional and fail-closed: only the exact 25 KiB Steam MP3 wrapper is
+  // accepted. Music failure must never disable rendering, input or camera.
+  InstallDeathtrapMusicTrackFix();
 
   // Optional modern-camera layer. It supplies an orbit candidate at the
   // mode-3 dispatcher, clips the exact spring-arm ray with the native camera

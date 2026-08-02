@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(deathtrap_native50_overlay VERSION 0.0.188 LANGUAGES C CXX)
+project(deathtrap_native50_overlay VERSION 0.0.189 LANGUAGES C CXX)
 
 if(NOT WIN32 OR NOT MSVC)
   message(FATAL_ERROR "Deathtrap Native 50 requires 32-bit Windows and MSVC")
@@ -72,4 +72,22 @@ add_executable(camera_room_collision_test
 target_compile_features(camera_room_collision_test PRIVATE cxx_std_17)
 target_include_directories(camera_room_collision_test PRIVATE src)
 target_compile_options(camera_room_collision_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
+
+add_executable(music_track_routing_test
+  tools/music_track_routing_test.cc)
+target_compile_features(music_track_routing_test PRIVATE cxx_std_17)
+target_include_directories(music_track_routing_test PRIVATE src)
+target_compile_options(music_track_routing_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
+
+add_executable(music_redbook_probe
+  tools/music_redbook_probe.cc)
+target_compile_features(music_redbook_probe PRIVATE cxx_std_17)
+target_compile_definitions(music_redbook_probe PRIVATE
+  WIN32_LEAN_AND_MEAN
+  NOMINMAX
+  UNICODE
+  _UNICODE)
+target_compile_options(music_redbook_probe PRIVATE
   /W4 /permissive- /EHsc /utf-8)

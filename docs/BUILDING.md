@@ -55,8 +55,10 @@ The build script performs these checks:
 1. the DLL is built for x86;
 2. the DirectInput export proxy loads;
 3. `DirectInputCreateA` returns success and creates an object;
-4. the control-binding installer preserves CRLF without producing `CR-CR-LF`;
-5. the verified binary is copied to `dist/DINPUT.dll`.
+4. the deterministic camera spring-arm and room-collision tests pass;
+5. all CD tracks `2..16` map to the fifteen Steam MP3 indices `0..14`;
+6. the control-binding installer preserves CRLF without producing `CR-CR-LF`;
+7. the verified binary is copied to `dist/DINPUT.dll`.
 
 For a diagnostic game run, set `DebugLog=1`. Return it to `0` after validation
 because synchronous file logging is intentionally excluded from normal play.

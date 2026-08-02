@@ -30,7 +30,8 @@ The additional phases do not advance:
 - the game scheduler or engine frame counter;
 - collision and player-controller state;
 - AI or enemy animation state;
-- Miles/Redbook audio;
+- Miles/audio clocks (the optional music fix changes only Redbook track
+  enumeration and MP3 routing at native source events);
 - input application;
 - doors, lifts, projectiles or scripted objects.
 

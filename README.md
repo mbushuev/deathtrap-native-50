@@ -1,10 +1,8 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.188` (fully owned room-and-scene gameplay
-camera with collision-safe publication, no automatic gameplay yaw selection,
-radially collapsed near-pivot view, owner-convergence scripted-camera
-arbitration, smooth retail first-person presentation and session-log handle
-reuse during dense collision diagnostics).
+Current development version: `0.0.189` (the stable v0.0.188 fully owned camera
+plus a signature-gated fix for the Steam release playing the same MP3 music
+track on every level).
 
 The `modern-third-person-camera` branch contains the native modern-camera
 implementation. It takes ownership at the mode-3 dispatcher, composes the
@@ -35,6 +33,7 @@ This repository contains only our Deathtrap-specific work:
 - the corrupt/black native-phase guard;
 - native mouse turning, attacks, safe wheel weapon cycling and an experimental
   XInput controller layer;
+- corrected Redbook-to-MP3 track routing for the exact Steam audio wrapper;
 - configuration, build, verification and installation material.
 
 dgVoodoo and optional presentation launchers remain independent external
@@ -101,6 +100,10 @@ D3D11 settings, first-run verification and troubleshooting.
 - `NativeRender/Enabled=0`: disable it before process startup.
 - `NativeRender/Subframes=3`: approximately 50 FPS, the recommended mode.
 - `NativeRender/Subframes=2`: conservative approximately 33 FPS fallback.
+- `Audio/FixMusicTracks=1`: expose all fifteen shipped music tracks and map
+  the game's CD tracks `2..16` to `Sounds/0.mp3..Sounds/14.mp3`. The overlay
+  validates the exact Steam wrapper before enabling this fix and leaves other
+  Miles/GOG audio DLLs untouched. See [music fix](docs/MUSIC-FIX.md).
 - `Text/MessageLifetimePercent=300`: keep both ordinary transient messages and
   level-script notifications (for example, missing-key prompts) visible for
   three times the retail duration. Use `100` for the original duration.

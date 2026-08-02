@@ -46,8 +46,9 @@ enum class DeathtrapNativePresentationStage : uint8_t {
 };
 
 // Initializes the opt-in Deathtrap Dungeon transform-interpolation experiment.
-// It never changes the gameplay scheduler, Miles timer, Redbook audio, AI,
-// physics, animation tick or input tick.
+// It never advances the gameplay scheduler, Miles/audio timer, AI, physics,
+// animation tick or input tick. The optional Steam music fix changes only
+// Redbook track enumeration/routing before original MP3 playback.
 void InitializeDeathtrapNativeRenderPatch();
 
 // DirectInput observation is deliberately separated from game-state mutation.

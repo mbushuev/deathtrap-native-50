@@ -31,11 +31,26 @@ if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 
 $dll = Join-Path $buildPath "$Configuration\dinput.dll"
 $smoke = Join-Path $buildPath "$Configuration\dinput_proxy_smoke_test.exe"
+$cameraSpring = Join-Path $buildPath "$Configuration\camera_spring_arm_test.exe"
+$cameraRoom = Join-Path $buildPath "$Configuration\camera_room_collision_test.exe"
+$musicRouting = Join-Path $buildPath "$Configuration\music_track_routing_test.exe"
 if (-not (Test-Path -LiteralPath $dll)) { throw "Missing build output: $dll" }
 if (-not (Test-Path -LiteralPath $smoke)) { throw "Missing smoke test: $smoke" }
+if (-not (Test-Path -LiteralPath $cameraSpring)) { throw "Missing camera spring test: $cameraSpring" }
+if (-not (Test-Path -LiteralPath $cameraRoom)) { throw "Missing camera room test: $cameraRoom" }
+if (-not (Test-Path -LiteralPath $musicRouting)) { throw "Missing music routing test: $musicRouting" }
 
 & $smoke $dll
 if ($LASTEXITCODE -ne 0) { throw 'DirectInput forwarding smoke test failed.' }
+
+& $cameraSpring
+if ($LASTEXITCODE -ne 0) { throw 'Camera spring-arm test failed.' }
+
+& $cameraRoom
+if ($LASTEXITCODE -ne 0) { throw 'Camera room-collision test failed.' }
+
+& $musicRouting
+if ($LASTEXITCODE -ne 0) { throw 'Music track routing test failed.' }
 
 & (Join-Path $PSScriptRoot 'test-install-crlf.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Installer CRLF binding test failed.' }
