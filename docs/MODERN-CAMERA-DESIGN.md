@@ -2270,3 +2270,13 @@ cached 2x2 actor basis. It then invokes the original transform writer, leaving
 position publication and collision native. Signature mismatch fails closed to
 retail input; all other callers of `+0x32430`, third person, Tab/R3 and LB/J/K
 are untouched.
+
+## 0.0.205: complete root callsite set
+
+The first cached-basis implementation covered only the two fractional
+`+0x451E0` calls. Runtime movement remained mostly forward because the full
+unscaled animation delta is a separate `+0x84230 -> +0x32430` call at
+`+0x84268`. Version 0.0.205 adds that callsite to the same atomic validation
+and player-node gate. Pure lateral input now redirects the complete native
+root magnitude, and normalized W/S+A/D vectors preserve the corresponding
+walk/run pace without a forward remainder.

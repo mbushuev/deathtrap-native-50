@@ -2477,3 +2477,18 @@ chooses the requested camera-relative world course, solves the same 2x2 basis
 back to local X/Z and calls the original writer. Native animation, root writer
 and subsequent collision remain authoritative; there is no direct coordinate
 write and no temporary actor-heading transaction.
+
+## Complete player animation-root transaction (v0.0.205)
+
+The v0.0.204 gameplay run proved that `+0x451E0` is not the complete root
+transaction: A/D produced only a weak lateral component while the player kept
+moving primarily forward. The two patched calls scale the animation delta by
+approximately `19/128` or `42/128`. The full, unscaled animation-root delta is
+applied separately by `+0x84230`, whose `+0x84268` call invokes the same
+`+0x32430` writer with the live player render root.
+
+Version 0.0.205 treats `+0x84268/+0x45232/+0x45273` as one signature-checked
+player-only callsite set. All three inputs use the same requested world course
+and live-basis inverse. Consequently pure A/D has no retained forward
+component, while W/S+A/D diagonals redirect the complete native walk/run root
+magnitude rather than only its small supplemental fraction.

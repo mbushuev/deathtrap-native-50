@@ -192,7 +192,7 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
       keyboard[DIK_D] &= static_cast<uint8_t>(~0x80u);
       // Dungeon's retail side-step states are mutually exclusive with W/S,
       // so they cannot represent a diagonal. Any purely lateral request uses
-      // the ordinary forward state as its native root-motion driver; the two
+      // the ordinary forward state as its native root-motion driver; the three
       // verified player root-motion callsites rotate its local displacement
       // into the requested world direction before native collision runs.
       if (lateral != 0 && longitudinal == 0) {

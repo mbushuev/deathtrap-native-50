@@ -179,13 +179,14 @@ constexpr uintptr_t kPlayerTurnRva = 0x00044DD0u;
 // so it is the one recurring boundary shared by forward locomotion and both
 // direct turn-in-place implementations.
 constexpr uintptr_t kPlayerStateDispatcherRva = 0x00082750u;
-// 0x451E0 applies animation root displacement through 0x32430 at exactly two
-// callsites. 0x32430 transforms the local vector through the cached node basis
-// before adding it to the world position. Patching only these calls keeps all
-// unrelated actor/equipment transforms untouched.
+// 0x84230 applies the full animation root displacement through 0x32430;
+// 0x451E0 adds one of two smaller state-dependent fractions through the same
+// writer. 0x32430 transforms each local vector through the cached node basis
+// before adding it to the world position. Patching only these three calls
+// keeps unrelated actor/equipment transforms untouched.
 constexpr uintptr_t kPlayerRootMotionTransformRva = 0x00032430u;
-constexpr std::array<uintptr_t, 2> kImmersiveRootMotionCallsiteRvas = {
-    0x00045232u, 0x00045273u};
+constexpr std::array<uintptr_t, 3> kImmersiveRootMotionCallsiteRvas = {
+    0x00084268u, 0x00045232u, 0x00045273u};
 // The retail DirectInput joystick boundary. 0x51500 returns the configured
 // 0..0x4000 X/Y axes and 16 packed buttons; 0x32CD0 reports whether joystick
 // input is enabled. Feeding XInput here keeps movement inside the game's
@@ -10848,12 +10849,14 @@ bool InstallImmersiveRootMotionCallsites() {
       true, std::memory_order_release);
   AppendNativeLog(
       "immersive root_motion=active writer_rva=%08llX "
-      "callsites=%08llX/%08llX scope=IMMERSIVE_FIRST_PERSON",
+      "callsites=%08llX/%08llX/%08llX scope=IMMERSIVE_FIRST_PERSON",
       static_cast<unsigned long long>(kPlayerRootMotionTransformRva),
       static_cast<unsigned long long>(
           kImmersiveRootMotionCallsiteRvas[0]),
       static_cast<unsigned long long>(
-          kImmersiveRootMotionCallsiteRvas[1]));
+          kImmersiveRootMotionCallsiteRvas[1]),
+      static_cast<unsigned long long>(
+          kImmersiveRootMotionCallsiteRvas[2]));
   return true;
 }
 
