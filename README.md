@@ -9,6 +9,9 @@ animated neck translation and the full ±75-degree pitch range no longer drop
 the view to third person; normal per-launch logs now omit the two heavy
 reverse-engineering probe streams).
 
+See the [user-facing changelog](CHANGELOG.md) for the consolidated differences
+from the original Steam release.
+
 The `modern-third-person-camera` branch contains the native modern-camera
 implementation. It takes ownership at the mode-3 dispatcher, composes the
 verified room graph with qualified dynamic scene meshes, and atomically
