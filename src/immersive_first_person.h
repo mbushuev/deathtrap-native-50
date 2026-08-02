@@ -10,6 +10,14 @@ struct ImmersiveFirstPersonPose {
   bool valid = false;
 };
 
+// Dungeon's camera angle builder consumes the opposite of the visible view
+// direction. Keep that engine convention at the publication boundary instead
+// of rotating the persistent orbit/body course.
+inline std::array<double, 3> ImmersiveFirstPersonLookAtVector(
+    const std::array<double, 3>& visible_forward) {
+  return {-visible_forward[0], -visible_forward[1], -visible_forward[2]};
+}
+
 inline ImmersiveFirstPersonPose BuildImmersiveFirstPersonPose(
     const std::array<int32_t, 3>& player_root, double yaw, double pitch,
     int32_t height, int32_t forward_offset) {

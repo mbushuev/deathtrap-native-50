@@ -922,10 +922,13 @@ also works at x1; it is not the old x2/x3-only render translation.
 The first live v0.0.190 run proved that the controller pointer is already an
 upper-body anchor rather than the model root: adding the old render-only
 485-unit root height placed the eye around 400 units above the visible model.
-Version v0.0.191 therefore uses anchor-relative offsets `60/80`. It also
-reverses only the immersive view's signed native longitudinal XInput channel,
-matching the observed stick forward/back polarity without changing keyboard
-W/S, retail first person or third-person camera-relative movement.
+Version v0.0.191 therefore uses anchor-relative offsets `60/80`. The next live
+test showed the apparent movement reversal was actually a 180-degree camera
+orientation error: lowering the eye made the character's heels visible.
+Version v0.0.192 restores the original signed longitudinal XInput channel and
+reverses only the vector passed into Dungeon's look-at angle builder. The
+persistent orbit/body course, keyboard W/S, retail first person and
+third-person camera-relative movement remain unchanged.
 
 ### Phase C: spring-arm collision
 

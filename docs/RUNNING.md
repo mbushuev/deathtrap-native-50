@@ -254,9 +254,9 @@ first-person mouse-look and the modern orbit is suspended. Version `0.0.190`
 assigns SELECT to a separate overlay-owned immersive first-person view. It
 stays inside the persistent mode-3 rig and uses W/S plus the explicit
 side-step path on XInput, so it does not replace or mutate retail Tab/R3.
-Version `0.0.191` corrects the custom view's gamepad forward/back polarity and
-lowers its eye to the upper-body anchor so the hands, sword and lower body can
-enter the frame.
+Version `0.0.191` lowers the eye to the upper-body anchor. Version `0.0.192`
+restores the original correct gamepad forward/back polarity and reverses the
+engine look-at vector so the visible camera faces the character's course.
 Start is delivered to the retail menu action as Escape before frontend
 ownership changes. The camera watchdog then transfers the controller only
 after the game actually leaves its gameplay camera; this prevents Start from

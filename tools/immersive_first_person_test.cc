@@ -32,6 +32,12 @@ int main() {
               Near(forward.forward[1], 0.0) &&
               Near(forward.forward[2], -1.0),
           "yaw zero look vector must face negative Z");
+  const std::array<double, 3> engine_look_at =
+      ImmersiveFirstPersonLookAtVector(forward.forward);
+  Require(Near(engine_look_at[0], 0.0) &&
+              Near(engine_look_at[1], 0.0) &&
+              Near(engine_look_at[2], 1.0),
+          "Dungeon look-at input must reverse the visible view vector");
 
   const ImmersiveFirstPersonPose right =
       BuildImmersiveFirstPersonPose(root, -kPi / 2.0, 0.0, 60, 80);

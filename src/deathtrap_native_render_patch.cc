@@ -5155,7 +5155,8 @@ bool PublishImmersiveFirstPersonEndpoint(
   if (!pose.valid) {
     return false;
   }
-  const std::array<double, 3>& view_forward = pose.forward;
+  const std::array<double, 3> look_at_forward =
+      ImmersiveFirstPersonLookAtVector(pose.forward);
   const std::array<int32_t, 3>& requested_eye = pose.eye;
 
   deathtrap_camera::RoomSweepResult room_sweep;
@@ -5177,7 +5178,7 @@ bool PublishImmersiveFirstPersonEndpoint(
   }
 
   const bool committed = PublishOwnedCameraEndpoint(
-      controller, camera_focus, camera_focus, &view_forward, safe_eye,
+      controller, camera_focus, camera_focus, &look_at_forward, safe_eye,
       start_sector_index, transition_cut);
   static uint64_t head_sequence = 0;
   ++head_sequence;
@@ -9524,7 +9525,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
       // dispatcher applies the bounded camera-relative heading separately.
       PublishNativeJoystickMovement(
           true, 0.0, custom_head_movement
-                         ? -movement_stick.y
+                         ? movement_stick.y
                          : movement_stick.magnitude);
       if (g_debug_log &&
           (!g_xinput_direct_heading_steering_was_active ||
@@ -9533,7 +9534,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
             "xinput movement dispatcher_steering=1 target=%d "
             "current=%d native_axes=0.000/%.3f magnitude=%.3f",
             desired_heading, current_heading,
-            custom_head_movement ? -movement_stick.y
+            custom_head_movement ? movement_stick.y
                                  : movement_stick.magnitude,
             movement_stick.magnitude);
       }
@@ -13763,8 +13764,9 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.191 corrects immersive movement "
-      "polarity and places its body-visible eye on the upper-body anchor; "
+      "Deathtrap native render overlay 0.0.192 corrects the immersive "
+      "look-at orientation and places its body-visible eye on the "
+      "upper-body anchor; "
       "it keeps the Steam "
       "Redbook-to-MP3 routing fix; it publishes one fully-owned "
       "collision-safe room+scene gameplay-camera pose per source tick, with "
