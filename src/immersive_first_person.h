@@ -13,6 +13,7 @@ struct ImmersiveFirstPersonPose {
 
 struct ImmersiveLocomotionPlan {
   int32_t motion_heading = 0;
+  int32_t transaction_heading = 0;
   int32_t native_axis_milli = 0;
   bool active = false;
 };
@@ -41,6 +42,13 @@ inline ImmersiveLocomotionPlan BuildImmersiveLocomotionPlan(
     heading += heading_units_per_turn;
   }
   plan.motion_heading = heading;
+  // The native W/S collision transaction consumes actor course separately
+  // from the later cached-basis animation-root writer. S travels opposite the
+  // actor course, while motion_heading always remains the requested world
+  // direction used by the root adapter.
+  plan.transaction_heading = native_backward
+      ? (heading + heading_units_per_turn / 2) % heading_units_per_turn
+      : heading;
   plan.native_axis_milli = static_cast<int32_t>(std::lround(
       (native_backward ? -magnitude : magnitude) * 1000.0));
   plan.active = plan.native_axis_milli != 0;

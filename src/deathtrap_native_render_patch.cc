@@ -2259,6 +2259,8 @@ std::atomic<bool> g_player_state_dispatcher_hook_installed{false};
 std::atomic<bool> g_immersive_root_motion_callsites_installed{false};
 uint64_t g_immersive_root_motion_routes = 0;
 uint64_t g_immersive_root_motion_rejections = 0;
+thread_local bool g_immersive_locomotion_transaction_active = false;
+thread_local ImmersiveLocomotionPlan g_immersive_locomotion_transaction_plan{};
 std::atomic<bool> g_native_joystick_hooks_installed{false};
 std::atomic<int32_t> g_xinput_native_joystick_x_milli{0};
 std::atomic<int32_t> g_xinput_native_joystick_y_milli{0};
@@ -9509,7 +9511,7 @@ int __cdecl HookNativeJoystickEnabled() {
 }
 
 bool ApplyCanonicalPlayerHeadingDelta(uintptr_t controller,
-                                      int32_t heading_delta) {
+                                       int32_t heading_delta) {
   if (!controller || !g_player_turn_writer || heading_delta == 0) {
     return heading_delta == 0;
   }
@@ -9551,6 +9553,17 @@ bool ApplyCanonicalPlayerHeadingDelta(uintptr_t controller,
                                     kPlayerTurnSourcePointerOffset),
             &original_source, sizeof(original_source));
   return delta_written;
+}
+
+bool ApplyCanonicalPlayerHeading(uintptr_t controller, int32_t target) {
+  int32_t current = 0;
+  uintptr_t live_controller = 0;
+  if (!ReadLivePlayerHeading(&current, &live_controller) ||
+      live_controller != controller) {
+    return false;
+  }
+  return ApplyCanonicalPlayerHeadingDelta(
+      controller, PlayerHeadingDelta(target, current));
 }
 
 bool ResolveImmersiveLocomotionPlan(ImmersiveLocomotionPlan* plan) {
@@ -9604,7 +9617,8 @@ void __cdecl RouteImmersivePlayerRootMotion(void* node, int32_t local_x,
     return;
   }
 
-  ImmersiveLocomotionPlan plan;
+  const ImmersiveLocomotionPlan plan =
+      g_immersive_locomotion_transaction_plan;
   uintptr_t controller = 0;
   uintptr_t render_link = 0;
   uintptr_t live_node = 0;
@@ -9613,7 +9627,7 @@ void __cdecl RouteImmersivePlayerRootMotion(void* node, int32_t local_x,
   int32_t matrix_xz = 0;
   int32_t matrix_zz = 0;
   const bool live_player_node =
-      node && ResolveImmersiveLocomotionPlan(&plan) &&
+      node && g_immersive_locomotion_transaction_active && plan.active &&
       ResolveLivePlayerMovementController(nullptr, &controller) &&
       SafeReadValue(reinterpret_cast<const void*>(
                         controller + kPlayerRenderLinkOffset),
@@ -9672,6 +9686,7 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
   if (!g_original_player_state_dispatcher) {
     return;
   }
+  uintptr_t validated_controller = 0;
   if (outer_player && g_player_turn_writer &&
       g_xinput_camera_relative_intent.load(std::memory_order_acquire)) {
     uintptr_t expected_outer = 0;
@@ -9688,6 +9703,7 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
                           std::memory_order_acquire) &&
         ReadLivePlayerHeading(&current_heading, &live_controller) &&
         live_controller == controller) {
+      validated_controller = controller;
       const int32_t target = g_xinput_desired_heading.load(
           std::memory_order_acquire);
       const double magnitude = static_cast<double>(
@@ -9720,10 +9736,43 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
     }
   }
 
-  // Body steering remains canonical and bounded. The complete immersive
-  // movement vector is applied later at the two verified animation root-motion
-  // calls, where the cached transform basis is actually consumed.
+  // The native actor/collision course is resolved at the start of 0x82750,
+  // before the animation root is published. Redirecting only the later root
+  // vector leaves collision on the old forward course, so the following
+  // native cycle pulls nominal A/D motion forward again. Publish both halves
+  // as one transaction: temporarily set the canonical actor/collision course,
+  // route all verified root contributions to the requested world course, then
+  // restore the visible eye-facing body heading before presentation.
+  ImmersiveLocomotionPlan locomotion_plan;
+  int32_t preserved_body_heading = 0;
+  uintptr_t heading_controller = 0;
+  const bool route_immersive_motion =
+      validated_controller &&
+      ResolveImmersiveLocomotionPlan(&locomotion_plan) &&
+      ReadLivePlayerHeading(&preserved_body_heading, &heading_controller) &&
+      heading_controller == validated_controller &&
+      ApplyCanonicalPlayerHeading(validated_controller,
+                                  locomotion_plan.transaction_heading);
+  g_immersive_locomotion_transaction_plan = locomotion_plan;
+  g_immersive_locomotion_transaction_active = route_immersive_motion;
   g_original_player_state_dispatcher(outer_player);
+  g_immersive_locomotion_transaction_active = false;
+  g_immersive_locomotion_transaction_plan = {};
+  if (route_immersive_motion) {
+    ApplyCanonicalPlayerHeading(validated_controller,
+                                preserved_body_heading);
+    if (g_debug_log &&
+        (g_source_ticks.load(std::memory_order_relaxed) % 60u) == 1u) {
+      AppendNativeLog(
+          "immersive locomotion transaction motion_heading=%d "
+          "collision_heading=%d restored_heading=%d native_axis=%d "
+          "controller=%p",
+          locomotion_plan.motion_heading,
+          locomotion_plan.transaction_heading, preserved_body_heading,
+          locomotion_plan.native_axis_milli,
+          reinterpret_cast<void*>(validated_controller));
+    }
+  }
 }
 
 void __cdecl HookPlayerLocomotion(void* controller) {
@@ -9777,6 +9826,32 @@ void __cdecl HookPlayerLocomotion(void* controller) {
     return;
   }
   current_heading = NormalizePlayerHeading(current_heading);
+
+  if (g_immersive_locomotion_transaction_active) {
+    // The dispatcher has already published the temporary movement course to
+    // both actor and collision state. Do not let the ordinary eye-facing turn
+    // servo rotate that course back toward the restored body heading before
+    // the animation root is consumed.
+    const int32_t no_turn = 0;
+    const bool walk_written = SafeWrite(
+        reinterpret_cast<void*>(live_controller + kPlayerWalkTurnSourceOffset),
+        &no_turn, sizeof(no_turn));
+    const bool run_written = SafeWrite(
+        reinterpret_cast<void*>(live_controller + kPlayerRunTurnSourceOffset),
+        &no_turn, sizeof(no_turn));
+    g_original_player_locomotion(controller);
+    if (walk_written) {
+      SafeWrite(reinterpret_cast<void*>(
+                    live_controller + kPlayerWalkTurnSourceOffset),
+                &original_walk_turn, sizeof(original_walk_turn));
+    }
+    if (run_written) {
+      SafeWrite(reinterpret_cast<void*>(
+                    live_controller + kPlayerRunTurnSourceOffset),
+                &original_run_turn, sizeof(original_run_turn));
+    }
+    return;
+  }
 
   const int32_t target =
       g_xinput_desired_heading.load(std::memory_order_acquire);

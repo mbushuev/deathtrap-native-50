@@ -2492,3 +2492,24 @@ player-only callsite set. All three inputs use the same requested world course
 and live-basis inverse. Consequently pure A/D has no retained forward
 component, while W/S+A/D diagonals redirect the complete native walk/run root
 magnitude rather than only its small supplemental fraction.
+
+## Actor/collision and root-vector transaction (v0.0.206)
+
+The v0.0.205 live run invalidates the assumption that redirecting all three
+animation-root writes is sufficient. The routed samples and callback-local
+root aggregation are predominantly lateral, yet the complete source motion
+still advances primarily along the native forward course. Static ordering
+explains the discrepancy: `+0x82750` invokes the actor/collision resolver
+`+0x57760` before the later animation callbacks publish their root deltas.
+The collision half therefore consumes the eye-facing forward course while the
+root half is redirected sideways, and native synchronization converges the two
+back toward forward movement.
+
+Version 0.0.206 combines the previously separated verified mechanisms. Before
+the original `+0x82750` transaction, `+0x44DD0` temporarily publishes the
+requested native W/S course to both render and collision headings. The three
+cached-basis root callsites then publish the actual requested world course.
+After the original transaction returns, `+0x44DD0` restores the preserved
+eye-facing body course. Backward W/S state uses the opposite temporary
+collision course while retaining the requested root world direction. No
+coordinate, speed or collision result is written by the overlay.

@@ -1,6 +1,6 @@
 # User-facing changelog
 
-## 0.0.205 — changes from the original Steam release
+## 0.0.206 — changes from the original Steam release
 
 This is a consolidated list of the changes players can see or use. Reverted
 experiments and internal development changes are intentionally omitted.

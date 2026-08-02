@@ -2280,3 +2280,20 @@ unscaled animation delta is a separate `+0x84230 -> +0x32430` call at
 and player-node gate. Pure lateral input now redirects the complete native
 root magnitude, and normalized W/S+A/D vectors preserve the corresponding
 walk/run pace without a forward remainder.
+
+## 0.0.206: collision course and root course are one transaction
+
+The v0.0.205 run shows that complete animation-root coverage alone is not a
+complete native movement transaction. `+0x82750` resolves actor/collision state
+through `+0x57760` before the redirected root callsites execute. Leaving that
+earlier half on the eye-facing forward course makes native synchronization
+pull lateral root motion back toward forward travel.
+
+The dispatcher now temporarily assigns the requested native W/S course through
+the canonical `+0x44DD0` dual render/collision heading writer, enables the
+cached-basis root adapter only inside that exact dispatcher call, and restores
+the preserved eye-facing body heading afterward. Thus collision direction and
+root direction agree for the complete native transaction, while no temporary
+course survives into rendering. Native backward uses the opposite collision
+course because S root motion travels opposite actor heading; its root endpoint
+still follows the requested camera-relative world vector.

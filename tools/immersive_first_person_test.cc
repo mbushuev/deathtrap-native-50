@@ -47,16 +47,19 @@ int main() {
   const ImmersiveLocomotionPlan forward_motion =
       BuildImmersiveLocomotionPlan(512, false, 0.75, 1024);
   Require(forward_motion.active && forward_motion.motion_heading == 512 &&
+              forward_motion.transaction_heading == 512 &&
               forward_motion.native_axis_milli == 750,
-          "forward and diagonal motion must retain forward root motion");
+          "forward motion must align root and collision courses");
   const ImmersiveLocomotionPlan backward_motion =
       BuildImmersiveLocomotionPlan(0, true, 1.0, 1024);
   Require(backward_motion.active && backward_motion.motion_heading == 0 &&
+              backward_motion.transaction_heading == 512 &&
               backward_motion.native_axis_milli == -1000,
-          "backward native animation must retain the requested world course");
+          "backward collision course must oppose the requested world course");
   const ImmersiveLocomotionPlan pure_lateral =
       BuildImmersiveLocomotionPlan(256, false, 1.0, 1024);
   Require(pure_lateral.active && pure_lateral.motion_heading == 256 &&
+              pure_lateral.transaction_heading == 256 &&
               pure_lateral.native_axis_milli == 1000,
           "pure lateral input must use full-speed forward root motion");
   Require(!BuildImmersiveLocomotionPlan(0, false, 0.0, 1024).active &&
