@@ -1,7 +1,8 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.172` (full-footprint modern spring arm and
-single-owner publication for scene-mesh contractions).
+Current development version: `0.0.173` (diagnostic checkpoint for the new
+fully owned gameplay camera; runtime room snapshots are read-only and camera
+behaviour remains the `0.0.172` hybrid).
 
 The `modern-third-person-camera` branch contains the first opt-in native orbit
 prototype. It takes ownership at the mode-3 dispatcher before the retail
@@ -11,7 +12,9 @@ after all seven focus traces and all seven camera-footprint traces pass;
 ambiguous and colliding ticks retain the original resolver. See
 [Camera reverse-engineering notes](docs/CAMERA-REVERSE-ENGINEERING.md) for the
 verified call path and [modern camera design](docs/MODERN-CAMERA-DESIGN.md) for
-the safety boundary.
+the safety boundary. The replacement architecture and verified convex
+sector/portal layout are recorded in
+[full camera ownership](docs/FULL-CAMERA-OWNERSHIP.md).
 
 A native-render-rate modification for the 32-bit Windows release of
 *Ian Livingstone's Deathtrap Dungeon*.

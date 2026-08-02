@@ -50,6 +50,9 @@ constexpr uintptr_t kUiOwnerPointerRva = 0x0034F9D0u;
 constexpr uintptr_t kEngineFrameCounterRva = 0x001D24DCu;
 constexpr uintptr_t kPublishedCameraMatrixRva = 0x001D4110u;
 constexpr uintptr_t kRetailCameraManagerPointerRva = 0x001F11C0u;
+// Global room manager used by the retail point-sector resolver. manager+0x20
+// points at the contiguous 0x3C-byte sector collection.
+constexpr uintptr_t kRetailRoomManagerPointerRva = 0x001F11BCu;
 // Renderer resource registry used by Dungeon.dll+0x39900 and 0x3AC00.
 // A scene node stores a positive resource index at node+0x3C. The registry
 // entry points at the original Asylum mesh, including its polygon list and
@@ -629,6 +632,8 @@ std::unordered_map<uintptr_t, CameraCollisionMesh>
     g_camera_collision_meshes;
 std::unordered_set<uintptr_t> g_camera_nonblocking_meshes_logged;
 std::unordered_set<uintptr_t> g_camera_renderer_skipped_nodes_logged;
+std::unordered_set<uint64_t> g_camera_room_sectors_logged;
+uintptr_t g_camera_room_collection_base = 0;
 uint64_t g_camera_mesh_cache_hits = 0;
 uint64_t g_camera_mesh_cache_misses = 0;
 uint64_t g_camera_mesh_sweeps = 0;
@@ -1255,6 +1260,208 @@ void AppendNativeLogBlock(const std::string& block) {
   WriteFile(file, block.data(), static_cast<DWORD>(block.size()), &written,
             nullptr);
   CloseHandle(file);
+}
+
+bool ReadRoomNeighbor(uintptr_t portal, uintptr_t* neighbor) {
+  if (!portal || !neighbor) {
+    return false;
+  }
+  uintptr_t link = 0;
+  return SafeReadValue(reinterpret_cast<const void*>(portal + 0x08u), &link) &&
+         link &&
+         SafeReadValue(reinterpret_cast<const void*>(link + 0x0Cu), neighbor) &&
+         *neighbor;
+}
+
+bool RoomSectorHasReciprocalPortal(uintptr_t sector, uintptr_t expected) {
+  int32_t portal_count = 0;
+  uintptr_t portals = 0;
+  if (!SafeReadValue(reinterpret_cast<const void*>(sector + 0x20u),
+                     &portal_count) ||
+      !SafeReadValue(reinterpret_cast<const void*>(sector + 0x24u),
+                     &portals) ||
+      portal_count < 0 || portal_count > 128 ||
+      (portal_count != 0 && !portals)) {
+    return false;
+  }
+  for (int32_t index = 0; index < portal_count; ++index) {
+    uintptr_t neighbor = 0;
+    if (ReadRoomNeighbor(portals + static_cast<uintptr_t>(index) * 0x44u,
+                         &neighbor) &&
+        neighbor == expected) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void LogCameraRoomSectorSnapshot(const std::array<int32_t, 3>& focus,
+                                 uintptr_t seed_sector) {
+  if (!g_debug_log || !g_dungeon_base || !g_resolve_camera_sector ||
+      !seed_sector) {
+    return;
+  }
+
+  uintptr_t manager = 0;
+  uintptr_t collection = 0;
+  int32_t sector_count = 0;
+  uintptr_t sector_base = 0;
+  if (!SafeReadValue(g_dungeon_base + kRetailRoomManagerPointerRva,
+                     &manager) ||
+      !manager ||
+      !SafeReadValue(reinterpret_cast<const void*>(manager + 0x20u),
+                     &collection) ||
+      !collection ||
+      !SafeReadValue(reinterpret_cast<const void*>(collection),
+                     &sector_count) ||
+      !SafeReadValue(reinterpret_cast<const void*>(collection + 0x04u),
+                     &sector_base) ||
+      sector_count <= 0 || sector_count > 8192 || !sector_base) {
+    AppendNativeLog(
+        "camera_room_contract result=COLLECTION_INVALID manager=%08llX "
+        "collection=%08llX count=%d base=%08llX",
+        static_cast<unsigned long long>(manager),
+        static_cast<unsigned long long>(collection), sector_count,
+        static_cast<unsigned long long>(sector_base));
+    return;
+  }
+
+  if (sector_base != g_camera_room_collection_base) {
+    g_camera_room_collection_base = sector_base;
+    g_camera_room_sectors_logged.clear();
+    AppendNativeLog(
+        "camera_room_collection count=%d base=%08llX stride=60",
+        sector_count, static_cast<unsigned long long>(sector_base));
+  }
+
+  uintptr_t sector = 0;
+  __try {
+    sector = g_resolve_camera_sector(focus.data(), seed_sector);
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    sector = 0;
+  }
+  const uintptr_t sector_bytes =
+      static_cast<uintptr_t>(sector_count) * 0x3Cu;
+  const bool sector_in_collection = sector >= sector_base &&
+      sector < sector_base + sector_bytes &&
+      ((sector - sector_base) % 0x3Cu) == 0u;
+  if (!sector || !sector_in_collection) {
+    AppendNativeLog(
+        "camera_room_contract result=SECTOR_INVALID focus=%d/%d/%d "
+        "seed=%08llX resolved=%08llX base=%08llX count=%d",
+        focus[0], focus[1], focus[2],
+        static_cast<unsigned long long>(seed_sector),
+        static_cast<unsigned long long>(sector),
+        static_cast<unsigned long long>(sector_base), sector_count);
+    return;
+  }
+
+  int32_t solid_count = 0;
+  int32_t clip_count = 0;
+  uintptr_t planes = 0;
+  int32_t portal_count = 0;
+  uintptr_t portals = 0;
+  const bool header_valid =
+      SafeReadValue(reinterpret_cast<const void*>(sector + 0x14u),
+                    &solid_count) &&
+      SafeReadValue(reinterpret_cast<const void*>(sector + 0x18u),
+                    &clip_count) &&
+      SafeReadValue(reinterpret_cast<const void*>(sector + 0x1Cu),
+                    &planes) &&
+      SafeReadValue(reinterpret_cast<const void*>(sector + 0x20u),
+                    &portal_count) &&
+      SafeReadValue(reinterpret_cast<const void*>(sector + 0x24u),
+                    &portals) &&
+      solid_count >= 0 && solid_count <= 128 && clip_count >= solid_count &&
+      clip_count <= 256 && portal_count >= 0 && portal_count <= 128 &&
+      (clip_count == 0 || planes) && (portal_count == 0 || portals);
+  if (!header_valid) {
+    AppendNativeLog(
+        "camera_room_contract result=HEADER_INVALID sector=%08llX "
+        "solid=%d clip=%d planes=%08llX portals=%d/%08llX",
+        static_cast<unsigned long long>(sector), solid_count, clip_count,
+        static_cast<unsigned long long>(planes), portal_count,
+        static_cast<unsigned long long>(portals));
+    return;
+  }
+
+  const uint64_t sector_identity =
+      static_cast<uint64_t>(sector) ^
+      (static_cast<uint64_t>(planes) << 1u) ^
+      (static_cast<uint64_t>(portals) << 7u);
+  if (!g_camera_room_sectors_logged.insert(sector_identity).second) {
+    return;
+  }
+
+  const size_t sector_index = (sector - sector_base) / 0x3Cu;
+  AppendNativeLog(
+      "camera_room_sector index=%llu address=%08llX focus=%d/%d/%d "
+      "solid=%d clip=%d planes=%08llX portals=%d/%08llX",
+      static_cast<unsigned long long>(sector_index),
+      static_cast<unsigned long long>(sector), focus[0], focus[1], focus[2],
+      solid_count, clip_count, static_cast<unsigned long long>(planes),
+      portal_count, static_cast<unsigned long long>(portals));
+
+  for (int32_t index = 0; index < clip_count; ++index) {
+    const uintptr_t plane = planes + static_cast<uintptr_t>(index) * 0x34u;
+    std::array<int32_t, 3> point{};
+    std::array<int32_t, 3> normal{};
+    if (!SafeRead(reinterpret_cast<const void*>(plane), point.data(),
+                  sizeof(point)) ||
+        !SafeRead(reinterpret_cast<const void*>(plane + 0x0Cu), normal.data(),
+                  sizeof(normal))) {
+      AppendNativeLog(
+          "camera_room_plane sector=%llu index=%d result=READ_FAILED",
+          static_cast<unsigned long long>(sector_index), index);
+      continue;
+    }
+    const double length = std::sqrt(
+        static_cast<double>(normal[0]) * normal[0] +
+        static_cast<double>(normal[1]) * normal[1] +
+        static_cast<double>(normal[2]) * normal[2]);
+    AppendNativeLog(
+        "camera_room_plane sector=%llu index=%d solid=%u "
+        "point=%d/%d/%d normal=%d/%d/%d length=%.1f",
+        static_cast<unsigned long long>(sector_index), index,
+        index < solid_count ? 1u : 0u, point[0], point[1], point[2],
+        normal[0], normal[1], normal[2], length);
+  }
+
+  for (int32_t index = 0; index < portal_count; ++index) {
+    const uintptr_t portal = portals + static_cast<uintptr_t>(index) * 0x44u;
+    uint32_t flags = 0;
+    uintptr_t neighbor = 0;
+    std::array<int32_t, 3> point{};
+    std::array<int32_t, 3> normal{};
+    const bool portal_valid =
+        SafeReadValue(reinterpret_cast<const void*>(portal + 0x04u),
+                      &flags) &&
+        ReadRoomNeighbor(portal, &neighbor) &&
+        SafeRead(reinterpret_cast<const void*>(portal + 0x10u), point.data(),
+                 sizeof(point)) &&
+        SafeRead(reinterpret_cast<const void*>(portal + 0x1Cu), normal.data(),
+                 sizeof(normal));
+    const bool neighbor_in_collection = portal_valid &&
+        neighbor >= sector_base && neighbor < sector_base + sector_bytes &&
+        ((neighbor - sector_base) % 0x3Cu) == 0u;
+    const size_t neighbor_index = neighbor_in_collection
+        ? (neighbor - sector_base) / 0x3Cu
+        : std::numeric_limits<size_t>::max();
+    const bool reciprocal = neighbor_in_collection &&
+        RoomSectorHasReciprocalPortal(neighbor, sector);
+    AppendNativeLog(
+        "camera_room_portal sector=%llu index=%d result=%s flags=%08X "
+        "traversable=%u trace_skip=%u neighbor=%08llX/%llu reciprocal=%u "
+        "point=%d/%d/%d normal=%d/%d/%d",
+        static_cast<unsigned long long>(sector_index), index,
+        portal_valid && neighbor_in_collection ? "OK" : "INVALID", flags,
+        (flags & 0x08u) != 0u ? 1u : 0u,
+        (flags & 0x20u) != 0u ? 1u : 0u,
+        static_cast<unsigned long long>(neighbor),
+        static_cast<unsigned long long>(neighbor_index),
+        reciprocal ? 1u : 0u, point[0], point[1], point[2], normal[0],
+        normal[1], normal[2]);
+  }
 }
 
 bool DeathtrapGameplayReady(bool require_selector_closed) {
@@ -4977,6 +5184,11 @@ void __cdecl HookMode3Camera(void* controller) {
     ResetThirdPersonOrbit("room_pointer");
     return;
   }
+
+  // Diagnostic-only contract check for the full-ownership camera. It reads
+  // each newly visited sector once and does not participate in the hybrid
+  // 0.0.172 collision or publication path.
+  LogCameraRoomSectorSnapshot(camera_focus, room_or_sector);
 
   // The untouched retail callback runs first so authored-camera arbitration
   // can inspect it. If a transient native query failure prevents a new modern
@@ -11213,7 +11425,9 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.172 uses one pre-history "
+      "Deathtrap native render overlay 0.0.173 preserves the 0.0.172 "
+      "hybrid camera while recording each live convex room sector once for "
+      "the isolated full-ownership solver; it uses one pre-history "
       "scene-mesh candidate owner before the retail position-ring average; "
       "accepted boundaries are validated against real render triangles, not "
       "conservative empty OBB space; post-native exact correction remains a "

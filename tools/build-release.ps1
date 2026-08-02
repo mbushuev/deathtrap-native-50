@@ -26,6 +26,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& (Join-Path $releaseDirectory 'camera_room_collision_test.exe')
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & (Join-Path $releaseDirectory 'dinput_proxy_smoke_test.exe') `
     (Join-Path $releaseDirectory 'dinput.dll')
 if ($LASTEXITCODE -ne 0) {
