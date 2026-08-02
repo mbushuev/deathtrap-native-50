@@ -474,3 +474,22 @@ derived only after the final room publication sweep, so a corrective endpoint
 push cannot silently rotate the view. Hysteretic exit requires four clear
 source ticks. Collision retains authority over endpoint safety and radius;
 neither room geometry nor scene meshes acquire yaw/pitch authority.
+
+## 0.0.186 zero arm is an owned state
+
+Full ownership must include the degenerate radial endpoint. Treating a
+sub-unit scene segment as an invalid query hands exactly the most constrained
+ticks back to hybrid/native position ownership. The zero-length segment is now
+a valid near-pivot terminal state: there is no segment to sweep, the player
+mesh is excluded, and orientation comes from the persistent user view-forward
+vector rather than a focus-to-camera subtraction.
+
+The solver no longer escapes a collapsed rear ray by moving to a front-side
+endpoint. It preserves one orbit ray and one radial spring across ordinary,
+short and zero-arm states. Rounded collision endpoints provide only their
+measured distance; the exact user orbit reconstructs the published direction.
+
+Retail scripted ownership is likewise fail-closed. A raw owner transition may
+take control only in a short immediate interaction window. The broader delayed
+window requires multi-tick independent native travel, preventing persistent
+room/fixed-camera owners from masquerading as authored reveals.

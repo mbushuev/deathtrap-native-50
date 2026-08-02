@@ -1927,6 +1927,26 @@ next native input sample is consequently aligned with the last completed
 visible source pose. No valid horizontal vector means no invented replacement
 heading.
 
+## 0.0.186: a collapsed arm remains on the user ray
+
+Moving a collapsed camera to the opposite side of the pivot preserves its
+mathematical view-forward vector but violates spatial continuity and creates a
+new collision problem. The near-pivot state now keeps the camera on the exact
+requested orbit ray and contracts radius through the same spring-arm state,
+including a valid zero-length terminal segment. Its independent look-forward
+target provides a nonzero orientation at the pivot.
+
+Collision-safe endpoints contribute scalar clearance only. Their rounded
+short vectors must not author direction: the published radial point is rebuilt
+from the full requested orbit vector. This prevents integer quantization from
+turning into visible angular noise as radius approaches zero.
+
+Scripted takeover also has two evidence classes. A verified owner transition
+is authoritative only immediately after explicit interaction. A delayed
+ownerless reveal still requires sustained independent native travel. An
+ordinary fixed-camera owner encountered later in the broad interaction tail
+cannot take control.
+
 ## 0.0.185: collision cannot select gameplay rotation
 
 Restricting angular avoidance to a physical emergency does not make it
