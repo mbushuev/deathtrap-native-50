@@ -51,6 +51,10 @@ def load_image(path: Path):
 def disassembler() -> Cs:
     engine = Cs(CS_ARCH_X86, CS_MODE_32)
     engine.detail = True
+    # Old MSVC images mix jump tables and alignment bytes into .text.  Keep a
+    # whole-section diagnostic sweep moving across those bytes so structure
+    # displacement searches do not silently stop at the first data island.
+    engine.skipdata = True
     return engine
 
 
@@ -76,6 +80,8 @@ def text_section(image):
 
 
 def references_target(instruction, target: int) -> bool:
+    if instruction.mnemonic == ".byte":
+        return False
     for operand in instruction.operands:
         if operand.type == X86_OP_IMM and operand.imm == target:
             return True
@@ -113,6 +119,8 @@ def find_references(image, target_rva: int) -> None:
 
 
 def references_displacement(instruction, displacement: int) -> bool:
+    if instruction.mnemonic == ".byte":
+        return False
     return any(
         operand.type == X86_OP_MEM and operand.mem.disp == displacement
         for operand in instruction.operands

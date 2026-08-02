@@ -142,6 +142,12 @@ constexpr size_t kCameraControllerPositionHistorySampleStride = 0x0Cu;
 constexpr size_t kCameraControllerPositionHistorySampleCount = 4u;
 constexpr size_t kCameraControllerActiveModeOffset = 0x27Cu;
 constexpr uint8_t kCameraScriptOwnerActiveMask = 0x80u;
+// Dungeon.dll+0x2E950 sets controller+0x180 bit 0x20 only while an active
+// camera owner has converged to within 110 world units of its requested
+// target; the no-owner branch clears it. This is a convergence signal, not a
+// camera-mode flag, so it is useful only inside explicit interaction
+// arbitration.
+constexpr uint32_t kCameraOwnedTargetConvergedMask = 0x20u;
 constexpr uintptr_t kActiveCloseCombatWeaponRva = 0x001D8A68u;
 constexpr uintptr_t kActiveSpellRva = 0x001D8A6Cu;
 constexpr uintptr_t kInventoryLookupRva = 0x0007BD30u;
@@ -747,14 +753,18 @@ struct RetailCameraArbitrationState {
   uint32_t idle_native_quiet_ticks = 0;
   bool owner_seen_during_takeover = false;
   bool ownerless_interaction_armed = false;
-  bool interaction_owner_transition_seen = false;
+  bool interaction_scripted_view_transition_seen = false;
+  bool previous_scripted_view_active = false;
   bool interaction_consumed = false;
+  uintptr_t takeover_owner = 0;
   uint64_t last_interaction_sequence = 0;
   uint64_t takeover_started_ms = 0;
   uint64_t cooldown_until_ms = 0;
 };
 
 RetailCameraArbitrationState g_retail_camera_arbitration;
+std::array<uintptr_t, 16> g_completed_script_camera_owners{};
+size_t g_completed_script_camera_owner_count = 0;
 
 struct Mode3SourceTickState {
   void* controller = nullptr;
@@ -2650,9 +2660,40 @@ bool ReadRetailCameraOwner(void* controller, uintptr_t* owner) {
          (flags & kCameraScriptOwnerActiveMask) != 0;
 }
 
+bool RetailCameraOwnerAlreadyCompleted(uintptr_t owner) {
+  if (!owner) {
+    return false;
+  }
+  return std::find(
+             g_completed_script_camera_owners.begin(),
+             g_completed_script_camera_owners.begin() +
+                 g_completed_script_camera_owner_count,
+             owner) !=
+      g_completed_script_camera_owners.begin() +
+          g_completed_script_camera_owner_count;
+}
+
+void RememberCompletedRetailCameraOwner(uintptr_t owner) {
+  if (!owner || RetailCameraOwnerAlreadyCompleted(owner)) {
+    return;
+  }
+  if (g_completed_script_camera_owner_count <
+      g_completed_script_camera_owners.size()) {
+    g_completed_script_camera_owners[g_completed_script_camera_owner_count++] =
+        owner;
+    return;
+  }
+  std::rotate(g_completed_script_camera_owners.begin(),
+              g_completed_script_camera_owners.begin() + 1,
+              g_completed_script_camera_owners.end());
+  g_completed_script_camera_owners.back() = owner;
+}
+
 void ClearRetailCameraTakeover(const char* reason, bool begin_cooldown) {
   if (g_retail_camera_arbitration.takeover_latched) {
     AppendNativeLog("camera_script takeover=OFF reason=%s", reason);
+    RememberCompletedRetailCameraOwner(
+        g_retail_camera_arbitration.takeover_owner);
   }
   const uint64_t cooldown = begin_cooldown ? GetTickCount64() + 1200u : 0u;
   g_retail_camera_arbitration = {};
@@ -2677,6 +2718,12 @@ bool EvaluateRetailCameraTakeover(
   }
 
   RetailCameraArbitrationState& state = g_retail_camera_arbitration;
+  uint32_t controller_flags = 0;
+  const bool controller_flags_valid = SafeReadValue(
+      reinterpret_cast<const uint8_t*>(controller) + 0x180u,
+      &controller_flags);
+  const bool scripted_view_active = controller_flags_valid &&
+      (controller_flags & kCameraOwnedTargetConvergedMask) != 0u;
   const bool owner_changed = state.owner != owner;
   double player_motion = 0.0;
   if (state.previous_player_valid) {
@@ -2708,8 +2755,9 @@ bool EvaluateRetailCameraTakeover(
     state.ownerless_interaction_armed =
         state.previous_native_candidate_valid &&
         state.idle_native_quiet_ticks >= 5u;
-    state.interaction_owner_transition_seen =
-        owner != 0 && owner != state.owner;
+    const bool owner_transition_at_arm = owner != 0 && owner != state.owner;
+    state.interaction_scripted_view_transition_seen =
+        scripted_view_active && !state.previous_scripted_view_active;
     state.stationary_native_motion = 0.0;
     state.candidate_motion_ticks = 0;
     state.last_interaction_sequence = interaction_sequence;
@@ -2717,15 +2765,23 @@ bool EvaluateRetailCameraTakeover(
     if (g_debug_log) {
       AppendNativeLog(
           "camera_script arm sequence=%llu ownerless=%d quiet=%u "
-          "owner_transition=%d",
+          "owner_transition=%d scripted_transition=%d flags=%08X",
           static_cast<unsigned long long>(interaction_sequence),
           state.ownerless_interaction_armed ? 1 : 0,
           state.idle_native_quiet_ticks,
-          state.interaction_owner_transition_seen ? 1 : 0);
+          owner_transition_at_arm ? 1 : 0,
+          state.interaction_scripted_view_transition_seen ? 1 : 0,
+          controller_flags);
     }
-  } else if (!state.interaction_consumed && recent_interaction &&
-             owner != 0 && owner != state.owner) {
-    state.interaction_owner_transition_seen = true;
+  }
+  if (!state.interaction_consumed && recent_interaction &&
+      scripted_view_active && !state.previous_scripted_view_active) {
+    state.interaction_scripted_view_transition_seen = true;
+    if (owner != 0 && RetailCameraOwnerAlreadyCompleted(owner)) {
+      AppendNativeLog(
+          "camera_script repeated_owner_suppressed owner=%08llX flags=%08X",
+          static_cast<unsigned long long>(owner), controller_flags);
+    }
   }
   if (state.takeover_latched) {
     state.owner_seen_during_takeover =
@@ -2744,6 +2800,14 @@ bool EvaluateRetailCameraTakeover(
     if (state.owner_seen_during_takeover && takeover_age_ms >= 700u &&
         state.owner_release_ticks >= 6u) {
       ClearRetailCameraTakeover("script_owner_released", true);
+      return false;
+    }
+    // Some retail scripts leave their owner installed after the visible shot
+    // has stopped. A quiet native endpoint must not retain the authored camera
+    // until the nine-second emergency timeout.
+    if (state.owner_seen_during_takeover && takeover_age_ms >= 2600u &&
+        state.settled_ticks >= 24u) {
+      ClearRetailCameraTakeover("script_owner_settled", true);
       return false;
     }
     // Owner-less reveals are retained for a bounded quiet tail.  Do not use
@@ -2776,44 +2840,47 @@ bool EvaluateRetailCameraTakeover(
       state.candidate_motion_ticks = 0;
     }
 
-    // A real reveal is the native candidate moving independently after an
-    // explicit interaction while Lara is stationary.  The owner bit is not
-    // an arbitration signal: runtime 0.0.59 proved that ordinary room/fixed
-    // camera zones set it too, causing apparently random camera takeovers.
-    // Inside the explicit interaction window the verified active owner is a
-    // safe immediate signal.  Outside that window it remains ambiguous and
-    // cannot steal the modern camera (ordinary room cameras set it too).
-    constexpr uint64_t kImmediateOwnerRevealWindowMs = 1500u;
-    const bool owner_reveal =
+    // The broad owner pointer also belongs to ordinary fixed-camera zones and
+    // cannot authorize a view by itself. Require its verified target-
+    // convergence transition inside the bounded interaction window. This also
+    // admits delayed lever shots which start after the old 1500 ms owner-only
+    // deadline, while completed owners cannot replay on a later stray operate
+    // press in the same session.
+    const bool scripted_view_reveal =
         !state.interaction_consumed && player_stationary &&
-        interaction_age_ms <= kImmediateOwnerRevealWindowMs && owner != 0 &&
-        state.interaction_owner_transition_seen;
+        recent_interaction && scripted_view_active &&
+        state.interaction_scripted_view_transition_seen && owner != 0 &&
+        !RetailCameraOwnerAlreadyCompleted(owner);
     const bool travelling_reveal =
         !state.interaction_consumed && player_stationary && recent_interaction &&
         state.ownerless_interaction_armed && interaction_age_ms >= 250u &&
         state.candidate_motion_ticks >= 3u &&
         state.stationary_native_motion >= 360.0;
     if (now_ms >= state.cooldown_until_ms &&
-        (owner_reveal || travelling_reveal)) {
+        (scripted_view_reveal || travelling_reveal)) {
       state.takeover_latched = true;
       state.takeover_started_ms = now_ms;
       state.moving_ticks = 0;
       state.settled_ticks = 0;
       state.owner_release_ticks = 0;
       state.owner_seen_during_takeover = owner != 0;
+      state.takeover_owner = owner;
       state.interaction_consumed = true;
       AppendNativeLog(
           "camera_script takeover=ON owner=%08llX player_motion=%.1f "
-          "native_motion=%.1f accumulated=%.1f age=%llu reason=%s",
+          "native_motion=%.1f accumulated=%.1f age=%llu reason=%s "
+          "flags=%08X",
           static_cast<unsigned long long>(owner), player_motion,
           native_motion, state.stationary_native_motion,
           static_cast<unsigned long long>(interaction_age_ms),
-          owner_reveal ? "OWNER" : "TRAVELLING");
+          scripted_view_reveal ? "SCRIPT_FLAG" : "TRAVELLING",
+          controller_flags);
     }
   }
 
   state.raw_owner_active = owner != 0;
   state.owner = owner;
+  state.previous_scripted_view_active = scripted_view_active;
   state.previous_player = player;
   state.previous_player_valid = true;
   state.previous_native_candidate = native_candidate;
@@ -11817,6 +11884,7 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
       current.camera_focus_valid && previous.camera_focus_valid &&
       CurrentCustomCameraViewMode() ==
           CustomCameraViewMode::kModernThirdPerson &&
+      !RetailFirstPersonActive() &&
       g_third_person_orbit_state.engaged &&
       g_third_person_orbit_state.controller &&
       !g_scripted_camera_override_active.load(std::memory_order_acquire)) {
@@ -13328,11 +13396,13 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.187 publishes one fully-owned "
+      "Deathtrap native render overlay 0.0.188 publishes one fully-owned "
       "collision-safe room+scene gameplay-camera pose per source tick, with "
       "detached matrix construction, atomic verified live publication, "
       "initial-overlap ray exit, radial near-pivot collapse, bounded scripted "
-      "takeover, no automatic gameplay yaw, immediate contraction, sustained-margin "
+      "owner-convergence takeover with completed-owner replay suppression, "
+      "smooth retail first-person presentation, no automatic gameplay yaw, "
+      "immediate contraction, sustained-margin "
       "radial release and presentation cuts "
       "across disconnected safe shots; scripted reveals remain native and a "
       "transaction failure explicitly falls back to the 0.0.172 hybrid; "
