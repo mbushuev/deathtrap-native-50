@@ -2414,6 +2414,8 @@ void InjectRelativeMouseMove(double normalized_x, double normalized_y,
   SendInput(1, &input, sizeof(input));
 }
 
+bool ReadLivePlayerHeading(int32_t* heading, uintptr_t* live_controller);
+
 double CurvedStick(double value, double exponent) {
   if (value == 0.0) {
     return 0.0;
@@ -2459,6 +2461,33 @@ void SetCustomHeadViewSelected(bool enabled, const char* source) {
     // The overlay-owned view never borrows retail mode 4. Release a controller
     // Tab request first so R3/Tab remains an independent native camera.
     g_xinput_first_person_toggled.store(false, std::memory_order_release);
+
+    // Third-person orbit yaw describes the radial direction from the focus to
+    // the camera.  A head view must instead begin along the actor's visible
+    // forward course.  Keeping an arbitrary front/side third-person orbit here
+    // made F10 appear to turn the player by up to 180 degrees and forced the
+    // user to rotate back manually before moving.  Convert the live Q10 body
+    // heading to the equivalent behind-the-player radial yaw; subsequent head
+    // input and a later return to third person then remain continuous.
+    int32_t body_heading = 0;
+    uintptr_t body_controller = 0;
+    if (ReadLivePlayerHeading(&body_heading, &body_controller) &&
+        body_controller) {
+      g_third_person_orbit_state.yaw =
+          ImmersiveOrbitYawFromPlayerHeading(
+              body_heading, kPlayerHeadingUnitsPerTurn);
+      g_third_person_heading_reference_microradians.store(
+          static_cast<int32_t>(std::lround(
+              g_third_person_orbit_state.yaw * 1000000.0)),
+          std::memory_order_release);
+      g_third_person_heading_reference_valid.store(
+          true, std::memory_order_release);
+      AppendNativeLog(
+          "camera_immersive_heading_seed body=%d yaw=%.2f controller=%p",
+          body_heading,
+          g_third_person_orbit_state.yaw * 180.0 / kOrbitPi,
+          reinterpret_cast<void*>(body_controller));
+    }
   }
   g_third_person_orbit_state.filtered_input_x = 0.0;
   g_third_person_orbit_state.filtered_input_y = 0.0;
@@ -10426,6 +10455,9 @@ struct MovementStageSample {
   std::array<int32_t, 3> cache{};
   std::array<int32_t, 3> bounds_a{};
   std::array<int32_t, 3> bounds_b{};
+  uintptr_t player = 0;
+  uintptr_t render_link = 0;
+  uintptr_t render_node = 0;
   bool root_valid = false;
   bool cache_valid = false;
   bool bounds_a_valid = false;
@@ -10668,12 +10700,15 @@ bool CaptureMovementStageSample(MovementStageSample* sample) {
       !player) {
     return false;
   }
+  sample->player = player;
   if (SafeReadValue(reinterpret_cast<const void*>(player + 0x10u),
                     &render_link) &&
       render_link &&
       SafeReadValue(reinterpret_cast<const void*>(render_link),
                     &render_node) &&
       render_node) {
+    sample->render_link = render_link;
+    sample->render_node = render_node;
     sample->root_valid = SafeRead(
         reinterpret_cast<const void*>(render_node), sample->root.data(),
         sizeof(sample->root));
@@ -10691,36 +10726,34 @@ bool CaptureMovementStageSample(MovementStageSample* sample) {
          sample->bounds_a_valid || sample->bounds_b_valid;
 }
 
-struct ImmersiveMovementPhaseTrace {
-  MovementStageSample original_before{};
+struct ImmersiveMovementUpdateTrace {
+  MovementStageSample previous_tail{};
+  MovementStageSample update_entry{};
   MovementStageSample stage_before{};
   MovementStageSample stage_after{};
+  bool previous_tail_valid = false;
   bool active = false;
   bool stage_seen = false;
 };
 
-thread_local ImmersiveMovementPhaseTrace g_immersive_movement_phase_trace{};
+thread_local ImmersiveMovementUpdateTrace g_immersive_movement_update_trace{};
 
-void BeginImmersiveMovementPhaseTrace() {
-  ImmersiveMovementPhaseTrace& trace = g_immersive_movement_phase_trace;
-  trace = {};
-  if (!g_debug_log || !CustomHeadViewSelected() ||
-      !g_xinput_camera_relative_intent.load(std::memory_order_acquire)) {
+void BeginImmersiveMovementUpdateTrace(
+    const MovementStageSample& update_entry) {
+  ImmersiveMovementUpdateTrace& trace = g_immersive_movement_update_trace;
+  if (!g_debug_log || !CustomHeadViewSelected()) {
+    trace = {};
     return;
   }
-  ImmersiveLocomotionPlan plan;
-  if (!ResolveImmersiveLocomotionPlan(&plan) ||
-      !CaptureMovementStageSample(&trace.original_before) ||
-      !trace.original_before.root_valid) {
-    return;
-  }
+  trace.update_entry = update_entry;
   trace.active = true;
+  trace.stage_seen = false;
 }
 
 void RecordImmersiveMovementStagePhase(
     const MovementStageSample& before,
     const MovementStageSample& after) {
-  ImmersiveMovementPhaseTrace& trace = g_immersive_movement_phase_trace;
+  ImmersiveMovementUpdateTrace& trace = g_immersive_movement_update_trace;
   if (!trace.active) {
     return;
   }
@@ -10729,16 +10762,12 @@ void RecordImmersiveMovementStagePhase(
   trace.stage_seen = before.root_valid && after.root_valid;
 }
 
-void EndImmersiveMovementPhaseTrace() {
-  ImmersiveMovementPhaseTrace& trace = g_immersive_movement_phase_trace;
+void EndImmersiveMovementUpdateTrace(
+    const MovementStageSample& update_tail) {
+  ImmersiveMovementUpdateTrace& trace = g_immersive_movement_update_trace;
   if (!trace.active) {
-    trace = {};
     return;
   }
-
-  MovementStageSample original_after;
-  const bool after_valid =
-      CaptureMovementStageSample(&original_after) && original_after.root_valid;
   ImmersiveLocomotionPlan plan;
   const bool plan_valid = ResolveImmersiveLocomotionPlan(&plan);
   const int32_t keyboard_x = g_immersive_keyboard_movement_x.load(
@@ -10765,7 +10794,7 @@ void EndImmersiveMovementPhaseTrace() {
   previous_stick_x = stick_x;
   previous_stick_y = stick_y;
 
-  if (after_valid && plan_valid &&
+  if (update_tail.root_valid && plan_valid &&
       (input_changed || (active_samples % 15u) == 1u)) {
     auto delta = [](const MovementStageSample& from,
                     const MovementStageSample& to,
@@ -10775,25 +10804,32 @@ void EndImmersiveMovementPhaseTrace() {
                  : 0;
     };
     AppendNativeLog(
-        "immersive phase_truth tick=%llu keyboard=%d/%d stick=%d/%d "
-        "course=%d stage_seen=%u total=%lld/%lld/%lld "
+        "immersive update_truth tick=%llu keyboard=%d/%d stick=%d/%d "
+        "course=%d stage_seen=%u between=%lld/%lld/%lld "
         "pre_stage=%lld/%lld/%lld stage=%lld/%lld/%lld "
-        "post_stage=%lld/%lld/%lld root=%d/%d/%d->%d/%d/%d",
+        "post_stage=%lld/%lld/%lld total=%lld/%lld/%lld "
+        "node=%p/%p/%p/%p root=%d/%d/%d->%d/%d/%d",
         static_cast<unsigned long long>(
             g_source_ticks.load(std::memory_order_relaxed)),
         keyboard_x, keyboard_y, stick_x, stick_y, plan.motion_heading,
         trace.stage_seen ? 1u : 0u,
-        delta(trace.original_before, original_after, 0u),
-        delta(trace.original_before, original_after, 1u),
-        delta(trace.original_before, original_after, 2u),
-        trace.stage_seen
-            ? delta(trace.original_before, trace.stage_before, 0u)
+        trace.previous_tail_valid
+            ? delta(trace.previous_tail, trace.update_entry, 0u)
+            : 0,
+        trace.previous_tail_valid
+            ? delta(trace.previous_tail, trace.update_entry, 1u)
+            : 0,
+        trace.previous_tail_valid
+            ? delta(trace.previous_tail, trace.update_entry, 2u)
             : 0,
         trace.stage_seen
-            ? delta(trace.original_before, trace.stage_before, 1u)
+            ? delta(trace.update_entry, trace.stage_before, 0u)
             : 0,
         trace.stage_seen
-            ? delta(trace.original_before, trace.stage_before, 2u)
+            ? delta(trace.update_entry, trace.stage_before, 1u)
+            : 0,
+        trace.stage_seen
+            ? delta(trace.update_entry, trace.stage_before, 2u)
             : 0,
         trace.stage_seen ? delta(trace.stage_before, trace.stage_after, 0u)
                          : 0,
@@ -10802,19 +10838,29 @@ void EndImmersiveMovementPhaseTrace() {
         trace.stage_seen ? delta(trace.stage_before, trace.stage_after, 2u)
                          : 0,
         trace.stage_seen
-            ? delta(trace.stage_after, original_after, 0u)
-            : delta(trace.original_before, original_after, 0u),
+            ? delta(trace.stage_after, update_tail, 0u)
+            : delta(trace.update_entry, update_tail, 0u),
         trace.stage_seen
-            ? delta(trace.stage_after, original_after, 1u)
-            : delta(trace.original_before, original_after, 1u),
+            ? delta(trace.stage_after, update_tail, 1u)
+            : delta(trace.update_entry, update_tail, 1u),
         trace.stage_seen
-            ? delta(trace.stage_after, original_after, 2u)
-            : delta(trace.original_before, original_after, 2u),
-        trace.original_before.root[0], trace.original_before.root[1],
-        trace.original_before.root[2], original_after.root[0],
-        original_after.root[1], original_after.root[2]);
+            ? delta(trace.stage_after, update_tail, 2u)
+            : delta(trace.update_entry, update_tail, 2u),
+        delta(trace.update_entry, update_tail, 0u),
+        delta(trace.update_entry, update_tail, 1u),
+        delta(trace.update_entry, update_tail, 2u),
+        reinterpret_cast<void*>(trace.previous_tail.render_node),
+        reinterpret_cast<void*>(trace.update_entry.render_node),
+        reinterpret_cast<void*>(trace.stage_before.render_node),
+        reinterpret_cast<void*>(update_tail.render_node),
+        trace.update_entry.root[0], trace.update_entry.root[1],
+        trace.update_entry.root[2], update_tail.root[0],
+        update_tail.root[1], update_tail.root[2]);
   }
-  trace = {};
+  trace.previous_tail = update_tail;
+  trace.previous_tail_valid = update_tail.root_valid;
+  trace.active = false;
+  trace.stage_seen = false;
 }
 
 void RecordMovementProbeStats(MovementStageProbeStats& stats,
@@ -11157,6 +11203,9 @@ uintptr_t __cdecl HookMovementStageNoArg() {
   MovementStageSample before;
   MovementStageSample after;
   CaptureMovementStageSample(&before);
+  if constexpr (Index == 0u) {
+    BeginImmersiveMovementUpdateTrace(before);
+  }
   using Fn = uintptr_t(__cdecl*)();
   const uintptr_t result =
       reinterpret_cast<Fn>(g_dungeon_base + TargetRva)();
@@ -11165,6 +11214,9 @@ uintptr_t __cdecl HookMovementStageNoArg() {
   if constexpr (Index == 2u) {
     RecordImmersiveMovementStagePhase(before, after);
     LogImmersiveMovementTruth(before, after);
+  }
+  if constexpr (Index == 39u) {
+    EndImmersiveMovementUpdateTrace(after);
   }
   return result;
 }
@@ -14292,9 +14344,7 @@ InterpolatedPassResult RenderInterpolatedPass(
 }
 
 void CallOriginalRenderPresentWait(void* context, int wait) {
-  BeginImmersiveMovementPhaseTrace();
   g_original_render_present_wait(context, wait);
-  EndImmersiveMovementPhaseTrace();
 }
 
 void __cdecl HookRenderPresentWait(void* context, int wait) {

@@ -24,6 +24,24 @@ struct ImmersiveRootMotionInput {
   bool active = false;
 };
 
+// Convert Dungeon's actor-visible course to the radial yaw shared by the
+// third-person orbit.  The camera sits behind the actor, so radial yaw is one
+// half-turn opposite the visible heading.
+inline double ImmersiveOrbitYawFromPlayerHeading(
+    int32_t player_heading, int32_t heading_units_per_turn) {
+  if (heading_units_per_turn <= 0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  int32_t heading = player_heading % heading_units_per_turn;
+  if (heading < 0) {
+    heading += heading_units_per_turn;
+  }
+  constexpr double kPi = 3.14159265358979323846;
+  const double body_yaw = static_cast<double>(heading) * 2.0 * kPi /
+      static_cast<double>(heading_units_per_turn);
+  return std::remainder(body_yaw - kPi, 2.0 * kPi);
+}
+
 // Dungeon's J/K side-step states exclude forward/back locomotion and therefore
 // cannot express diagonals. Immersive view instead keeps the retail W/S
 // animation and root-motion transaction and records the complete requested

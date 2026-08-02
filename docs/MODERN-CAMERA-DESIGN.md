@@ -2357,3 +2357,21 @@ render/present call, so they cannot mix input periods or different source
 ticks. Version 0.0.210 also reports page-watch setup exactly once. It retains
 the v0.0.208 locomotion implementation and makes no speed, heading, camera,
 collision, animation or rendering change.
+
+## 0.0.211: outer-update truth and body-aligned head entry
+
+The v0.0.210 renderer boundary is definitively empty: the original scheduler
+call contains no `+0x810A0` stage and changes no sampled root coordinate.
+The remaining movement diagnosis therefore belongs around the verified outer
+gameplay update. `immersive update_truth` partitions that single update and
+also reports render-node identity at the preceding tail, current entry,
+movement stage and current tail. No locomotion behavior is changed by this
+probe.
+
+Entering immersive view is a separate transition contract. Third-person yaw
+is a focus-to-camera radial direction and may be anywhere around the player;
+it is not the actor's facing direction. Reusing it made a front-facing orbit
+open head view backwards. The entry transition now reads the live actor Q10
+heading and converts it to the corresponding behind-actor radial yaw. The
+shared yaw then continues normally for head input and places third person
+behind the current view if the user later exits immersive mode.

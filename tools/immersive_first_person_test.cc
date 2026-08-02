@@ -43,6 +43,15 @@ int main() {
           "default immersive physical mouse Y must reverse at look-at");
   Require(ImmersivePhysicalMouseVerticalSign(true) == 1.0,
           "InvertY must reverse the immersive physical mouse default");
+  Require(Near(ImmersiveOrbitYawFromPlayerHeading(512, 1024), 0.0),
+          "negative-Z body course must seed a zero radial yaw");
+  Require(Near(ImmersiveOrbitYawFromPlayerHeading(0, 1024), -kPi),
+          "positive-Z body course must seed the opposite radial yaw");
+  Require(Near(ImmersiveOrbitYawFromPlayerHeading(521, 1024),
+               9.0 * 2.0 * kPi / 1024.0),
+          "live Q10 heading must preserve its fine angular offset");
+  Require(std::isnan(ImmersiveOrbitYawFromPlayerHeading(0, 0)),
+          "invalid heading scale must fail closed");
 
   const ImmersiveLocomotionPlan forward_motion =
       BuildImmersiveLocomotionPlan(512, false, 0.75, 1024);

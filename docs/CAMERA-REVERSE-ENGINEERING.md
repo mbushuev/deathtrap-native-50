@@ -2594,3 +2594,24 @@ input changes and every fifteen active samples. The protected-page diagnostic
 also emits one `hidden_root_watch status` record for armed or failed setup.
 Together these records establish the real phase boundary before any further
 movement ownership is changed.
+
+## Outer gameplay-update and head-entry direction (v0.0.211)
+
+The v0.0.210 run proves the page watch was armed successfully. It still
+records no watched write. Every sampled original render/present call has
+`stage_seen=0` and zero player-root delta, so neither source interpolation nor
+the exact renderer owns the missing forward displacement. The movement stage
+runs earlier in the gameplay update.
+
+Version 0.0.211 moves the diagnostic boundary to the outer `+0x57CD0` update.
+It partitions each active update into previous-tail-to-entry, entry-to-
+`+0x810A0`, the complete stage, and stage-to-tail deltas. All four sampled
+render-node addresses are logged as well, because a changing player render
+node would explain why an armed watch on the preceding node sees no write.
+
+The same run independently confirms a head-view transition defect. F10 kept
+third-person radial yaw `173.79` degrees even though the live body heading
+`521/1024` requires a behind-body radial yaw near `3.16` degrees. After the
+user manually rotated to `2.43` degrees, view and body courses converged. On
+head-view entry v0.0.211 therefore converts the live Q10 body heading to its
+equivalent radial yaw. It does not alter pitch or ongoing mouse/stick input.
