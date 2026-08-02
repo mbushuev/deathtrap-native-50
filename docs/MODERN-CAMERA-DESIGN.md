@@ -1837,3 +1837,35 @@ detached node, and compares the complete live camera node, published matrix
 and player-node bytes before and after. Runtime ownership cannot advance from
 shadow mode unless all three remain unchanged and the detached world
 translation equals the selected endpoint.
+
+## 0.0.181: atomic full-owned source publication
+
+The 0.0.180 runtime audit passes the actual mutation-safety gates. Of 78 logged
+audits, every detached local/world rebuild, owned translation, sector pair and
+camera/global/player untouched comparison is exact. The only pre-publication
+global/live mismatch is the expected first orbit frame after a scene change,
+where the global still represents the preceding exact render. Publication must
+establish coherence; it cannot require stale owners to be coherent first.
+
+Ordinary third-person gameplay now has one source owner. The combined room and
+scene result is fed through a separate owned radial state, then the rounded
+intermediate is revalidated through both channels. Contraction is immediate;
+clear recovery uses the existing tested bounded spring policy. If a radial or
+angular intermediate enters the three-radius unsafe region while the selected
+shot is useful, the camera cuts to that already verified shot and presentation
+suppresses the corresponding interpolation chord once.
+
+The live transaction writes only the narrow proven state: controller resolved,
+desired and history positions; controller and camera-node sector; node source
+position/angles; detached local/world matrices; and the global published
+matrix. It does not call `0x3860`, `0x3A980`, or `0x3AC00` on the live node and
+does not recurse resources, callbacks, children or the player. All touched
+fields are backed up and the post-write state is compared in full. Failure
+restores the backup and chooses the frozen hybrid for that source tick.
+
+The native callback remains the sole owner during explicitly arbitrated
+scripted reveals. Successful owned publication returns before the legacy
+native configure path, so full-owned and hybrid/native positions never combine
+within one source state. Synthetic x2/x3 renders continue to interpolate only
+completed exact snapshots and consume an owned safe-cut marker without running
+collision or mutating gameplay-camera history.

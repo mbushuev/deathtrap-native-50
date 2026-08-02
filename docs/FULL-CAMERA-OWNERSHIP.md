@@ -324,3 +324,50 @@ then pass one moving block. Acceptance requires every periodic or exceptional
 local/world rebuild, exact published matrix, exact owned translation and
 `untouched=1/1/1`. Parent/child topology and graph/retail sector differences
 must be reviewed before any live owned-camera write is enabled.
+
+## 0.0.180 publication-audit result and 0.0.181 live ownership
+
+The completed audit run is
+`<game-directory>\logs\deathtrap-native-20260802-101755-995-pid5008.log`.
+It records 78 sampled publication audits across open rotation, traversal and
+scene changes. All 78 detached local/world rebuilds are byte-exact, all 78
+proposed world translations equal the final owned target, all graph and retail
+point-sector results agree, and every camera/global/player untouched check is
+`1/1/1`. The camera has one non-null parent and no child or sibling in every
+sample.
+
+Seventy-seven records also find the pre-existing global matrix equal to the
+current live node. The single `published=0` occurs on the first orbit frame
+immediately after a scene transition: the global still contains the preceding
+exact startup translation `0/512/-512`, while the retail probe has already
+updated the live node. This is not a detached-rebuild mutation and is not an
+owned-publication invariant. A live transaction replaces node source,
+local/world matrices and global matrix together; it does not depend on two
+stale pre-publication owners already agreeing.
+
+Version 0.0.181 enables full ownership for ordinary mode-3 gameplay. Once the
+room+scene solver has a valid final state, it:
+
+1. applies an owned-only radial spring state (immediate contraction, delayed
+   bounded release) and re-sweeps the exact rounded intermediate point through
+   both collision channels;
+2. converts an unsafe disconnected radial intermediate into a verified target
+   safety cut, just as the angular planner already does;
+3. constructs local/world matrices on the detached camera node;
+4. snapshots every controller, node and global field that will be touched;
+5. writes position/history, angles, sector, local/world matrices and the global
+   render matrix, with the global publication boundary last;
+6. verifies the complete transaction and restores the exact backup if any
+   write or comparison fails.
+
+A successful owned publication returns before the legacy native configure and
+hybrid collision path. Scripted reveals still return directly from the
+untouched retail callback. If the full solver or transaction is unavailable,
+the source tick explicitly selects the frozen 0.0.172 hybrid as a fail-closed
+fallback; the two owners never shape one endpoint. Entry, exit and disconnected
+safe-shot changes set a one-source presentation cut consumed by x2/x3 before
+midpoint interpolation.
+
+Runtime evidence is `camera_owned_publish_live`. Acceptance for the first live
+run is: no `valid=0`, no `HYBRID_FALLBACK` after warm-up, `commit=1`, unchanged
+player bytes, preserved scripted lever transitions, and no wall/block escape.
