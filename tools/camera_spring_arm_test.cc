@@ -84,22 +84,6 @@ int main() {
     std::cerr << "zero movement stick produced a heading\n";
     return 1;
   }
-  bool published_yaw_valid = false;
-  const double published_yaw = CameraOrbitYawFromPositions(
-      {100, 200, 300}, {1100, 900, 300}, &published_yaw_valid);
-  if (!published_yaw_valid) {
-    std::cerr << "published camera heading was not usable\n";
-    return 1;
-  }
-  ExpectNear(published_yaw, 3.14159265358979323846 / 2.0,
-             "published camera heading");
-  CameraOrbitYawFromPositions(
-      {100, 200, 300}, {100, 900, 300}, &published_yaw_valid);
-  if (published_yaw_valid) {
-    std::cerr << "vertical camera arm invented a horizontal heading\n";
-    return 1;
-  }
-
   uint32_t direct_clear_ticks = 0;
   for (uint32_t tick = 0; tick < 7u; ++tick) {
     const CameraAvoidanceLatchStep latch = StepCameraAvoidanceLatch(
@@ -750,6 +734,33 @@ int main() {
   }
   ExpectNear(step.radius, 764.0,
              "owned moving boundary releases after confirmation");
+
+  // A direct room boundary can move non-monotonically as the player crosses a
+  // convex corner while still leaving a large margin beyond the contracted
+  // arm. Owned direct-path recovery must count that sustained margin instead
+  // of remaining pinned forever to the historical minimum.
+  step = StepCameraSpringArm(1400.0, 1200.0, 300.0, true, 0, 0,
+                             300.0, kWallBlocker, kWallBlocker,
+                             10u, 8u, 64.0, false);
+  const std::array<double, 7> nonmonotonic_clearance = {
+      1350.0, 1275.0, 1420.0, 1210.0, 1390.0, 1240.0, 1500.0};
+  for (size_t sample = 0; sample < nonmonotonic_clearance.size(); ++sample) {
+    ExpectNear(step.radius, 300.0,
+               "owned direct margin waits for sustained evidence");
+    step = StepCameraSpringArm(
+        1400.0, nonmonotonic_clearance[sample], step.radius, true,
+        step.clear_ticks, step.blocked_release_ticks,
+        step.blocked_candidate_distance, step.blocker_key, kWallBlocker,
+        10u, 8u, 64.0, false);
+  }
+  ExpectNear(step.radius, 364.0,
+             "owned direct margin releases despite boundary regression");
+  step = StepCameraSpringArm(
+      1400.0, 364.0, step.radius, true, step.clear_ticks,
+      step.blocked_release_ticks, step.blocked_candidate_distance,
+      step.blocker_key, kWallBlocker, 10u, 8u, 64.0, false);
+  ExpectTicks(step.blocked_release_ticks, 0,
+              "lost direct margin resets release evidence");
 
   if (!CameraPreNativeEscapeOwnsFinalTarget(
           true, false, true, true, true, true) ||

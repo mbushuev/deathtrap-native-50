@@ -204,19 +204,6 @@ inline CameraRelativeHeadingTarget CameraRelativeHeadingFromOrbit(
   return result;
 }
 
-inline double CameraOrbitYawFromPositions(
-    const std::array<int32_t, 3>& focus,
-    const std::array<int32_t, 3>& camera, bool* valid = nullptr) {
-  const double dx = static_cast<double>(camera[0] - focus[0]);
-  const double dz = static_cast<double>(camera[2] - focus[2]);
-  const bool usable = std::isfinite(dx) && std::isfinite(dz) &&
-      std::hypot(dx, dz) >= 1.0;
-  if (valid) {
-    *valid = usable;
-  }
-  return usable ? std::atan2(dx, dz) : 0.0;
-}
-
 inline CameraAvoidanceLatchStep StepCameraAvoidanceLatch(
     bool previous_avoidance_valid, double direct_safe_distance,
     double previous_safe_distance, double useful_distance,
@@ -924,7 +911,8 @@ inline CameraSpringArmStep StepCameraSpringArm(
     uint64_t current_blocker_key = 0,
     uint32_t clear_ticks_before_release = 4u,
     uint32_t blocked_ticks_before_release = 3u,
-    double release_step = 64.0) {
+    double release_step = 64.0,
+    bool require_monotonic_blocked_candidate = true) {
   CameraSpringArmStep result;
   if (!std::isfinite(desired_distance) || desired_distance <= 0.0) {
     return result;
@@ -958,6 +946,7 @@ inline CameraSpringArmStep StepCameraSpringArm(
                               current_blocker_key == previous_blocker_key;
     const bool outward_space = safe > previous + 0.5;
     const bool candidate_monotonic =
+        !require_monotonic_blocked_candidate ||
         previous_blocked_release_ticks == 0u ||
         safe + kBlockedCandidateRegressionTolerance >=
             previous_blocked_candidate_distance;

@@ -4738,18 +4738,6 @@ bool PublishOwnedCameraEndpoint(
       std::memcmp(player_before.data(), player_committed.data(),
                   player_before.size()) == 0;
   committed = committed && player_still_untouched;
-  if (committed) {
-    bool heading_valid = false;
-    const double published_yaw = CameraOrbitYawFromPositions(
-        focus, target, &heading_valid);
-    if (heading_valid) {
-      g_third_person_heading_reference_microradians.store(
-          static_cast<int32_t>(std::lround(published_yaw * 1000000.0)),
-          std::memory_order_release);
-      g_third_person_heading_reference_valid.store(
-          true, std::memory_order_release);
-    }
-  }
   bool rollback_exact = true;
   if (backup_valid && !committed) {
     rollback_exact = RestoreOwnedCameraPublication(
@@ -5606,7 +5594,7 @@ bool ResolveOwnedCameraSpringArm(
       state.owned_collision_blocked_release_ticks,
       state.owned_collision_blocked_candidate_distance,
       state.owned_collision_blocker_key, blocker_key,
-      10u, 8u, 64.0);
+      10u, 8u, 64.0, false);
   state.owned_collision_radius = step.radius;
   state.owned_collision_clear_ticks = step.clear_ticks;
   state.owned_collision_blocked_release_ticks =
@@ -6571,9 +6559,9 @@ void __cdecl HookMode3Camera(void* controller) {
   const bool owned_combined_plan_valid = owned_room_query_valid &&
       SelectOwnedCameraCombinedPlan(
           g_previous_snapshot, g_older_snapshot, camera_focus,
-          owned_room_plan, g_third_person_orbit_min_radius,
+          owned_room_plan, kThirdPersonMinimumCameraDistance,
           kCameraCollisionSphereRadius,
-          owned_minimum_transition_distance,
+          kThirdPersonMinimumCameraDistance,
           g_third_person_orbit_state.owned_room_shadow_candidate_index,
           &g_third_person_orbit_state.owned_room_direct_clear_ticks,
           &owned_combined_plan);
@@ -13254,11 +13242,11 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.183 publishes one fully-owned "
+      "Deathtrap native render overlay 0.0.184 publishes one fully-owned "
       "collision-safe room+scene gameplay-camera pose per source tick, with "
       "detached matrix construction, atomic verified live publication, "
-      "initial-overlap ray exit, latched angular avoidance, published-view "
-      "movement heading, immediate contraction, sustained-evidence "
+      "initial-overlap ray exit, near-pivot-only angular avoidance, "
+      "user-owned movement heading, immediate contraction, sustained-margin "
       "radial release and presentation cuts "
       "across disconnected safe shots; scripted reveals remain native and a "
       "transaction failure explicitly falls back to the 0.0.172 hybrid; "
