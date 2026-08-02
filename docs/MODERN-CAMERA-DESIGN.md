@@ -930,6 +930,16 @@ reverses only the vector passed into Dungeon's look-at angle builder. The
 persistent orbit/body course, keyboard W/S, retail first person and
 third-person camera-relative movement remain unchanged.
 
+The v0.0.192 live trace then exposed a separate translational defect. At
+`focus=3247/5800/14095`, the render root is exactly
+`player=3247/5400/14095`; this verified focus is a fixed root-relative anchor.
+The controller pointer coordinates used by v0.0.190-v0.0.192 instead vary from
+`-20` to `+166` longitudinal units relative to the render root during
+forward/reverse motion, making the model slide through the camera. Version
+v0.0.193 constructs the eye directly from `camera_focus`, preserving a rigid
+character-relative offset. Defaults become `HeadHeight=60` and
+`HeadForwardOffset=120`, which also raises and advances the view modestly.
+
 ### Phase C: spring-arm collision
 
 - Add volume sweep, contact margin, immediate pull-in and damped release.

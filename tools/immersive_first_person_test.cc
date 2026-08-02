@@ -24,10 +24,10 @@ int main() {
   const std::array<int32_t, 3> root = {100, 200, 300};
 
   const ImmersiveFirstPersonPose forward =
-      BuildImmersiveFirstPersonPose(root, 0.0, 0.0, 60, 80);
+      BuildImmersiveFirstPersonPose(root, 0.0, 0.0, 60, 120);
   Require(forward.valid, "forward pose must be valid");
-  Require(forward.eye == std::array<int32_t, 3>{100, 260, 220},
-          "yaw zero eye must be 80 units toward negative Z");
+  Require(forward.eye == std::array<int32_t, 3>{100, 260, 180},
+          "yaw zero eye must be 120 units toward negative Z");
   Require(Near(forward.forward[0], 0.0) &&
               Near(forward.forward[1], 0.0) &&
               Near(forward.forward[2], -1.0),
@@ -39,22 +39,30 @@ int main() {
               Near(engine_look_at[2], 1.0),
           "Dungeon look-at input must reverse the visible view vector");
 
+  const std::array<int32_t, 3> moved_anchor = {137, 211, 209};
+  const ImmersiveFirstPersonPose moved =
+      BuildImmersiveFirstPersonPose(moved_anchor, 0.0, 0.0, 60, 120);
+  Require(moved.eye[0] - forward.eye[0] == 37 &&
+              moved.eye[1] - forward.eye[1] == 11 &&
+              moved.eye[2] - forward.eye[2] == -91,
+          "eye must preserve the complete player-focus translation");
+
   const ImmersiveFirstPersonPose right =
-      BuildImmersiveFirstPersonPose(root, -kPi / 2.0, 0.0, 60, 80);
-  Require(right.eye == std::array<int32_t, 3>{180, 260, 300},
+      BuildImmersiveFirstPersonPose(root, -kPi / 2.0, 0.0, 60, 120);
+  Require(right.eye == std::array<int32_t, 3>{220, 260, 300},
           "negative quarter-turn must place the eye toward positive X");
   Require(Near(right.forward[0], 1.0) && Near(right.forward[2], 0.0),
           "negative quarter-turn must look toward positive X");
 
   const ImmersiveFirstPersonPose up =
-      BuildImmersiveFirstPersonPose(root, 0.0, -kPi / 6.0, 60, 80);
+      BuildImmersiveFirstPersonPose(root, 0.0, -kPi / 6.0, 60, 120);
   Require(Near(up.forward[1], 0.5),
           "negative pitch must look upward");
   Require(up.eye == forward.eye,
           "pitch must not pull the eye back into the body");
 
   const ImmersiveFirstPersonPose invalid =
-      BuildImmersiveFirstPersonPose(root, 0.0, 0.0, -1, 80);
+      BuildImmersiveFirstPersonPose(root, 0.0, 0.0, -1, 120);
   Require(!invalid.valid, "negative eye height must fail closed");
 
   std::cout << "immersive first-person pose tests passed\n";

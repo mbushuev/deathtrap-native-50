@@ -148,9 +148,10 @@ performs the same toggle. This is independent of the original Tab/R3
 first-person camera: the custom view keeps ordinary walking, running, attacks,
 the character body and the equipped weapon visible. Its eye height and forward
 offset are configured by `HeadHeight` and `HeadForwardOffset` under `[Camera]`.
-They are offsets from the game's live upper-body camera anchor, not from the
-character's feet; the shipped body-visible placement is `60` up and `80`
-forward.
+They are offsets from the game's stable player-focus anchor, not from the
+character's feet; the shipped body-visible placement is `60` up and `120`
+forward. Unlike the controller coordinate pointers, this anchor stays rigidly
+attached to the interpolated render root during forward and reverse movement.
 
 The installer updates `ASYLUM/keys.cfg` before launch. Horizontal mouse motion
 uses the game's original normal turn actions. Holding Shift adds the retail
@@ -257,6 +258,8 @@ side-step path on XInput, so it does not replace or mutate retail Tab/R3.
 Version `0.0.191` lowers the eye to the upper-body anchor. Version `0.0.192`
 restores the original correct gamepad forward/back polarity and reverses the
 engine look-at vector so the visible camera faces the character's course.
+Version `0.0.193` replaces the locomotion-dependent controller anchor with the
+stable player focus and moves the eye slightly higher/forward.
 Start is delivered to the retail menu action as Escape before frontend
 ownership changes. The camera watchdog then transfers the controller only
 after the game actually leaves its gameplay camera; this prevents Start from

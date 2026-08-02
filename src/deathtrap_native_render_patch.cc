@@ -608,7 +608,7 @@ double g_third_person_orbit_max_pitch_radians = 0.0;
 double g_custom_head_min_pitch_radians = 0.0;
 double g_custom_head_max_pitch_radians = 0.0;
 int32_t g_custom_head_height = 60;
-int32_t g_custom_head_forward_offset = 80;
+int32_t g_custom_head_forward_offset = 120;
 double g_third_person_orbit_min_radius = 650.0;
 double g_third_person_orbit_max_radius = 1800.0;
 double g_third_person_orbit_preferred_radius = 1400.0;
@@ -5141,16 +5141,19 @@ bool PublishOwnedCameraEndpoint(
 bool PublishImmersiveFirstPersonEndpoint(
     void* controller, const std::array<int32_t, 3>& camera_focus,
     uintptr_t room_or_sector, bool transition_cut) {
-  std::array<int32_t, 3> upper_body_anchor{};
-  if (!controller ||
-      !ReadCameraPlayerPosition(controller, &upper_body_anchor)) {
+  if (!controller) {
     return false;
   }
 
   const double yaw = g_third_person_orbit_state.yaw;
   const double pitch = g_third_person_orbit_state.pitch;
+  // camera_focus is the stable character-relative source anchor: runtime
+  // probes hold it at player render-root +0/+400/+0 while the controller's
+  // three coordinate pointers can lead or lag the animated model by more than
+  // 180 units during forward/reverse motion. Building the eye from those
+  // pointers made the body slide through a nominally first-person camera.
   const ImmersiveFirstPersonPose pose = BuildImmersiveFirstPersonPose(
-      upper_body_anchor, yaw, pitch, g_custom_head_height,
+      camera_focus, yaw, pitch, g_custom_head_height,
       g_custom_head_forward_offset);
   if (!pose.valid) {
     return false;
@@ -13641,7 +13644,7 @@ void InitializePatchState() {
   g_custom_head_height = std::clamp(
       ConfiguredInteger(L"Camera", L"HeadHeight", 60), 0, 300);
   g_custom_head_forward_offset = std::clamp(
-      ConfiguredInteger(L"Camera", L"HeadForwardOffset", 80), 0, 220);
+      ConfiguredInteger(L"Camera", L"HeadForwardOffset", 120), 0, 220);
   g_third_person_orbit_min_radius = static_cast<double>(std::clamp(
       ConfiguredInteger(L"Camera", L"MinimumRadius", 650), 200, 3000));
   g_third_person_orbit_max_radius = static_cast<double>(std::clamp(
@@ -13764,9 +13767,9 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.192 corrects the immersive "
-      "look-at orientation and places its body-visible eye on the "
-      "upper-body anchor; "
+      "Deathtrap native render overlay 0.0.193 binds the immersive eye to "
+      "the stable player focus, corrects its look-at orientation and keeps "
+      "the body-visible placement; "
       "it keeps the Steam "
       "Redbook-to-MP3 routing fix; it publishes one fully-owned "
       "collision-safe room+scene gameplay-camera pose per source tick, with "
