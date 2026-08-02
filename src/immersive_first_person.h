@@ -42,6 +42,16 @@ inline double ImmersiveOrbitYawFromPlayerHeading(
   return std::remainder(body_yaw - kPi, 2.0 * kPi);
 }
 
+// Head view and third-person orbit share one stored angle but consume it from
+// opposite sides of the focus. Move the third-person camera behind the final
+// head-view direction when leaving immersive mode.
+inline double ThirdPersonOrbitYawFromImmersiveYaw(double immersive_yaw) {
+  constexpr double kPi = 3.14159265358979323846;
+  return std::isfinite(immersive_yaw)
+             ? std::remainder(immersive_yaw + kPi, 2.0 * kPi)
+             : std::numeric_limits<double>::quiet_NaN();
+}
+
 // Dungeon's J/K side-step states exclude forward/back locomotion and therefore
 // cannot express diagonals. Immersive view instead keeps the retail W/S
 // animation and root-motion transaction and records the complete requested

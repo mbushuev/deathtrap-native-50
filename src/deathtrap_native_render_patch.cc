@@ -2437,6 +2437,21 @@ void SetCustomHeadViewSelected(bool enabled, const char* source) {
   g_custom_camera_view_mode.store(static_cast<uint32_t>(next),
                                   std::memory_order_release);
   if (!enabled) {
+    if (previous == CustomCameraViewMode::kHead) {
+      const double immersive_yaw = g_third_person_orbit_state.yaw;
+      g_third_person_orbit_state.yaw =
+          ThirdPersonOrbitYawFromImmersiveYaw(immersive_yaw);
+      g_third_person_heading_reference_microradians.store(
+          static_cast<int32_t>(std::lround(
+              g_third_person_orbit_state.yaw * 1000000.0)),
+          std::memory_order_release);
+      g_third_person_heading_reference_valid.store(
+          true, std::memory_order_release);
+      AppendNativeLog(
+          "camera_immersive_exit_yaw head=%.2f orbit=%.2f",
+          immersive_yaw * 180.0 / kOrbitPi,
+          g_third_person_orbit_state.yaw * 180.0 / kOrbitPi);
+    }
     // Immersive view aligns the rendered body with the eye yaw through the
     // shared camera-relative heading writer, including during mouse/keyboard
     // play.  That ownership is independent of DirectInput's fresh key state,

@@ -52,6 +52,13 @@ int main() {
           "live Q10 heading must preserve its fine angular offset");
   Require(std::isnan(ImmersiveOrbitYawFromPlayerHeading(0, 0)),
           "invalid heading scale must fail closed");
+  Require(Near(ThirdPersonOrbitYawFromImmersiveYaw(0.0), kPi),
+          "head-forward zero must place third person a half-turn behind");
+  Require(Near(ThirdPersonOrbitYawFromImmersiveYaw(-kPi), 0.0),
+          "opposite head direction must wrap to zero orbit yaw");
+  Require(std::isnan(ThirdPersonOrbitYawFromImmersiveYaw(
+              std::numeric_limits<double>::quiet_NaN())),
+          "invalid immersive yaw must fail closed");
 
   const ImmersiveLocomotionPlan forward_motion =
       BuildImmersiveLocomotionPlan(512, false, 0.75, 1024);

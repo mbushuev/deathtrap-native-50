@@ -2403,3 +2403,12 @@ axis. Runtime totals map A to positive X and D to negative X even though speed
 and longitudinal direction are correct. The immersive intent builder now
 mirrors its lateral input for both keyboard and left stick before course
 normalization. No camera, renderer, animation or third-person axis changes.
+
+## 0.0.214: exit behind the final head direction
+
+The head endpoint and third-person orbit store yaw in one persistent state,
+but third person positions the camera radially around the focus. Reusing head
+yaw directly on exit places that radial endpoint on the viewing side instead
+of behind it. The explicit head-to-modern transition now adds a normalized
+half-turn before the presentation cut. This preserves the final viewing
+direction while moving the camera behind the player.

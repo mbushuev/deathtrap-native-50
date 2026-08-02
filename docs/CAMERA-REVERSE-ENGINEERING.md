@@ -2648,3 +2648,17 @@ strafe, but reports A/D mirrored. The endpoint trace is unambiguous: A
 component at the shared immersive keyboard/stick intent boundary. Root
 magnitude, longitudinal input, camera orientation and non-immersive controls
 are unchanged; diagonals inherit the corrected side automatically.
+
+## Head-to-third-person yaw handoff (v0.0.214)
+
+The v0.0.213 user run accepts keyboard movement and immersive entry. On exit,
+third person reuses the final head yaw unchanged. Live records show, for
+example, head yaw near `-1.07` degrees followed by a third-person orbit at the
+same angle. Those modes consume the shared angle from opposite sides of the
+focus, so the unchanged value places the third-person camera in front and
+reverses the apparent view.
+
+Version 0.0.214 adds exactly one half-turn when transitioning from custom head
+view to modern third person. The conversion is deterministic and covered for
+zero, wrapped half-turn and invalid input. Head movement, camera input and all
+other mode transitions remain unchanged.
