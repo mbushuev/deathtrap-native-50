@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 struct ImmersiveFirstPersonPose {
   std::array<int32_t, 3> eye{};
@@ -11,16 +12,21 @@ struct ImmersiveFirstPersonPose {
 };
 
 struct ImmersiveLocomotionPlan {
-  int32_t root_heading = 0;
+  int32_t motion_heading = 0;
   int32_t native_axis_milli = 0;
+  bool active = false;
+};
+
+struct ImmersiveRootMotionInput {
+  int32_t local_x = 0;
+  int32_t local_z = 0;
   bool active = false;
 };
 
 // Dungeon's J/K side-step states exclude forward/back locomotion and therefore
 // cannot express diagonals. Immersive view instead keeps the retail W/S
-// animation and root-motion transaction, temporarily giving that transaction
-// the requested world heading. Backward root motion travels opposite the actor
-// course, so its temporary course is half a turn beyond the requested motion.
+// animation and root-motion transaction and records the complete requested
+// world course for the root-motion input boundary below.
 inline ImmersiveLocomotionPlan BuildImmersiveLocomotionPlan(
     int32_t desired_motion_heading, bool native_backward, double magnitude,
     int32_t heading_units_per_turn) {
@@ -34,15 +40,66 @@ inline ImmersiveLocomotionPlan BuildImmersiveLocomotionPlan(
   if (heading < 0) {
     heading += heading_units_per_turn;
   }
-  if (native_backward) {
-    heading = (heading + heading_units_per_turn / 2) %
-        heading_units_per_turn;
-  }
-  plan.root_heading = heading;
+  plan.motion_heading = heading;
   plan.native_axis_milli = static_cast<int32_t>(std::lround(
       (native_backward ? -magnitude : magnitude) * 1000.0));
   plan.active = plan.native_axis_milli != 0;
   return plan;
+}
+
+// The animation root writer at Dungeon.dll+0x32430 does not consult the Q10
+// heading. It transforms local root motion through the cached horizontal
+// matrix columns at node +0xD0/+0xD8 and +0xE8/+0xF0. Convert the existing
+// local delta to world space, keep its exact horizontal magnitude, choose the
+// requested world course, then solve the same 2x2 matrix back to local input.
+// The original writer remains responsible for applying the result.
+inline ImmersiveRootMotionInput BuildImmersiveRootMotionInput(
+    int32_t local_x, int32_t local_z, int32_t matrix_xx,
+    int32_t matrix_zx, int32_t matrix_xz, int32_t matrix_zz,
+    int32_t desired_motion_heading, int32_t heading_units_per_turn,
+    double matrix_scale = 16384.0) {
+  ImmersiveRootMotionInput result;
+  if (heading_units_per_turn <= 0 || !std::isfinite(matrix_scale) ||
+      matrix_scale <= 0.0) {
+    return result;
+  }
+  const double a = static_cast<double>(matrix_xx) / matrix_scale;
+  const double b = static_cast<double>(matrix_xz) / matrix_scale;
+  const double c = static_cast<double>(matrix_zx) / matrix_scale;
+  const double d = static_cast<double>(matrix_zz) / matrix_scale;
+  const double original_world_x = a * local_x + b * local_z;
+  const double original_world_z = c * local_x + d * local_z;
+  const double world_magnitude =
+      std::hypot(original_world_x, original_world_z);
+  const double determinant = a * d - b * c;
+  if (!std::isfinite(world_magnitude) || world_magnitude <= 0.000001 ||
+      !std::isfinite(determinant) || std::abs(determinant) <= 0.000001) {
+    return result;
+  }
+  int32_t heading = desired_motion_heading % heading_units_per_turn;
+  if (heading < 0) {
+    heading += heading_units_per_turn;
+  }
+  const double radians = static_cast<double>(heading) *
+      2.0 * 3.14159265358979323846 /
+      static_cast<double>(heading_units_per_turn);
+  const double desired_world_x = std::sin(radians) * world_magnitude;
+  const double desired_world_z = std::cos(radians) * world_magnitude;
+  const double solved_x =
+      (desired_world_x * d - b * desired_world_z) / determinant;
+  const double solved_z =
+      (a * desired_world_z - desired_world_x * c) / determinant;
+  if (!std::isfinite(solved_x) || !std::isfinite(solved_z) ||
+      solved_x < static_cast<double>(std::numeric_limits<int32_t>::min()) ||
+      solved_x > static_cast<double>(std::numeric_limits<int32_t>::max()) ||
+      solved_z < static_cast<double>(std::numeric_limits<int32_t>::min()) ||
+      solved_z > static_cast<double>(std::numeric_limits<int32_t>::max())) {
+    return result;
+  }
+  result.local_x = static_cast<int32_t>(std::lround(solved_x));
+  result.local_z = static_cast<int32_t>(std::lround(solved_z));
+  result.active = result.local_x != local_x || result.local_z != local_z;
+  return result;
 }
 
 // Both playable characters share the central chest/neck/head structure, but

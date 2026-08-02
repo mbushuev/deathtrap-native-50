@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.203` (the accepted fully owned camera and
+Current development version: `0.0.204` (the accepted fully owned camera and
 Steam music-routing fix plus an independent body-visible immersive
 first-person view with corrected look-at orientation and rigid player-focus
 attachment, now replaced by a structurally resolved animated head mount whose
@@ -15,10 +15,12 @@ now accepts a complete forward/back plus lateral vector).
 Immersive first person no longer enters the mutually exclusive retail J/K
 side-step state. Keyboard W/S+A/D and the complete left-stick vector instead
 drive the ordinary native walking/running root-motion and collision
-transaction. Pure lateral movement therefore has the normal locomotion pace,
-diagonals work, and the eye-facing visible body course is restored before each
-source tick is published. This is scoped to F10/SELECT; third person, retail
-Tab/R3 and LB side-step remain unchanged.
+transaction. At the two verified player-only animation root-motion callsites,
+the local displacement is redirected through the live cached actor basis into
+the requested camera-relative world course before native collision runs. Pure
+lateral movement therefore has the normal locomotion pace and diagonals work,
+without temporarily rewriting the body course. This is scoped to F10/SELECT;
+third person, retail Tab/R3 and LB side-step remain unchanged.
 
 See the [user-facing changelog](CHANGELOG.md) for the consolidated differences
 from the original Steam release.

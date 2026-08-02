@@ -2254,3 +2254,19 @@ the source tick. Pure lateral motion has ordinary walk/run speed, diagonals
 work on keyboard and gamepad, Shift and stick run hysteresis remain native,
 and third person, retail Tab/R3 plus explicit J/K/LB side-step are outside the
 scope.
+
+## 0.0.204: player-only root-vector redirection
+
+The 0.0.203 heading transaction is invalidated by runtime evidence: changing
+node `+0x1C` did not change the cached matrix through which animation root
+motion was transformed, so pure A/D still travelled forward. The replacement
+does not rotate the actor around the dispatcher.
+
+Only the two verified `+0x451E0 -> +0x32430` calls at `+0x45232/+0x45273`
+are redirected. While the live player is in the overlay-owned head view and a
+movement vector is active, the adapter preserves the animation's exact root
+delta magnitude and changes its world course by solving through the live
+cached 2x2 actor basis. It then invokes the original transform writer, leaving
+position publication and collision native. Signature mismatch fails closed to
+retail input; all other callers of `+0x32430`, third person, Tab/R3 and LB/J/K
+are untouched.

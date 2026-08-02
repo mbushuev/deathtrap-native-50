@@ -179,6 +179,13 @@ constexpr uintptr_t kPlayerTurnRva = 0x00044DD0u;
 // so it is the one recurring boundary shared by forward locomotion and both
 // direct turn-in-place implementations.
 constexpr uintptr_t kPlayerStateDispatcherRva = 0x00082750u;
+// 0x451E0 applies animation root displacement through 0x32430 at exactly two
+// callsites. 0x32430 transforms the local vector through the cached node basis
+// before adding it to the world position. Patching only these calls keeps all
+// unrelated actor/equipment transforms untouched.
+constexpr uintptr_t kPlayerRootMotionTransformRva = 0x00032430u;
+constexpr std::array<uintptr_t, 2> kImmersiveRootMotionCallsiteRvas = {
+    0x00045232u, 0x00045273u};
 // The retail DirectInput joystick boundary. 0x51500 returns the configured
 // 0..0x4000 X/Y axes and 16 packed buttons; 0x32CD0 reports whether joystick
 // input is enabled. Feeding XInput here keeps movement inside the game's
@@ -197,6 +204,10 @@ constexpr size_t kPlayerRunTurnSourceOffset = 0x138u;
 constexpr size_t kPlayerTurnLimitOffset = 0x148u;
 constexpr size_t kPlayerIdleTurnOffset = 0x14Cu;
 constexpr size_t kPlayerHeadingOffset = 0x1Cu;
+constexpr size_t kPlayerRootBasisXxOffset = 0xD0u;
+constexpr size_t kPlayerRootBasisZxOffset = 0xD8u;
+constexpr size_t kPlayerRootBasisXzOffset = 0xE8u;
+constexpr size_t kPlayerRootBasisZzOffset = 0xF0u;
 constexpr int32_t kPlayerHeadingUnitsPerTurn = 1024;
 constexpr uintptr_t kDamageHandlerRva = 0x0001C130u;
 constexpr uintptr_t kMeleeAttackWindowRva = 0x0001D620u;
@@ -947,6 +958,8 @@ using UseConsumableFn = void(__cdecl*)(int32_t item_id);
 using PlayerTurnFn = void(__cdecl*)(void* player);
 using PlayerLocomotionFn = void(__cdecl*)(void* controller);
 using PlayerStateDispatcherFn = void(__cdecl*)(void* outer_player);
+using PlayerRootMotionTransformFn = void(__cdecl*)(
+    void* node, int32_t local_x, int32_t local_y, int32_t local_z);
 using NativeJoystickPollFn = int(__cdecl*)(int32_t* x, int32_t* y,
                                             uint32_t* buttons);
 using NativeJoystickEnabledFn = int(__cdecl*)();
@@ -990,6 +1003,7 @@ PlayerTurnFn g_original_player_turn = nullptr;
 PlayerLocomotionFn g_original_player_locomotion = nullptr;
 PlayerTurnFn g_player_turn_writer = nullptr;
 PlayerStateDispatcherFn g_original_player_state_dispatcher = nullptr;
+PlayerRootMotionTransformFn g_player_root_motion_transform = nullptr;
 NativeJoystickPollFn g_original_native_joystick_poll = nullptr;
 NativeJoystickEnabledFn g_original_native_joystick_enabled = nullptr;
 Mode3CameraFn g_original_mode3_camera = nullptr;
@@ -2241,6 +2255,9 @@ std::atomic<uint64_t> g_xinput_camera_relative_started_ms{0};
 std::atomic<uint64_t> g_xinput_last_locomotion_steer_ms{0};
 std::atomic<bool> g_player_turn_hook_installed{false};
 std::atomic<bool> g_player_state_dispatcher_hook_installed{false};
+std::atomic<bool> g_immersive_root_motion_callsites_installed{false};
+uint64_t g_immersive_root_motion_routes = 0;
+uint64_t g_immersive_root_motion_rejections = 0;
 std::atomic<bool> g_native_joystick_hooks_installed{false};
 std::atomic<int32_t> g_xinput_native_joystick_x_milli{0};
 std::atomic<int32_t> g_xinput_native_joystick_y_milli{0};
@@ -9535,17 +9552,6 @@ bool ApplyCanonicalPlayerHeadingDelta(uintptr_t controller,
   return delta_written;
 }
 
-bool ApplyCanonicalPlayerHeading(uintptr_t controller, int32_t target) {
-  int32_t current = 0;
-  uintptr_t live_controller = 0;
-  if (!ReadLivePlayerHeading(&current, &live_controller) ||
-      live_controller != controller) {
-    return false;
-  }
-  return ApplyCanonicalPlayerHeadingDelta(
-      controller, PlayerHeadingDelta(target, current));
-}
-
 bool ResolveImmersiveLocomotionPlan(ImmersiveLocomotionPlan* plan) {
   if (!plan || !CustomHeadViewSelected()) {
     return false;
@@ -9590,11 +9596,81 @@ bool ResolveImmersiveLocomotionPlan(ImmersiveLocomotionPlan* plan) {
   return plan->active;
 }
 
+void __cdecl RouteImmersivePlayerRootMotion(void* node, int32_t local_x,
+                                             int32_t local_y,
+                                             int32_t local_z) {
+  if (!g_player_root_motion_transform) {
+    return;
+  }
+
+  ImmersiveLocomotionPlan plan;
+  uintptr_t controller = 0;
+  uintptr_t render_link = 0;
+  uintptr_t live_node = 0;
+  int32_t matrix_xx = 0;
+  int32_t matrix_zx = 0;
+  int32_t matrix_xz = 0;
+  int32_t matrix_zz = 0;
+  const bool live_player_node =
+      node && ResolveImmersiveLocomotionPlan(&plan) &&
+      ResolveLivePlayerMovementController(nullptr, &controller) &&
+      SafeReadValue(reinterpret_cast<const void*>(
+                        controller + kPlayerRenderLinkOffset),
+                    &render_link) &&
+      render_link &&
+      SafeReadValue(reinterpret_cast<const void*>(render_link), &live_node) &&
+      live_node == reinterpret_cast<uintptr_t>(node);
+  if (live_player_node &&
+      SafeReadValue(reinterpret_cast<const void*>(
+                        live_node + kPlayerRootBasisXxOffset),
+                    &matrix_xx) &&
+      SafeReadValue(reinterpret_cast<const void*>(
+                        live_node + kPlayerRootBasisZxOffset),
+                    &matrix_zx) &&
+      SafeReadValue(reinterpret_cast<const void*>(
+                        live_node + kPlayerRootBasisXzOffset),
+                    &matrix_xz) &&
+      SafeReadValue(reinterpret_cast<const void*>(
+                        live_node + kPlayerRootBasisZzOffset),
+                    &matrix_zz)) {
+    const ImmersiveRootMotionInput routed = BuildImmersiveRootMotionInput(
+        local_x, local_z, matrix_xx, matrix_zx, matrix_xz, matrix_zz,
+        plan.motion_heading, kPlayerHeadingUnitsPerTurn);
+    if (routed.active) {
+      g_player_root_motion_transform(node, routed.local_x, local_y,
+                                     routed.local_z);
+      ++g_immersive_root_motion_routes;
+      if (g_debug_log && (g_immersive_root_motion_routes % 60u) == 1u) {
+        AppendNativeLog(
+            "immersive root_motion routed local=%d/%d result=%d/%d "
+            "heading=%d basis=%d/%d/%d/%d node=%p total=%llu",
+            local_x, local_z, routed.local_x, routed.local_z,
+            plan.motion_heading, matrix_xx, matrix_zx, matrix_xz, matrix_zz,
+            node, static_cast<unsigned long long>(
+                      g_immersive_root_motion_routes));
+      }
+      return;
+    }
+  } else if (CustomHeadViewSelected()) {
+    ++g_immersive_root_motion_rejections;
+    if (g_debug_log &&
+        (g_immersive_root_motion_rejections % 60u) == 1u) {
+      AppendNativeLog(
+          "immersive root_motion passthrough node=%p live_node=%p "
+          "controller=%p total=%llu",
+          node, reinterpret_cast<void*>(live_node),
+          reinterpret_cast<void*>(controller),
+          static_cast<unsigned long long>(
+              g_immersive_root_motion_rejections));
+    }
+  }
+  g_player_root_motion_transform(node, local_x, local_y, local_z);
+}
+
 void __cdecl HookPlayerStateDispatcher(void* outer_player) {
   if (!g_original_player_state_dispatcher) {
     return;
   }
-  uintptr_t validated_controller = 0;
   if (outer_player && g_player_turn_writer &&
       g_xinput_camera_relative_intent.load(std::memory_order_acquire)) {
     uintptr_t expected_outer = 0;
@@ -9611,7 +9687,6 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
                           std::memory_order_acquire) &&
         ReadLivePlayerHeading(&current_heading, &live_controller) &&
         live_controller == controller) {
-      validated_controller = controller;
       const int32_t target = g_xinput_desired_heading.load(
           std::memory_order_acquire);
       const double magnitude = static_cast<double>(
@@ -9644,35 +9719,10 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
     }
   }
 
-  // Retail J/K enters a separate state and cannot coexist with W/S. Instead,
-  // preserve the visible eye-facing body course, rotate only the forthcoming
-  // native root-motion/collision transaction into the requested vector, and
-  // restore the body course before this source tick is published. The original
-  // dispatcher still owns action resolution, animation, speed and collision.
-  ImmersiveLocomotionPlan locomotion_plan;
-  int32_t preserved_body_heading = 0;
-  uintptr_t heading_controller = 0;
-  const bool route_immersive_motion =
-      validated_controller &&
-      ResolveImmersiveLocomotionPlan(&locomotion_plan) &&
-      ReadLivePlayerHeading(&preserved_body_heading, &heading_controller) &&
-      heading_controller == validated_controller &&
-      ApplyCanonicalPlayerHeading(validated_controller,
-                                  locomotion_plan.root_heading);
+  // Body steering remains canonical and bounded. The complete immersive
+  // movement vector is applied later at the two verified animation root-motion
+  // calls, where the cached transform basis is actually consumed.
   g_original_player_state_dispatcher(outer_player);
-  if (route_immersive_motion) {
-    ApplyCanonicalPlayerHeading(validated_controller,
-                                preserved_body_heading);
-    if (g_debug_log &&
-        (g_source_ticks.load(std::memory_order_relaxed) % 60u) == 1u) {
-      AppendNativeLog(
-          "immersive locomotion routed root_heading=%d restored_heading=%d "
-          "native_axis=%d controller=%p",
-          locomotion_plan.root_heading, preserved_body_heading,
-          locomotion_plan.native_axis_milli,
-          reinterpret_cast<void*>(validated_controller));
-    }
-  }
 }
 
 void __cdecl HookPlayerLocomotion(void* controller) {
@@ -9910,6 +9960,9 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         native_joystick_available &&
         g_player_state_dispatcher_hook_installed.load(
             std::memory_order_acquire) &&
+        (!custom_head_movement ||
+         g_immersive_root_motion_callsites_installed.load(
+             std::memory_order_acquire)) &&
         !selector_captures_controls && !strafe_modifier &&
         (!first_person_movement || custom_head_movement) &&
         CustomCameraOwnsMode3() &&
@@ -9933,8 +9986,8 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
           custom_head_movement ? 1.0 : movement_stick.magnitude);
       // Native Y retains the game's action resolver, root motion, collision,
       // walk/run and animation ownership. In immersive view every lateral or
-      // diagonal request supplies a forward/back driver; the dispatcher
-      // rotates only that native transaction into the complete stick vector.
+      // diagonal request supplies a forward/back driver; the verified root
+      // transform callsites rotate it into the complete stick vector.
       const bool immersive_backward =
           custom_head_movement &&
           movement_stick.y < -g_xinput_movement_threshold;
@@ -10714,6 +10767,95 @@ const std::array<MovementStageCallsite, kMovementStageProbeCount>
 #undef ONEARG_STAGE
 #undef TWOARG_STAGE
 #undef THREEARG_STAGE
+
+bool RelativeCallTargets(uintptr_t callsite_rva, uintptr_t target_rva) {
+  uint8_t* const callsite = g_dungeon_base + callsite_rva;
+  uint8_t opcode = 0;
+  int32_t relative = 0;
+  return SafeRead(callsite, &opcode, sizeof(opcode)) && opcode == 0xE8u &&
+      SafeRead(callsite + 1u, &relative, sizeof(relative)) &&
+      callsite + 5u + relative == g_dungeon_base + target_rva;
+}
+
+bool WriteRelativeCallTarget(uintptr_t callsite_rva, const void* target) {
+  uint8_t* const callsite = g_dungeon_base + callsite_rva;
+  const intptr_t wide_relative =
+      reinterpret_cast<const uint8_t*>(target) - (callsite + 5u);
+  if (wide_relative < std::numeric_limits<int32_t>::min() ||
+      wide_relative > std::numeric_limits<int32_t>::max()) {
+    return false;
+  }
+  const int32_t relative = static_cast<int32_t>(wide_relative);
+  DWORD old_protection = 0;
+  if (!VirtualProtect(callsite + 1u, sizeof(relative),
+                      PAGE_EXECUTE_READWRITE, &old_protection)) {
+    return false;
+  }
+  const bool wrote =
+      SafeWrite(callsite + 1u, &relative, sizeof(relative));
+  FlushInstructionCache(GetCurrentProcess(), callsite, 5u);
+  DWORD ignored = 0;
+  VirtualProtect(callsite + 1u, sizeof(relative), old_protection, &ignored);
+  return wrote;
+}
+
+bool InstallImmersiveRootMotionCallsites() {
+  if (g_immersive_root_motion_callsites_installed.load(
+          std::memory_order_acquire)) {
+    return true;
+  }
+  for (const uintptr_t callsite_rva :
+       kImmersiveRootMotionCallsiteRvas) {
+    if (!RelativeCallTargets(callsite_rva,
+                             kPlayerRootMotionTransformRva)) {
+      AppendNativeLog(
+          "immersive root_motion callsite_invalid callsite=%08llX "
+          "expected_target=%08llX fallback=retail",
+          static_cast<unsigned long long>(callsite_rva),
+          static_cast<unsigned long long>(kPlayerRootMotionTransformRva));
+      return false;
+    }
+  }
+
+  g_player_root_motion_transform =
+      reinterpret_cast<PlayerRootMotionTransformFn>(
+          g_dungeon_base + kPlayerRootMotionTransformRva);
+  size_t installed = 0;
+  for (const uintptr_t callsite_rva :
+       kImmersiveRootMotionCallsiteRvas) {
+    if (!WriteRelativeCallTarget(
+            callsite_rva,
+            reinterpret_cast<const void*>(&RouteImmersivePlayerRootMotion))) {
+      break;
+    }
+    ++installed;
+  }
+  if (installed != kImmersiveRootMotionCallsiteRvas.size()) {
+    for (size_t index = 0; index < installed; ++index) {
+      WriteRelativeCallTarget(
+          kImmersiveRootMotionCallsiteRvas[index],
+          g_dungeon_base + kPlayerRootMotionTransformRva);
+    }
+    g_player_root_motion_transform = nullptr;
+    AppendNativeLog(
+        "immersive root_motion install_failed installed=%zu requested=%zu "
+        "fallback=retail",
+        installed, kImmersiveRootMotionCallsiteRvas.size());
+    return false;
+  }
+
+  g_immersive_root_motion_callsites_installed.store(
+      true, std::memory_order_release);
+  AppendNativeLog(
+      "immersive root_motion=active writer_rva=%08llX "
+      "callsites=%08llX/%08llX scope=IMMERSIVE_FIRST_PERSON",
+      static_cast<unsigned long long>(kPlayerRootMotionTransformRva),
+      static_cast<unsigned long long>(
+          kImmersiveRootMotionCallsiteRvas[0]),
+      static_cast<unsigned long long>(
+          kImmersiveRootMotionCallsiteRvas[1]));
+  return true;
+}
 
 bool PatchMovementStageCallsite(const MovementStageCallsite& stage) {
   uint8_t* const callsite = g_dungeon_base + stage.callsite_rva;
@@ -14326,6 +14468,11 @@ bool DeathtrapImmersiveFirstPersonActive() {
       !RetailFirstPersonActive();
 }
 
+bool DeathtrapImmersiveVectorLocomotionActive() {
+  return g_immersive_root_motion_callsites_installed.load(
+      std::memory_order_acquire);
+}
+
 void SubmitDeathtrapImmersiveKeyboardMovement(int32_t lateral,
                                               int32_t longitudinal) {
   const bool active = DeathtrapImmersiveFirstPersonActive();
@@ -14631,6 +14778,9 @@ bool InstallDeathtrapNativeRenderHooks() {
   if (g_third_person_orbit_enabled &&
       (g_xinput_camera_relative_movement ||
        g_immersive_first_person_enabled)) {
+    if (g_immersive_first_person_enabled) {
+      InstallImmersiveRootMotionCallsites();
+    }
     void* const dispatcher_target =
         g_dungeon_base + kPlayerStateDispatcherRva;
     constexpr std::array<uint8_t, 12> kExpectedDispatcherPrologue = {

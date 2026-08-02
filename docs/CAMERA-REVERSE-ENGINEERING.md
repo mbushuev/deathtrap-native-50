@@ -2459,3 +2459,21 @@ input therefore receives ordinary forward walking/running speed, diagonals
 remain simultaneous, Shift and the existing stick run hysteresis retain their
 normal meaning, and no player coordinate or action-table field is authored by
 the overlay.
+
+## Cached-basis root-motion boundary (v0.0.204)
+
+The v0.0.203 gameplay log invalidated its final assumption. The requested
+temporary Q10 heading was present, but the measured root delta remained
+`0/0/276`: `+0x44DD0` does not rebuild the matrix consumed by root motion in
+that transaction.
+
+Complete static tracing of the active walk callback `+0x602A0` reaches
+`+0x451E0`, which calls `+0x32430` at exactly `+0x45232` and `+0x45273`.
+That writer transforms local X/Z through the cached horizontal basis at node
+`+0xD0/+0xD8/+0xE8/+0xF0`, then adds the result to the world root. Version
+0.0.204 patches only those two player-animation callsites. It converts the
+original local root delta to world space, preserves its exact magnitude,
+chooses the requested camera-relative world course, solves the same 2x2 basis
+back to local X/Z and calls the original writer. Native animation, root writer
+and subsequent collision remain authoritative; there is no direct coordinate
+write and no temporary actor-heading transaction.

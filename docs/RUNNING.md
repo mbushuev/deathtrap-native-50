@@ -384,13 +384,14 @@ those animations. The right stick now uses the same vertical convention in
 custom head and modern third person. With the default `InvertY=0`, physical
 stick-up looks up in both; setting `InvertY=1` reverses both.
 
-Version 0.0.203 gives the F10/SELECT head view a complete movement vector.
+Version 0.0.204 gives the F10/SELECT head view a complete movement vector.
 Keyboard W/S+A/D combinations and diagonals work simultaneously; pure A/D
-uses ordinary walking root motion at the requested lateral course. Shift
-selects the matching native running pace. The complete left-stick vector uses
-the same `RunThresholdPercent` and release hysteresis as forward movement.
-There are no separate HeadStrafe percentage settings. Third person, retail
-Tab/R3 and explicit J/K/LB side-step keep their existing behavior.
+uses ordinary walking root motion redirected at the two verified player-only
+root-transform callsites. Shift selects the matching native running pace. The
+complete left-stick vector uses the same `RunThresholdPercent` and release
+hysteresis as forward movement. There are no separate HeadStrafe percentage
+settings. Third person, retail Tab/R3 and explicit J/K/LB side-step keep their
+existing behavior.
 
 Version 0.0.197 keeps the custom head view active through the complete
 `HeadMinimumPitchDegrees=-75` to `HeadMaximumPitchDegrees=75` range. Looking

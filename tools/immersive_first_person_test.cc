@@ -46,22 +46,44 @@ int main() {
 
   const ImmersiveLocomotionPlan forward_motion =
       BuildImmersiveLocomotionPlan(512, false, 0.75, 1024);
-  Require(forward_motion.active && forward_motion.root_heading == 512 &&
+  Require(forward_motion.active && forward_motion.motion_heading == 512 &&
               forward_motion.native_axis_milli == 750,
           "forward and diagonal motion must retain forward root motion");
   const ImmersiveLocomotionPlan backward_motion =
       BuildImmersiveLocomotionPlan(0, true, 1.0, 1024);
-  Require(backward_motion.active && backward_motion.root_heading == 512 &&
+  Require(backward_motion.active && backward_motion.motion_heading == 0 &&
               backward_motion.native_axis_milli == -1000,
-          "backward root course must oppose the desired movement heading");
+          "backward native animation must retain the requested world course");
   const ImmersiveLocomotionPlan pure_lateral =
       BuildImmersiveLocomotionPlan(256, false, 1.0, 1024);
-  Require(pure_lateral.active && pure_lateral.root_heading == 256 &&
+  Require(pure_lateral.active && pure_lateral.motion_heading == 256 &&
               pure_lateral.native_axis_milli == 1000,
           "pure lateral input must use full-speed forward root motion");
   Require(!BuildImmersiveLocomotionPlan(0, false, 0.0, 1024).active &&
               !BuildImmersiveLocomotionPlan(0, false, 1.0, 0).active,
           "zero motion or invalid heading units must fail closed");
+
+  const ImmersiveRootMotionInput root_left =
+      BuildImmersiveRootMotionInput(0, 10, 16384, 0, 0, 16384,
+                                    768, 1024);
+  Require(root_left.active && root_left.local_x == -10 &&
+              root_left.local_z == 0,
+          "identity root basis must redirect forward motion to world left");
+  const ImmersiveRootMotionInput root_forward =
+      BuildImmersiveRootMotionInput(0, 10, 16384, 0, 0, 16384,
+                                    512, 1024);
+  Require(root_forward.active && root_forward.local_x == 0 &&
+              root_forward.local_z == -10,
+          "identity root basis must redirect motion toward negative Z");
+  const ImmersiveRootMotionInput rotated_basis =
+      BuildImmersiveRootMotionInput(0, 10, 0, -16384, 16384, 0,
+                                    512, 1024);
+  Require(rotated_basis.active && rotated_basis.local_x == 10 &&
+              rotated_basis.local_z == 0,
+          "root solve must invert the cached actor basis");
+  Require(!BuildImmersiveRootMotionInput(
+               0, 10, 0, 0, 0, 0, 512, 1024).active,
+          "degenerate root basis must fail closed");
 
   const ImmersiveFirstPersonPose forward =
       BuildImmersiveFirstPersonPose(root, 0.0, 0.0, 60, 120);

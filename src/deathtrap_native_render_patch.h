@@ -74,6 +74,7 @@ bool DeathtrapModernCameraConsumesMouse();
 // True only while the overlay-owned body-visible first-person camera is the
 // active gameplay view.
 bool DeathtrapImmersiveFirstPersonActive();
+bool DeathtrapImmersiveVectorLocomotionActive();
 
 // Publishes the complete physical-keyboard movement vector independently
 // from XInput. In immersive view the render patch routes this vector through
