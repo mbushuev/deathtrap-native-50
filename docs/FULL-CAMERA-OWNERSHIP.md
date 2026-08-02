@@ -493,3 +493,14 @@ Retail scripted ownership is likewise fail-closed. A raw owner transition may
 take control only in a short immediate interaction window. The broader delayed
 window requires multi-tick independent native travel, preventing persistent
 room/fixed-camera owners from masquerading as authored reveals.
+
+## 0.0.187 telemetry has no ownership role
+
+Collision telemetry runs on the same source-tick path as owned camera
+publication, but it must remain outside the ownership transaction. The logger
+therefore reuses one synchronized session handle instead of repeatedly opening
+and closing the file as contact records become dense. Identical clear
+pivot-exit observations are reduced to transitions and a periodic heartbeat.
+The authoritative room/scene query, radial spring state and published pose are
+bit-for-bit governed by the v0.0.186 policy; logging cannot select, reject or
+move a shot.

@@ -1947,6 +1947,21 @@ ownerless reveal still requires sustained independent native travel. An
 ordinary fixed-camera owner encountered later in the broad interaction tail
 cannot take control.
 
+## 0.0.187: diagnostics cannot amplify collision cost
+
+Runtime telemetry is observational and must not materially change camera frame
+pacing. Opening and closing the session file per diagnostic line violates that
+boundary: obstruction activates several dense records on the gameplay thread,
+so the instrumentation itself can create a contact-correlated frame-rate
+drop.
+
+The session logger now owns one lazily opened, synchronized append handle for
+the process lifetime. Single-line records and pre-buffered probe blocks share
+the same writer. Repeated clean exits from the same expanded mesh interval are
+logged on state change and as a bounded heartbeat, not once for every direct
+and revalidation query. No collision decision or camera endpoint is changed in
+this version.
+
 ## 0.0.185: collision cannot select gameplay rotation
 
 Restricting angular avoidance to a physical emergency does not make it
