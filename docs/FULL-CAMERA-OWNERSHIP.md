@@ -271,3 +271,43 @@ a full-quality combined shot is found; only if none exists is the complete set
 scanned for maximum distance. Candidate-index hysteresis and the three-radius
 safety-cut rule operate on this combined distance. Intermediate applied angles
 are re-swept against both channels. The visible hybrid camera is unchanged.
+
+## 0.0.179 combined-score result and narrow publication audit
+
+The completed run is
+`<game-directory>\logs\deathtrap-native-20260802-095142-120-pid30208.log`.
+Across 499 owned-shot samples, combined candidate scoring keeps every selected
+endpoint outside the 288-unit three-radius boundary; the minimum selected
+room+scene distance is 412.2 units. The final applied intermediate result also
+never falls below 288 units, with a 315.0-unit minimum. Nine unsafe angular
+transitions use the already validated safety cut. Scene collision changes the
+selected score on 17 samples and leaves 18 positive final contacts safely
+contracted. Static and dynamic collision selection are therefore frozen as one
+solver; the next gate is publication, not another collision threshold.
+
+Targeted disassembly refines the publication contract. `0x3A980` constructs
+local transform state but also recurses through children. `0x3AC00` composes
+the world matrix, and additionally updates resource bounds, auxiliary pointers
+and child aggregates. Calling either routine on the live camera node a second
+time would therefore be a smaller version of the rejected broad cache replay,
+not a proven pose-only transaction.
+
+Version 0.0.180 remains visually shadow-only and audits a safer construction:
+
+1. Re-sweep the final combined endpoint through the room graph so its sector
+   belongs to the dynamically shortened position rather than the longer
+   static candidate.
+2. Capture raw position and angles with each exact camera snapshot.
+3. Copy the live camera node into aligned detached storage, preserve only its
+   read-only parent link, and sever children, siblings, callbacks, resource and
+   bounds side links.
+4. Run `0x3A980 -> 0x3AC00` on that detached node. First reproduce the previous
+   exact local/world matrices byte-for-byte; then build the proposed owned pose
+   using the owned focus as its intentional look target.
+5. Compare the live camera node, global `0x1D4110` matrix and player node bytes
+   before and after the detached calls. All three must remain unchanged, and
+   the proposed world translation must equal the final combined endpoint.
+
+The evidence channel is `camera_owned_publish_shadow`. No owned position,
+angle, sector or matrix is written to live game state in 0.0.180. Visible
+behaviour remains the 0.0.172 hybrid until this byte audit passes in runtime.

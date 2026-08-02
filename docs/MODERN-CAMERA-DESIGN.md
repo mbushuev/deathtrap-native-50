@@ -1819,3 +1819,21 @@ fail-closed on the native path.
 
 Installed/build/dist x86 `0.0.172` SHA-256 is
 `9F25C74A6BDDD5435917DC999BB27B6BABE524ADEB93153074AE3428FC197A54`.
+
+## 0.0.180 detached owned-pose publication audit
+
+The full-owned room and scene solver has passed its combined-distance gate;
+publication is now isolated from collision tuning. The live cache leaves are
+not pose-only: `0x3A980` and `0x3AC00` recurse through node children, and the
+latter also updates resources, bounds and child aggregates. They are therefore
+run only on a detached camera-node copy whose external writable edges are
+cleared. The previous exact raw position/angles must reproduce its captured
+local/world matrices byte-for-byte before a proposed position/focus pose is
+accepted as constructible.
+
+The audit writes no live camera state. It re-resolves the final combined
+endpoint through the owned room graph, builds its local/world matrices on the
+detached node, and compares the complete live camera node, published matrix
+and player-node bytes before and after. Runtime ownership cannot advance from
+shadow mode unless all three remain unchanged and the detached world
+translation equals the selected endpoint.

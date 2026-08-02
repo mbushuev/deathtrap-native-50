@@ -37,6 +37,14 @@ constexpr uintptr_t kRenderPresentWaitRva = 0x00080600u;
 constexpr uintptr_t kRendererRva = 0x0001B320u;
 constexpr uintptr_t kSceneCacheUpdateRva = 0x00039160u;
 constexpr uintptr_t kCameraCacheUpdateRva = 0x00003860u;
+// These two leaves are the narrow transform portion of the broad 0x3860
+// camera-cache transaction.  0x3A980 builds a node's local transform from
+// its position/angles; 0x3AC00 composes its world transform.  The owned-camera
+// publication audit invokes them only on a detached camera-node copy.  In
+// particular, it never replays the live resource/bounds/callback recursion
+// that made the rejected 0.0.142 build shake the player.
+constexpr uintptr_t kCameraNodeLocalUpdateRva = 0x0003A980u;
+constexpr uintptr_t kCameraNodeWorldUpdateRva = 0x0003AC00u;
 constexpr uintptr_t kBackendFlipPointerRva = 0x000FFA50u;
 constexpr uintptr_t kUiFrameStampRva = 0x000FB96Cu;
 constexpr uintptr_t kUiRenderStateRva = 0x0022B5B0u;
@@ -259,12 +267,18 @@ struct Matrix3x4 {
 struct NodeTransform {
   Matrix3x4 world;
   Matrix3x4 local;
+  // Complete source block consumed by 0x3A980 before it writes local matrix
+  // state: position/pivot values at +0x00..+0x14 and angles at +0x18..+0x20.
+  std::array<uint32_t, 9> local_transform_source{};
+  std::array<int32_t, 3> position{};
+  std::array<int32_t, 3> angles{};
   uint32_t flags = 0;
   uintptr_t parent = 0;
   uintptr_t render_resource_handle = 0;
   std::array<int32_t, 3> bounds_center{};
   int32_t bounds_radius = 0;
   bool bounds_valid = false;
+  bool pose_fields_valid = false;
 };
 
 struct SceneSnapshot {
@@ -911,6 +925,8 @@ RendererFn g_original_renderer = nullptr;
 InventorySlotDrawFn g_original_inventory_slot_draw = nullptr;
 RenderCacheUpdateFn g_scene_cache_update = nullptr;
 RenderCacheUpdateFn g_camera_cache_update = nullptr;
+RenderCacheUpdateFn g_camera_node_local_update = nullptr;
+RenderCacheUpdateFn g_camera_node_world_update = nullptr;
 DamageHandlerFn g_original_damage_handler = nullptr;
 MeleeAttackWindowFn g_original_melee_attack_window = nullptr;
 SuccessfulBlockImpactFn g_original_successful_block_impact = nullptr;
@@ -4149,6 +4165,285 @@ bool SelectOwnedCameraCombinedPlan(
   return true;
 }
 
+bool BuildDetachedCameraMatrices(
+    const std::array<uint32_t, kCameraNodeProbeDwords>& live_node,
+    const std::array<int32_t, 3>& position,
+    const std::array<int32_t, 3>& angles,
+    const std::array<uint32_t, 9>* local_transform_source,
+    Matrix3x4* local, Matrix3x4* world) {
+  if (!local || !world || !g_camera_node_local_update ||
+      !g_camera_node_world_update) {
+    return false;
+  }
+
+  // Preserve the camera's real parent so 0x3AC00 reads the same parent world
+  // matrix, but sever every writable/external edge.  Resource and bounds work
+  // then remains entirely inside this aligned stack copy and recursion cannot
+  // reach a live child, sibling, callback or render resource.
+  std::array<uint32_t, kCameraNodeProbeDwords> detached = live_node;
+  uint8_t* const bytes = reinterpret_cast<uint8_t*>(detached.data());
+  auto store = [&](size_t offset, const auto& value) {
+    std::memcpy(bytes + offset, &value, sizeof(value));
+  };
+  const uintptr_t null_pointer = 0;
+  const uintptr_t null_resource = 0;
+  store(kChildOffset, null_pointer);
+  store(kSiblingOffset, null_pointer);
+  store(kRenderResourceHandleOffset, null_resource);
+  for (const size_t offset : {0x40u, 0x44u, 0x48u, 0x4Cu, 0x50u}) {
+    store(offset, null_pointer);
+  }
+  uint32_t flags = 0;
+  std::memcpy(&flags, bytes + kNodeFlagsOffset, sizeof(flags));
+  // Both routines cache completion in these bits.  Clear only their two
+  // update stamps plus resource-side dirty flags on the detached copy.
+  flags &= ~(0x00100000u | 0x00010000u | 0x00040000u | 0x00800000u);
+  store(kNodeFlagsOffset, flags);
+  if (local_transform_source) {
+    std::memcpy(bytes, local_transform_source->data(),
+                sizeof(*local_transform_source));
+  }
+  std::memcpy(bytes, position.data(), sizeof(position));
+  std::memcpy(bytes + 0x18u, angles.data(), sizeof(angles));
+
+  bool invoked = false;
+  __try {
+    g_camera_node_local_update(detached.data());
+    g_camera_node_world_update(detached.data());
+    invoked = true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    invoked = false;
+  }
+  return invoked &&
+      SafeRead(bytes + kLocalMatrixOffset, local, sizeof(*local)) &&
+      SafeRead(bytes + kMatrixOffset, world, sizeof(*world));
+}
+
+void LogOwnedCameraPublicationShadow(
+    void* controller, const std::array<int32_t, 3>& focus,
+    const std::array<int32_t, 3>& combined_position,
+    size_t start_sector_index, bool transition_cut) {
+  if (!g_debug_log || !controller || !g_original_camera_look_at ||
+      !g_camera_node_local_update || !g_camera_node_world_update ||
+      !g_runtime_room_graph.valid ||
+      start_sector_index >= g_runtime_room_graph.sectors.size()) {
+    return;
+  }
+
+  const deathtrap_camera::RoomVec3 room_focus{
+      static_cast<double>(focus[0]), static_cast<double>(focus[1]),
+      static_cast<double>(focus[2])};
+  const deathtrap_camera::RoomVec3 room_target{
+      static_cast<double>(combined_position[0]),
+      static_cast<double>(combined_position[1]),
+      static_cast<double>(combined_position[2])};
+  // Dynamic collision can shorten an endpoint before a portal crossing. Run
+  // the final combined point through the room graph once more so the owned
+  // publication sector belongs to the actual final centre, not the longer
+  // static-only candidate.
+  const deathtrap_camera::RoomSweepResult final_room =
+      deathtrap_camera::SweepSphereThroughRooms(
+          g_runtime_room_graph.sectors, start_sector_index, room_focus,
+          room_target, kCameraCollisionSphereRadius, 8.0, 32u);
+  if (!final_room.valid ||
+      final_room.sector >= g_runtime_room_graph.sectors.size()) {
+    AppendNativeLog(
+        "camera_owned_publish_shadow valid=0 reason=FINAL_ROOM target=%d/%d/%d",
+        combined_position[0], combined_position[1], combined_position[2]);
+    return;
+  }
+  const std::array<int32_t, 3> target = {
+      static_cast<int32_t>(std::lround(final_room.position.x)),
+      static_cast<int32_t>(std::lround(final_room.position.y)),
+      static_cast<int32_t>(std::lround(final_room.position.z))};
+  const uintptr_t graph_sector =
+      g_runtime_room_graph.sector_base + final_room.sector * 0x3Cu;
+
+  const uintptr_t base = reinterpret_cast<uintptr_t>(controller);
+  uintptr_t camera_owner = 0;
+  uintptr_t camera_node = 0;
+  if (!SafeReadValue(reinterpret_cast<const void*>(
+                         base + kCameraControllerOwnerOffset),
+                     &camera_owner) ||
+      !camera_owner ||
+      !SafeReadValue(reinterpret_cast<const void*>(
+                         camera_owner + kCameraNodeOffset),
+                     &camera_node) ||
+      !camera_node) {
+    AppendNativeLog(
+        "camera_owned_publish_shadow valid=0 reason=CAMERA_NODE target=%d/%d/%d",
+        target[0], target[1], target[2]);
+    return;
+  }
+
+  std::array<uint32_t, kCameraNodeProbeDwords> camera_before{};
+  std::array<uint32_t, kCameraNodeProbeDwords> camera_after{};
+  Matrix3x4 published_before{};
+  Matrix3x4 published_after{};
+  if (!SafeRead(reinterpret_cast<const void*>(camera_node),
+                camera_before.data(), sizeof(camera_before)) ||
+      !SafeRead(g_dungeon_base + kPublishedCameraMatrixRva,
+                &published_before, sizeof(published_before))) {
+    AppendNativeLog(
+        "camera_owned_publish_shadow valid=0 reason=CAMERA_READ node=%08llX",
+        static_cast<unsigned long long>(camera_node));
+    return;
+  }
+
+  uintptr_t parent = 0;
+  uintptr_t child = 0;
+  uintptr_t sibling = 0;
+  std::array<int32_t, 3> current_position{};
+  std::array<int32_t, 3> current_angles{};
+  std::memcpy(current_position.data(), camera_before.data(),
+              sizeof(current_position));
+  std::memcpy(current_angles.data(),
+              reinterpret_cast<const uint8_t*>(camera_before.data()) + 0x18u,
+              sizeof(current_angles));
+  std::memcpy(&parent,
+              reinterpret_cast<const uint8_t*>(camera_before.data()) +
+                  kParentOffset,
+              sizeof(parent));
+  std::memcpy(&child,
+              reinterpret_cast<const uint8_t*>(camera_before.data()) +
+                  kChildOffset,
+              sizeof(child));
+  std::memcpy(&sibling,
+              reinterpret_cast<const uint8_t*>(camera_before.data()) +
+                  kSiblingOffset,
+              sizeof(sibling));
+
+  constexpr size_t kPlayerAuditBytes = 0x110u;
+  std::array<uint8_t, kPlayerAuditBytes> player_before{};
+  std::array<uint8_t, kPlayerAuditBytes> player_after{};
+  const uintptr_t player_node = g_previous_snapshot.player;
+  const bool player_read = player_node &&
+      SafeRead(reinterpret_cast<const void*>(player_node),
+               player_before.data(), player_before.size());
+
+  const auto previous_camera = g_previous_snapshot.nodes.find(camera_node);
+  const bool previous_pose_valid =
+      previous_camera != g_previous_snapshot.nodes.end() &&
+      previous_camera->second.pose_fields_valid;
+  const std::array<int32_t, 3>& baseline_position =
+      previous_pose_valid ? previous_camera->second.position
+                          : current_position;
+  const std::array<int32_t, 3>& baseline_angles =
+      previous_pose_valid ? previous_camera->second.angles
+                          : current_angles;
+
+  std::array<int32_t, 3> owned_angles{};
+  bool look_at_valid = false;
+  __try {
+    // Unlike the hybrid correction, the full-owned camera intentionally owns
+    // its focus/look target.  The detached audit therefore uses the current
+    // owned focus rather than borrowing a resolver-authored retail target.
+    g_original_camera_look_at(target.data(), focus.data(),
+                              owned_angles.data());
+    look_at_valid = true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    look_at_valid = false;
+  }
+
+  Matrix3x4 baseline_local{};
+  Matrix3x4 baseline_world{};
+  Matrix3x4 owned_local{};
+  Matrix3x4 owned_world{};
+  const bool baseline_built = BuildDetachedCameraMatrices(
+      camera_before, baseline_position, baseline_angles,
+      previous_pose_valid
+          ? &previous_camera->second.local_transform_source
+          : nullptr,
+      &baseline_local, &baseline_world);
+  const bool owned_built = look_at_valid && BuildDetachedCameraMatrices(
+      camera_before, target, owned_angles, nullptr,
+      &owned_local, &owned_world);
+
+  uintptr_t retail_sector = 0;
+  if (g_resolve_camera_sector) {
+    __try {
+      retail_sector = g_resolve_camera_sector(target.data(), graph_sector);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      retail_sector = 0;
+    }
+  }
+
+  const uint8_t* const live_bytes =
+      reinterpret_cast<const uint8_t*>(camera_before.data());
+  Matrix3x4 live_world{};
+  Matrix3x4 live_local{};
+  std::memcpy(&live_world, live_bytes + kMatrixOffset, sizeof(live_world));
+  std::memcpy(&live_local, live_bytes + kLocalMatrixOffset, sizeof(live_local));
+  const Matrix3x4& expected_local = previous_pose_valid
+      ? previous_camera->second.local : live_local;
+  const Matrix3x4& expected_world = previous_pose_valid
+      ? previous_camera->second.world : live_world;
+  const bool baseline_local_exact = baseline_built &&
+      std::memcmp(&baseline_local, &expected_local,
+                  sizeof(expected_local)) == 0;
+  const bool baseline_world_exact = baseline_built &&
+      std::memcmp(&baseline_world, &expected_world,
+                  sizeof(expected_world)) == 0;
+  const bool published_exact =
+      std::memcmp(&published_before, &live_world, sizeof(live_world)) == 0;
+  const bool owned_translation_exact = owned_built &&
+      std::equal(target.begin(), target.end(),
+                 owned_world.values.begin() + 9);
+
+  const bool camera_read_after =
+      SafeRead(reinterpret_cast<const void*>(camera_node),
+               camera_after.data(), sizeof(camera_after));
+  const bool published_read_after =
+      SafeRead(g_dungeon_base + kPublishedCameraMatrixRva,
+               &published_after, sizeof(published_after));
+  const bool player_read_after = player_read &&
+      SafeRead(reinterpret_cast<const void*>(player_node),
+               player_after.data(), player_after.size());
+  const bool camera_untouched = camera_read_after &&
+      std::memcmp(camera_before.data(), camera_after.data(),
+                  sizeof(camera_before)) == 0;
+  const bool published_untouched = published_read_after &&
+      std::memcmp(&published_before, &published_after,
+                  sizeof(published_before)) == 0;
+  const bool player_untouched = player_read_after &&
+      std::memcmp(player_before.data(), player_after.data(),
+                  player_before.size()) == 0;
+
+  const bool valid = baseline_local_exact && baseline_world_exact &&
+      published_exact && owned_translation_exact && camera_untouched &&
+      published_untouched && player_untouched &&
+      camera_node != player_node;
+  static uint64_t audit_sequence = 0;
+  ++audit_sequence;
+  if (!valid || transition_cut || final_room.blocked ||
+      (audit_sequence % 30u) == 1u) {
+    AppendNativeLog(
+        "camera_owned_publish_shadow valid=%u target=%d/%d/%d "
+        "room_blocked=%u cut=%u sector=%08llX/%08llX node=%08llX "
+        "parent=%08llX child=%08llX sibling=%08llX player=%08llX "
+        "angles=%d/%d/%d->%d/%d/%d rebuild=%u/%u published=%u "
+        "owned_translation=%u untouched=%u/%u/%u",
+        valid ? 1u : 0u, target[0], target[1], target[2],
+        final_room.blocked ? 1u : 0u, transition_cut ? 1u : 0u,
+        static_cast<unsigned long long>(graph_sector),
+        static_cast<unsigned long long>(retail_sector),
+        static_cast<unsigned long long>(camera_node),
+        static_cast<unsigned long long>(parent),
+        static_cast<unsigned long long>(child),
+        static_cast<unsigned long long>(sibling),
+        static_cast<unsigned long long>(player_node),
+        current_angles[0], current_angles[1], current_angles[2],
+        owned_angles[0], owned_angles[1], owned_angles[2],
+        baseline_local_exact ? 1u : 0u,
+        baseline_world_exact ? 1u : 0u,
+        published_exact ? 1u : 0u,
+        owned_translation_exact ? 1u : 0u,
+        camera_untouched ? 1u : 0u,
+        published_untouched ? 1u : 0u,
+        player_untouched ? 1u : 0u);
+  }
+}
+
 // Source camera endpoints are collision-resolved independently, but the 50 Hz
 // presentation path used to connect them with a straight Cartesian chord. An
 // orbit turning around a prop corner can have two valid endpoints while that
@@ -5963,6 +6258,21 @@ void __cdecl HookMode3Camera(void* controller) {
         owned_scene_query_valid = selected_combined.scene.valid;
         owned_room_applied_safe_cut = true;
       }
+    }
+    if (owned_room_applied_valid && owned_scene_query_valid) {
+      std::array<int32_t, 3> owned_combined_position = {
+          static_cast<int32_t>(
+              std::lround(owned_room_applied_sweep.position.x)),
+          static_cast<int32_t>(
+              std::lround(owned_room_applied_sweep.position.y)),
+          static_cast<int32_t>(
+              std::lround(owned_room_applied_sweep.position.z))};
+      if (owned_scene_sweep.blocked) {
+        owned_combined_position = owned_scene_sweep.position;
+      }
+      LogOwnedCameraPublicationShadow(
+          controller, camera_focus, owned_combined_position,
+          owned_room_start_index, owned_room_applied_safe_cut);
     }
   } else {
     g_third_person_orbit_state.owned_room_shadow_candidate_index =
@@ -9880,8 +10190,24 @@ SceneSnapshot CaptureScene(void* context) {
     snapshot.camera_sector_valid = SafeReadValue(
         reinterpret_cast<const void*>(camera_node + kCameraNodeSectorOffset),
         &snapshot.camera_sector) && snapshot.camera_sector;
-    const auto existing = snapshot.nodes.find(camera_node);
+    auto existing = snapshot.nodes.find(camera_node);
     snapshot.camera_in_scene_tree = existing != snapshot.nodes.end();
+    if (existing != snapshot.nodes.end()) {
+      existing->second.pose_fields_valid =
+          SafeRead(reinterpret_cast<const void*>(camera_node),
+                   existing->second.local_transform_source.data(),
+                   sizeof(existing->second.local_transform_source));
+      if (existing->second.pose_fields_valid) {
+        std::memcpy(existing->second.position.data(),
+                    existing->second.local_transform_source.data(),
+                    sizeof(existing->second.position));
+        std::memcpy(
+            existing->second.angles.data(),
+            reinterpret_cast<const uint8_t*>(
+                existing->second.local_transform_source.data()) + 0x18u,
+            sizeof(existing->second.angles));
+      }
+    }
     if (existing == snapshot.nodes.end()) {
       visited.insert(camera_node);
       NodeTransform transform{};
@@ -9896,6 +10222,20 @@ SceneSnapshot CaptureScene(void* context) {
            SafeReadValue(
                reinterpret_cast<const void*>(camera_node + kParentOffset),
                &transform.parent)) {
+        transform.pose_fields_valid =
+            SafeRead(reinterpret_cast<const void*>(camera_node),
+                     transform.local_transform_source.data(),
+                     sizeof(transform.local_transform_source));
+        if (transform.pose_fields_valid) {
+          std::memcpy(transform.position.data(),
+                      transform.local_transform_source.data(),
+                      sizeof(transform.position));
+          std::memcpy(
+              transform.angles.data(),
+              reinterpret_cast<const uint8_t*>(
+                  transform.local_transform_source.data()) + 0x18u,
+              sizeof(transform.angles));
+        }
         SafeReadValue(reinterpret_cast<const void*>(
                           camera_node + kRenderResourceHandleOffset),
                       &transform.render_resource_handle);
@@ -12313,10 +12653,15 @@ void InitializePatchState() {
       g_dungeon_base + kSceneCacheUpdateRva);
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
+  g_camera_node_local_update = reinterpret_cast<RenderCacheUpdateFn>(
+      g_dungeon_base + kCameraNodeLocalUpdateRva);
+  g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
+      g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.179 preserves the 0.0.172 "
+      "Deathtrap native render overlay 0.0.180 preserves the 0.0.172 "
       "hybrid camera while shadow-planning and angularly stepping a useful "
-      "collision-safe room shot around the current focus; it uses one pre-history "
+      "collision-safe room+scene shot around the current focus and byte-audits "
+      "its complete pose on a detached camera node; it uses one pre-history "
       "scene-mesh candidate owner before the retail position-ring average; "
       "accepted boundaries are validated against real render triangles, not "
       "conservative empty OBB space; post-native exact correction remains a "
