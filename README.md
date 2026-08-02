@@ -1,8 +1,8 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.178` (diagnostic full-orbit room ownership
-plus a clean radial swept-sphere channel for dynamic render meshes; visible
-camera behaviour remains the `0.0.172` hybrid).
+Current development version: `0.0.179` (diagnostic combined room-and-scene
+candidate scoring with clean radial dynamic-mesh sweeps; visible camera
+behaviour remains the `0.0.172` hybrid).
 
 The `modern-third-person-camera` branch contains the first opt-in native orbit
 prototype. It takes ownership at the mode-3 dispatcher before the retail

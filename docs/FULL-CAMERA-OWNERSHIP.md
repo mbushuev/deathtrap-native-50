@@ -248,3 +248,26 @@ The result is radial only with an 8-unit contact backoff. It never calls the
 old expanded-OBB pushout, never chooses a supporting face and never retains a
 world-space fallback point. The shadow evidence channel is
 `camera_owned_scene_shadow`.
+
+## 0.0.178 dynamic-sweep result and combined score
+
+The completed run is
+`<game-directory>\logs\deathtrap-native-20260802-094318-936-pid16480.log`.
+The clean channel records 205 triangle contacts across resources 11432,
+12613, 12616, 12708, 13676 and 13679. It reports 18 direction-qualified
+initial overlaps and no non-radial result. Three thinner resources (11467,
+12610 and 12709) fail the existing two-axis mass test. Stable contacts have
+zero bounds motion; resource 11432 also reaches 20 units of observed motion.
+
+Applying dynamic collision only after static shot selection is insufficient:
+158/205 contacts contract below 288 units and 84 below the 96-unit camera
+radius. This is expected when the room-optimal ray points through a block; it
+does not invalidate the triangle sweep and must not revive OBB pushout.
+
+Version 0.0.179 evaluates room and scene distance as one score for each angular
+candidate. A direct shot outside the configured 650-unit useful boundary exits
+early. Otherwise alternatives are evaluated in increasing angular cost until
+a full-quality combined shot is found; only if none exists is the complete set
+scanned for maximum distance. Candidate-index hysteresis and the three-radius
+safety-cut rule operate on this combined distance. Intermediate applied angles
+are re-swept against both channels. The visible hybrid camera is unchanged.

@@ -350,7 +350,8 @@ inline RoomOrbitPlan SelectRoomOrbitPlan(
     size_t previous_selected_index = std::numeric_limits<size_t>::max(),
     double switch_hysteresis_distance = 0.0,
     double contact_backoff = 1.0,
-    size_t maximum_portal_transitions = 16) {
+    size_t maximum_portal_transitions = 16,
+    bool allow_direct_early_exit = true) {
   RoomOrbitPlan plan;
   if (offsets.empty() || !std::isfinite(preferred_useful_distance) ||
       preferred_useful_distance < 0.0 ||
@@ -380,7 +381,7 @@ inline RoomOrbitPlan SelectRoomOrbitPlan(
     if (!candidate.sweep.valid || !std::isfinite(candidate.safe_distance)) {
       continue;
     }
-    if (index == 0u &&
+    if (allow_direct_early_exit && index == 0u &&
         candidate.safe_distance + detail::kRoomSweepEpsilon >=
             preferred_useful_distance) {
       plan.selected_index = 0u;

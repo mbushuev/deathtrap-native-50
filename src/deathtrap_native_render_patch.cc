@@ -360,6 +360,19 @@ struct OwnedCameraSceneSweepResult {
   bool initial_overlap = false;
 };
 
+struct OwnedCameraCombinedCandidate {
+  OwnedCameraSceneSweepResult scene{};
+  double safe_distance = 0.0;
+  bool evaluated = false;
+};
+
+struct OwnedCameraCombinedPlan {
+  std::vector<OwnedCameraCombinedCandidate> candidates;
+  size_t selected_index = std::numeric_limits<size_t>::max();
+  bool valid = false;
+  bool retained_previous = false;
+};
+
 struct CameraMeshContactPreference {
   uintptr_t node = 0;
   uintptr_t resource = 0;
@@ -1803,7 +1816,7 @@ bool SweepOwnedCameraAgainstRooms(
         cache.sectors, start_index, room_focus, room_requested,
         kCameraCollisionSphereRadius, g_third_person_orbit_min_radius,
         kCandidateOffsets, previous_candidate_index,
-        kCameraCollisionSphereRadius, 8.0, 32u);
+        kCameraCollisionSphereRadius, 8.0, 32u, false);
     if (!orbit_plan->valid || orbit_plan->candidates.empty()) {
       return false;
     }
@@ -4013,6 +4026,129 @@ bool SweepOwnedCameraAgainstSceneMeshesInSnapshots(
   return true;
 }
 
+bool SelectOwnedCameraCombinedPlan(
+    const SceneSnapshot& scene, const SceneSnapshot& stable_scene,
+    const std::array<int32_t, 3>& focus,
+    const deathtrap_camera::RoomOrbitPlan& room_plan,
+    double preferred_useful_distance, double switch_hysteresis_distance,
+    double minimum_retained_distance, size_t previous_selected_index,
+    OwnedCameraCombinedPlan* combined_plan) {
+  if (!combined_plan || !room_plan.valid || room_plan.candidates.empty() ||
+      !std::isfinite(preferred_useful_distance) ||
+      preferred_useful_distance < 0.0 ||
+      !std::isfinite(switch_hysteresis_distance) ||
+      switch_hysteresis_distance < 0.0 ||
+      !std::isfinite(minimum_retained_distance) ||
+      minimum_retained_distance < 0.0) {
+    return false;
+  }
+  *combined_plan = {};
+  combined_plan->candidates.resize(room_plan.candidates.size());
+
+  auto evaluate = [&](size_t index) {
+    if (index >= room_plan.candidates.size()) {
+      return false;
+    }
+    OwnedCameraCombinedCandidate& combined =
+        combined_plan->candidates[index];
+    if (combined.evaluated) {
+      return true;
+    }
+    const auto& room = room_plan.candidates[index];
+    combined.evaluated = true;
+    combined.safe_distance = room.sweep.valid ? room.safe_distance : 0.0;
+    if (!room.sweep.valid || room.safe_distance < 1.0) {
+      return true;
+    }
+    const std::array<int32_t, 3> room_position = {
+        static_cast<int32_t>(std::lround(room.sweep.position.x)),
+        static_cast<int32_t>(std::lround(room.sweep.position.y)),
+        static_cast<int32_t>(std::lround(room.sweep.position.z))};
+    if (!SweepOwnedCameraAgainstSceneMeshesInSnapshots(
+            scene, stable_scene, focus, room_position, &combined.scene)) {
+      return false;
+    }
+    if (combined.scene.blocked) {
+      combined.safe_distance =
+          std::min(combined.safe_distance, combined.scene.safe_distance);
+    }
+    return true;
+  };
+
+  if (!evaluate(0u)) {
+    return false;
+  }
+  const double direct_quality = std::min(
+      combined_plan->candidates[0].safe_distance,
+      preferred_useful_distance);
+  if (direct_quality >= preferred_useful_distance) {
+    combined_plan->selected_index = 0u;
+    combined_plan->valid = true;
+    return true;
+  }
+
+  size_t best_index = 0u;
+  double best_quality = direct_quality;
+  double best_cost = room_plan.candidates[0].angular_cost;
+  std::vector<size_t> candidate_order;
+  candidate_order.reserve(room_plan.candidates.size() - 1u);
+  for (size_t index = 1u; index < room_plan.candidates.size(); ++index) {
+    candidate_order.push_back(index);
+  }
+  std::stable_sort(
+      candidate_order.begin(), candidate_order.end(),
+      [&](size_t left, size_t right) {
+        return room_plan.candidates[left].angular_cost <
+            room_plan.candidates[right].angular_cost;
+      });
+  for (size_t index : candidate_order) {
+    if (!evaluate(index)) {
+      return false;
+    }
+    const auto& combined = combined_plan->candidates[index];
+    const double quality =
+        std::min(combined.safe_distance, preferred_useful_distance);
+    const double cost = room_plan.candidates[index].angular_cost;
+    const bool better_quality = quality > best_quality + 1.0e-6;
+    const bool equal_quality = std::abs(quality - best_quality) <= 1.0e-6;
+    if (better_quality || (equal_quality && cost < best_cost - 1.0e-9)) {
+      best_index = index;
+      best_quality = quality;
+      best_cost = cost;
+    }
+    // Candidates are evaluated in increasing angular cost. Once a useful
+    // full-quality shot is found, no later candidate can improve the primary
+    // score or its angular tie-break. The prior side is evaluated separately
+    // below for hysteresis.
+    if (best_quality >= preferred_useful_distance) {
+      break;
+    }
+  }
+
+  if (best_index != 0u &&
+      previous_selected_index < combined_plan->candidates.size()) {
+    if (!evaluate(previous_selected_index)) {
+      return false;
+    }
+    const auto& previous =
+        combined_plan->candidates[previous_selected_index];
+    const double previous_quality =
+        std::min(previous.safe_distance, preferred_useful_distance);
+    const bool escaping_collapsed_shot =
+        previous.safe_distance < minimum_retained_distance &&
+        best_quality > previous_quality + 1.0e-6;
+    if (!escaping_collapsed_shot &&
+        previous_quality + switch_hysteresis_distance >= best_quality) {
+      best_index = previous_selected_index;
+      combined_plan->retained_previous = true;
+    }
+  }
+
+  combined_plan->selected_index = best_index;
+  combined_plan->valid = true;
+  return true;
+}
+
 // Source camera endpoints are collision-resolved independently, but the 50 Hz
 // presentation path used to connect them with a straight Cartesian chord. An
 // orbit turning around a prop corner can have two valid endpoints while that
@@ -5706,9 +5842,27 @@ void __cdecl HookMode3Camera(void* controller) {
                                    g_third_person_orbit_state
                                        .owned_room_shadow_candidate_index,
                                    &owned_room_start_index);
+  OwnedCameraCombinedPlan owned_combined_plan;
+  const double owned_minimum_transition_distance =
+      kCameraCollisionSphereRadius * 3.0;
+  const bool owned_combined_plan_valid = owned_room_query_valid &&
+      SelectOwnedCameraCombinedPlan(
+          g_previous_snapshot, g_older_snapshot, camera_focus,
+          owned_room_plan, g_third_person_orbit_min_radius,
+          kCameraCollisionSphereRadius,
+          owned_minimum_transition_distance,
+          g_third_person_orbit_state.owned_room_shadow_candidate_index,
+          &owned_combined_plan);
   bool owned_room_applied_valid = false;
   bool owned_room_applied_safe_cut = false;
-  if (owned_room_query_valid && owned_room_plan.valid) {
+  OwnedCameraSceneSweepResult owned_scene_sweep;
+  bool owned_scene_query_valid = false;
+  if (owned_combined_plan_valid) {
+    owned_room_plan.selected_index = owned_combined_plan.selected_index;
+    owned_room_plan.retained_previous =
+        owned_combined_plan.retained_previous;
+    owned_room_plan.avoidance_required =
+        owned_combined_plan.selected_index != 0u;
     g_third_person_orbit_state.owned_room_shadow_candidate_index =
         owned_room_plan.selected_index;
     const auto& target =
@@ -5756,13 +5910,11 @@ void __cdecl HookMode3Camera(void* controller) {
     if (owned_room_applied_valid) {
       const double applied_safe_distance = deathtrap_camera::Length(
           owned_room_applied_sweep.position - room_focus);
-      const double minimum_transition_distance =
-          kCameraCollisionSphereRadius * 3.0;
       const auto& selected =
           owned_room_plan.candidates[owned_room_plan.selected_index];
       if (deathtrap_camera::ShouldUseRoomOrbitSafetyCut(
               applied_safe_distance, selected.safe_distance,
-              minimum_transition_distance)) {
+              owned_minimum_transition_distance)) {
         g_third_person_orbit_state.owned_room_shadow_applied_yaw =
             target.yaw_radians;
         g_third_person_orbit_state.owned_room_shadow_applied_pitch =
@@ -5772,25 +5924,50 @@ void __cdecl HookMode3Camera(void* controller) {
         owned_room_applied_safe_cut = true;
       }
     }
+    if (owned_room_applied_valid) {
+      const std::array<int32_t, 3> owned_room_applied_position = {
+          static_cast<int32_t>(
+              std::lround(owned_room_applied_sweep.position.x)),
+          static_cast<int32_t>(
+              std::lround(owned_room_applied_sweep.position.y)),
+          static_cast<int32_t>(
+              std::lround(owned_room_applied_sweep.position.z))};
+      owned_scene_query_valid =
+          SweepOwnedCameraAgainstSceneMeshesInSnapshots(
+              g_previous_snapshot, g_older_snapshot, camera_focus,
+              owned_room_applied_position, &owned_scene_sweep);
+    }
+    if (owned_room_applied_valid && owned_scene_query_valid) {
+      const double room_applied_safe_distance = deathtrap_camera::Length(
+          owned_room_applied_sweep.position - room_focus);
+      const double applied_combined_safe_distance =
+          owned_scene_sweep.blocked
+              ? std::min(room_applied_safe_distance,
+                         owned_scene_sweep.safe_distance)
+              : room_applied_safe_distance;
+      const auto& selected_combined = owned_combined_plan.candidates[
+          owned_combined_plan.selected_index];
+      if (deathtrap_camera::ShouldUseRoomOrbitSafetyCut(
+              applied_combined_safe_distance,
+              selected_combined.safe_distance,
+              owned_minimum_transition_distance)) {
+        const auto& selected_room = owned_room_plan.candidates[
+            owned_room_plan.selected_index];
+        g_third_person_orbit_state.owned_room_shadow_applied_yaw =
+            target.yaw_radians;
+        g_third_person_orbit_state.owned_room_shadow_applied_pitch =
+            target.pitch_radians;
+        owned_room_applied_sweep = selected_room.sweep;
+        owned_room_applied_valid = selected_room.sweep.valid;
+        owned_scene_sweep = selected_combined.scene;
+        owned_scene_query_valid = selected_combined.scene.valid;
+        owned_room_applied_safe_cut = true;
+      }
+    }
   } else {
     g_third_person_orbit_state.owned_room_shadow_candidate_index =
         std::numeric_limits<size_t>::max();
     g_third_person_orbit_state.owned_room_shadow_offset_initialized = false;
-  }
-  OwnedCameraSceneSweepResult owned_scene_sweep;
-  bool owned_scene_query_valid = false;
-  if (owned_room_applied_valid) {
-    const std::array<int32_t, 3> owned_room_applied_position = {
-        static_cast<int32_t>(
-            std::lround(owned_room_applied_sweep.position.x)),
-        static_cast<int32_t>(
-            std::lround(owned_room_applied_sweep.position.y)),
-        static_cast<int32_t>(
-            std::lround(owned_room_applied_sweep.position.z))};
-    owned_scene_query_valid =
-        SweepOwnedCameraAgainstSceneMeshesInSnapshots(
-            g_previous_snapshot, g_older_snapshot, camera_focus,
-            owned_room_applied_position, &owned_scene_sweep);
   }
 
   // The untouched retail callback runs first so authored-camera arbitration
@@ -5886,11 +6063,11 @@ void __cdecl HookMode3Camera(void* controller) {
           static_cast<unsigned long long>(
               owned_room_query_valid ? owned_room_sweep.blocker_key : 0u));
     }
-    if (owned_room_query_valid && owned_room_plan.valid &&
+    if (owned_combined_plan_valid && owned_room_plan.valid &&
         owned_room_plan.selected_index < owned_room_plan.candidates.size()) {
       const auto& selected =
           owned_room_plan.candidates[owned_room_plan.selected_index];
-      const double applied_safe_distance = owned_room_applied_valid
+      const double applied_room_safe_distance = owned_room_applied_valid
           ? deathtrap_camera::Length(
                 owned_room_applied_sweep.position -
                 deathtrap_camera::RoomVec3{
@@ -5898,11 +6075,19 @@ void __cdecl HookMode3Camera(void* controller) {
                     static_cast<double>(camera_focus[1]),
                     static_cast<double>(camera_focus[2])})
           : 0.0;
+      const double applied_safe_distance =
+          owned_scene_query_valid && owned_scene_sweep.blocked
+              ? std::min(applied_room_safe_distance,
+                         owned_scene_sweep.safe_distance)
+              : applied_room_safe_distance;
+      const double selected_combined_safe_distance =
+          owned_combined_plan.candidates[
+              owned_combined_plan.selected_index].safe_distance;
       if (owned_room_plan.avoidance_required || owned_room_sweep.blocked ||
           (owned_room_shadow_sequence % 30u) == 1u) {
         AppendNativeLog(
             "camera_owned_shot_shadow selected=%llu retained=%u "
-            "offset=%.1f/%.1f direct=%.1f selected=%.1f "
+            "offset=%.1f/%.1f direct=%.1f selected=%.1f/%.1f "
             "applied=%.1f/%.1f applied_safe=%.1f/%u cut=%u "
             "blocked=%u transitions=%llu endpoint=%.1f/%.1f/%.1f",
             static_cast<unsigned long long>(owned_room_plan.selected_index),
@@ -5910,7 +6095,7 @@ void __cdecl HookMode3Camera(void* controller) {
             selected.offset.yaw_radians * 180.0 / kOrbitPi,
             selected.offset.pitch_radians * 180.0 / kOrbitPi,
             owned_room_plan.candidates[0].safe_distance,
-            selected.safe_distance,
+            selected.safe_distance, selected_combined_safe_distance,
             g_third_person_orbit_state.owned_room_shadow_applied_yaw *
                 180.0 / kOrbitPi,
             g_third_person_orbit_state.owned_room_shadow_applied_pitch *
@@ -12129,7 +12314,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.178 preserves the 0.0.172 "
+      "Deathtrap native render overlay 0.0.179 preserves the 0.0.172 "
       "hybrid camera while shadow-planning and angularly stepping a useful "
       "collision-safe room shot around the current focus; it uses one pre-history "
       "scene-mesh candidate owner before the retail position-ring average; "
