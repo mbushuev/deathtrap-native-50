@@ -79,12 +79,14 @@ The patch refuses to activate on an unsupported `Dungeon.dll` image.
    2.86+ package beside `DD_CD.EXE`.
 3. Configure dgVoodoo to use `D3D11 feature level 11.0` and save its generated
    `dgVoodoo.conf` beside `DD_CD.EXE`.
-4. Copy `dist/DINPUT.dll` and `config/deathtrap_native.ini` beside
-   `DD_CD.EXE`.
+4. Run `scripts/install.ps1` as shown below. It installs `DINPUT.dll` and
+   `deathtrap_native.ini`, then idempotently adds the required native input
+   bindings to the existing `ASYLUM/keys.cfg`. It does not replace the whole
+   retail control file.
 5. Start `DD_CD.EXE` from Steam, directly with the game directory as its
    working directory, or through a launcher targeting that same executable.
 
-Alternatively, run:
+Run:
 
 ```powershell
 .\scripts\install.ps1 `
@@ -94,7 +96,16 @@ Alternatively, run:
 `<SteamLibrary>` is a placeholder, not a fixed drive or directory. The installer
 accepts any Steam library, validates Steam App ID `245010`, verifies the game
 hash, checks the external dgVoodoo installation and accepts dgVoodoo versions
-from 2.86 onward. It does not copy or alter dgVoodoo.
+from 2.86 onward. Before changing anything, it backs up the existing
+`DINPUT.dll`, `deathtrap_native.ini` and `ASYLUM/keys.cfg`. It does not copy or
+alter dgVoodoo.
+
+A distributable patch therefore needs the repository layout
+`dist/DINPUT.dll`, `config/deathtrap_native.ini` and `scripts/install.ps1`.
+Copying only the DLL is incomplete. Copying the DLL and INI manually still
+requires merging the installer's bindings into `ASYLUM/keys.cfg`; do not ship
+or blindly overwrite that whole game file because it can contain user-specific
+bindings.
 
 See [docs/RUNNING.md](docs/RUNNING.md) for the exact file layout, required
 D3D11 settings, first-run verification and troubleshooting.
@@ -112,8 +123,9 @@ D3D11 settings, first-run verification and troubleshooting.
 - `Text/MessageLifetimePercent=300`: keep both ordinary transient messages and
   level-script notifications (for example, missing-key prompts) visible for
   three times the retail duration. Use `100` for the original duration.
-- The installer adds native mouse bindings to `ASYLUM/keys.cfg` once, before
-  the game starts. The DLL never writes the game's action table; its only
+- The installer adds the required native mouse, keyboard and joystick bindings
+  to `ASYLUM/keys.cfg` once, before the game starts. The DLL never writes the
+  game's action table; its only
   runtime input hook observes wheel deltas after the system DirectInput call.
 - In modern third-person mode, physical relative mouse motion rotates the
   camera on both axes and is not forwarded to the old tank-turn actions.
