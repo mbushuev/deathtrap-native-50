@@ -577,6 +577,8 @@ SceneSnapshot g_previous_snapshot;
 SceneSnapshot g_older_snapshot;
 LARGE_INTEGER g_qpc_frequency{};
 bool g_debug_log = false;
+std::mutex g_native_log_mutex;
+HANDLE g_native_log_file = INVALID_HANDLE_VALUE;
 bool g_camera_probe_enabled = false;
 CameraProbeSnapshot g_camera_probe_previous;
 std::string g_camera_probe_log_buffer;
@@ -1298,6 +1300,37 @@ bool PatchPstMessageLifetime(uint32_t ticks) {
                                        ticks);
 }
 
+void WriteNativeLogBytes(const void* data, size_t size) {
+  if (!data || size == 0) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(g_native_log_mutex);
+  if (g_native_log_file == INVALID_HANDLE_VALUE) {
+    g_native_log_file = CreateFileW(
+        GetDeathtrapSessionLogPath(), FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (g_native_log_file == INVALID_HANDLE_VALUE) {
+      return;
+    }
+  }
+  const auto* bytes = static_cast<const uint8_t*>(data);
+  size_t remaining = size;
+  while (remaining != 0) {
+    const DWORD chunk = static_cast<DWORD>(std::min<size_t>(
+        remaining, static_cast<size_t>(std::numeric_limits<DWORD>::max())));
+    DWORD written = 0;
+    if (!WriteFile(g_native_log_file, bytes, chunk, &written, nullptr) ||
+        written == 0) {
+      CloseHandle(g_native_log_file);
+      g_native_log_file = INVALID_HANDLE_VALUE;
+      return;
+    }
+    bytes += written;
+    remaining -= written;
+  }
+}
+
 void AppendNativeLog(const char* format, ...) {
   if (!g_debug_log) {
     return;
@@ -1317,31 +1350,14 @@ void AppendNativeLog(const char* format, ...) {
                                        sizeof(line) - 2);
   line[used] = '\r';
   line[used + 1] = '\n';
-  HANDLE file = CreateFileW(GetDeathtrapSessionLogPath(), FILE_APPEND_DATA,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE) {
-    return;
-  }
-  DWORD written = 0;
-  WriteFile(file, line, static_cast<DWORD>(used + 2), &written, nullptr);
-  CloseHandle(file);
+  WriteNativeLogBytes(line, used + 2);
 }
 
 void AppendNativeLogBlock(const std::string& block) {
   if (!g_debug_log || block.empty()) {
     return;
   }
-  HANDLE file = CreateFileW(GetDeathtrapSessionLogPath(), FILE_APPEND_DATA,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE) {
-    return;
-  }
-  DWORD written = 0;
-  WriteFile(file, block.data(), static_cast<DWORD>(block.size()), &written,
-            nullptr);
-  CloseHandle(file);
+  WriteNativeLogBytes(block.data(), block.size());
 }
 
 bool ReadRoomNeighbor(uintptr_t portal, uintptr_t* neighbor) {
@@ -4018,14 +4034,34 @@ bool SweepOwnedCameraAgainstSceneMeshesInSnapshots(
         }
         if (!post_exit_hit) {
           if (g_debug_log) {
-            AppendNativeLog(
-                "camera_owned_scene_pivot_exit result=CLEAR node=%08llX "
-                "resource=%llu exit=%.1f requested=%.1f axis=%llu",
-                static_cast<unsigned long long>(node),
-                static_cast<unsigned long long>(
-                    current.render_resource_handle),
-                pivot_exit_distance, requested_distance,
-                static_cast<unsigned long long>(pivot_exit_axis));
+            // A direct solution and its spring revalidation may inspect the
+            // same contained pivot several times in one source tick. Keep a
+            // state-change/heartbeat record without synchronously emitting
+            // duplicate diagnostics for an identical clear exit.
+            static uintptr_t last_clear_node = 0;
+            static uint64_t last_clear_resource = 0;
+            static size_t last_clear_axis =
+                std::numeric_limits<size_t>::max();
+            static uint64_t last_clear_tick = 0;
+            const uint64_t source_tick =
+                g_source_ticks.load(std::memory_order_relaxed);
+            const bool changed = node != last_clear_node ||
+                current.render_resource_handle != last_clear_resource ||
+                pivot_exit_axis != last_clear_axis;
+            if (changed || source_tick - last_clear_tick >= 30u) {
+              AppendNativeLog(
+                  "camera_owned_scene_pivot_exit result=CLEAR node=%08llX "
+                  "resource=%llu exit=%.1f requested=%.1f axis=%llu",
+                  static_cast<unsigned long long>(node),
+                  static_cast<unsigned long long>(
+                      current.render_resource_handle),
+                  pivot_exit_distance, requested_distance,
+                  static_cast<unsigned long long>(pivot_exit_axis));
+              last_clear_node = node;
+              last_clear_resource = current.render_resource_handle;
+              last_clear_axis = pivot_exit_axis;
+              last_clear_tick = source_tick;
+            }
           }
           continue;
         }
@@ -13292,7 +13328,7 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.186 publishes one fully-owned "
+      "Deathtrap native render overlay 0.0.187 publishes one fully-owned "
       "collision-safe room+scene gameplay-camera pose per source tick, with "
       "detached matrix construction, atomic verified live publication, "
       "initial-overlap ray exit, radial near-pivot collapse, bounded scripted "
@@ -13307,6 +13343,7 @@ void InitializePatchState() {
       "stateless fail-closed safety net and delayed retail publication is never "
       "fed back as collision evidence; legacy presentation latch/follow, "
       "post-history repair and post-native radius-gate layers are removed; "
+      "dense diagnostics reuse one synchronized session-log handle; "
       "x1/x2/x3 share the same gameplay "
       "camera and x2/x3 interpolate finalized exact endpoints; DirectInput "
       "wheel events "
