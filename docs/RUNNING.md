@@ -367,6 +367,9 @@ past +/-60 degrees must no longer expose third person. The eye's 55-unit
 forward placement remains horizontal; only the user-owned view direction
 pitches up/down.
 
+The v0.0.197 live result is accepted as the stable immersive first-person
+baseline. No additional diagnostic sequence is pending.
+
 The layout follows two established conventions: the right stick acts as a
 pointer in menus and as camera look in gameplay, while hold, select and release
 matches the standard radial-menu interaction.

@@ -2143,3 +2143,14 @@ normalized safely; the eye offset remains horizontal while look pitch reaches
 the requested limit. Deterministic tests now cover both extrema. An unexpected
 pose rejection also logs `reason=POSE` with yaw/pitch instead of producing an
 unexplained third-person fallback.
+
+### v0.0.197 accepted baseline
+
+The user accepts the resulting immersive first-person view as working
+normally. This fixes the baseline contract: the eye is attached to the
+animated head translation, does not inherit skeletal rotation, remains in the
+custom mode through sideways/backward locomotion and the complete +/-75-degree
+pitch range, and uses the same non-inverted right-stick vertical convention as
+modern third person. Future work must preserve this behaviour and must not
+restore root-relative placement, parent-identity gating or the 0.5 horizontal
+projection threshold.
