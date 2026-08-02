@@ -5550,6 +5550,7 @@ void __cdecl HookMode3Camera(void* controller) {
                                        .owned_room_shadow_candidate_index,
                                    &owned_room_start_index);
   bool owned_room_applied_valid = false;
+  bool owned_room_applied_safe_cut = false;
   if (owned_room_query_valid && owned_room_plan.valid) {
     g_third_person_orbit_state.owned_room_shadow_candidate_index =
         owned_room_plan.selected_index;
@@ -5595,6 +5596,25 @@ void __cdecl HookMode3Camera(void* controller) {
         g_runtime_room_graph.sectors, owned_room_start_index, room_focus,
         applied_requested, kCameraCollisionSphereRadius, 8.0, 32u);
     owned_room_applied_valid = owned_room_applied_sweep.valid;
+    if (owned_room_applied_valid) {
+      const double applied_safe_distance = deathtrap_camera::Length(
+          owned_room_applied_sweep.position - room_focus);
+      const double minimum_transition_distance =
+          kCameraCollisionSphereRadius * 3.0;
+      const auto& selected =
+          owned_room_plan.candidates[owned_room_plan.selected_index];
+      if (deathtrap_camera::ShouldUseRoomOrbitSafetyCut(
+              applied_safe_distance, selected.safe_distance,
+              minimum_transition_distance)) {
+        g_third_person_orbit_state.owned_room_shadow_applied_yaw =
+            target.yaw_radians;
+        g_third_person_orbit_state.owned_room_shadow_applied_pitch =
+            target.pitch_radians;
+        owned_room_applied_sweep = selected.sweep;
+        owned_room_applied_valid = selected.sweep.valid;
+        owned_room_applied_safe_cut = true;
+      }
+    }
   } else {
     g_third_person_orbit_state.owned_room_shadow_candidate_index =
         std::numeric_limits<size_t>::max();
@@ -5711,7 +5731,7 @@ void __cdecl HookMode3Camera(void* controller) {
         AppendNativeLog(
             "camera_owned_shot_shadow selected=%llu retained=%u "
             "offset=%.1f/%.1f direct=%.1f selected=%.1f "
-            "applied=%.1f/%.1f applied_safe=%.1f/%u "
+            "applied=%.1f/%.1f applied_safe=%.1f/%u cut=%u "
             "blocked=%u transitions=%llu endpoint=%.1f/%.1f/%.1f",
             static_cast<unsigned long long>(owned_room_plan.selected_index),
             owned_room_plan.retained_previous ? 1u : 0u,
@@ -5726,6 +5746,7 @@ void __cdecl HookMode3Camera(void* controller) {
             applied_safe_distance,
             owned_room_applied_valid && owned_room_applied_sweep.blocked
                 ? 1u : 0u,
+            owned_room_applied_safe_cut ? 1u : 0u,
             selected.sweep.blocked ? 1u : 0u,
             static_cast<unsigned long long>(
                 selected.sweep.portal_transitions),
@@ -11911,7 +11932,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.176 preserves the 0.0.172 "
+      "Deathtrap native render overlay 0.0.177 preserves the 0.0.172 "
       "hybrid camera while shadow-planning and angularly stepping a useful "
       "collision-safe room shot around the current focus; it uses one pre-history "
       "scene-mesh candidate owner before the retail position-ring average; "

@@ -323,6 +323,18 @@ inline RoomVec3 RotateRoomOrbit(const RoomVec3& focus,
   };
 }
 
+inline bool ShouldUseRoomOrbitSafetyCut(double applied_safe_distance,
+                                        double selected_safe_distance,
+                                        double minimum_transition_distance) {
+  return std::isfinite(applied_safe_distance) &&
+      std::isfinite(selected_safe_distance) &&
+      std::isfinite(minimum_transition_distance) &&
+      minimum_transition_distance >= 0.0 &&
+      applied_safe_distance < minimum_transition_distance &&
+      selected_safe_distance >= minimum_transition_distance &&
+      selected_safe_distance > applied_safe_distance;
+}
+
 // Chooses a collision-safe shot around the current focus without retaining a
 // world-space camera point. The caller owns the candidate order: index zero is
 // expected to be the unmodified requested orbit, followed by progressively

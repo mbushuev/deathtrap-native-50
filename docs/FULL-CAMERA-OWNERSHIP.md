@@ -200,3 +200,27 @@ it. A deterministic test covers the two-plane corner where only the opposite
 orbit direction escapes. It also simulates a bounded 30-degree-per-source-tick
 angular response and re-sweeps every applied intermediate angle. The applied
 offset, safe distance and collision state are logged but remain shadow-only.
+
+## 0.0.176 angular-response result
+
+The completed run is
+`<game-directory>\logs\deathtrap-native-20260802-093002-294-pid18548.log`.
+The expanded final-shot search no longer collapses: its minimum selected safe
+distance is 414.9 units, with zero samples below the 96-unit camera radius or
+the 288-unit three-radius near-pivot boundary. It retained a useful side on
+218 samples and the hybrid still missed 232 owned room contacts.
+
+Only the simulated bounded transition remained unsafe. Ten samples across six
+transition events fell below 288 units; four fell below 96. Captured examples
+include a plus-45-degree target whose plus-30-degree intermediate position has
+only 21 units, and a required side change from minus 90 to plus 90 whose
+shortest intermediate path remains around 180--190 units. These are genuine
+disconnected safe-shot regions, so more temporal smoothing cannot make the
+intermediate positions valid.
+
+Version 0.0.177 adds a deterministic fail-closed safety cut. A bounded angular
+step below three camera radii is rejected when the already swept target shot
+is at least three radii away; shadow state moves directly to that verified
+target and records `cut=1`. Future publication must pair this flag with a
+one-source-transition presentation cut so interpolation never draws the chord
+through the obstruction. The final target and cut remain diagnostic-only.

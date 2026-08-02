@@ -13,6 +13,7 @@ using deathtrap_camera::RoomPortal;
 using deathtrap_camera::RoomSector;
 using deathtrap_camera::RoomVec3;
 using deathtrap_camera::SelectRoomOrbitPlan;
+using deathtrap_camera::ShouldUseRoomOrbitSafetyCut;
 using deathtrap_camera::SweepSphereThroughRooms;
 
 void ExpectNear(double actual, double expected, const char* label) {
@@ -179,6 +180,13 @@ int main() {
       std::cerr << "full-orbit corner escape was not selected\n";
       return 1;
     }
+  }
+
+  if (!ShouldUseRoomOrbitSafetyCut(95.0, 650.0, 288.0) ||
+      ShouldUseRoomOrbitSafetyCut(300.0, 650.0, 288.0) ||
+      ShouldUseRoomOrbitSafetyCut(95.0, 287.0, 288.0)) {
+    std::cerr << "near-pivot safety-cut policy failed\n";
+    return 1;
   }
 
   std::cout << "camera room collision tests passed\n";
