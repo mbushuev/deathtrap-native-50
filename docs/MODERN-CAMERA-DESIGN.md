@@ -1901,3 +1901,28 @@ logs.
 
 Implementation commit is `7faae22`. Build/dist/installed x86 SHA-256 is
 `49ACBB5103FA1F7CC325DD53169C4FEF0D09E79ED704BAE7447B6272DD2EE8AA`.
+
+## 0.0.183: angular avoidance is a latched state
+
+A collision-safe third-person camera must not choose a fresh composition just
+because another candidate is longer on the current tick. That turns collision
+avoidance into an involuntary camera director. Near a corner, small changes in
+the direct ray can make several side, pitch and rear candidates exchange first
+place even though the currently published side remains completely usable.
+
+The owned planner now treats a selected non-direct shot as a latched avoidance
+state. It retains that candidate until either its combined room+scene distance
+falls below the existing three-sphere transition boundary or the direct shot
+has remained fully useful for eight consecutive 20 ms source ticks. Loss of
+direct clearance resets the release evidence. A collapsed current side may
+still select and safety-cut to a verified replacement immediately. Therefore
+temporal stability never overrides collision safety.
+
+Camera-relative locomotion must use the rendered view, not the user's
+unobstructed request. The final owned transaction can add a substantial yaw
+offset, so the raw orbit yaw is no longer a valid screen-space basis. A
+successful publication now computes the horizontal yaw from its exact final
+focus and target and atomically publishes that as the movement reference. The
+next native input sample is consequently aligned with the last completed
+visible source pose. No valid horizontal vector means no invented replacement
+heading.

@@ -425,3 +425,19 @@ Implementation commit is `7faae22`. Build/dist/installed x86 SHA-256 is
 Rollback v0.0.181 is
 `<game-directory>\back\deathtrap-native50-overlay-20260802-104700`.
 External game/dgVoodoo hashes are unchanged and Codex did not launch the game.
+
+## 0.0.183 temporal ownership of alternate shots
+
+Full ownership also requires one temporal author for view direction. Version
+0.0.182 could publish every pose atomically and still oscillate because its
+stateless best-candidate score selected a different safe angular offset as the
+player moved through a corner. Version 0.0.183 promotes the selected non-direct
+candidate to explicit state. A physically usable current side wins over a
+newly longer side; return to the direct shot requires sustained clear evidence.
+The existing combined sweeps and transition cuts remain the sole spatial
+authority.
+
+The successful live publication boundary now updates the camera-relative
+movement basis from the exact committed target. This couples input to the same
+pose that owns rendering without letting input participate in collision or
+publication. Failed owned transactions cannot publish a speculative heading.
