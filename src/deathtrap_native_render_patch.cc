@@ -2476,6 +2476,7 @@ void SetCustomHeadViewSelected(bool enabled, const char* source) {
       g_third_person_orbit_state.yaw =
           ImmersiveOrbitYawFromPlayerHeading(
               body_heading, kPlayerHeadingUnitsPerTurn);
+      g_third_person_orbit_state.pitch = 0.0;
       g_third_person_heading_reference_microradians.store(
           static_cast<int32_t>(std::lround(
               g_third_person_orbit_state.yaw * 1000000.0)),
@@ -2483,9 +2484,11 @@ void SetCustomHeadViewSelected(bool enabled, const char* source) {
       g_third_person_heading_reference_valid.store(
           true, std::memory_order_release);
       AppendNativeLog(
-          "camera_immersive_heading_seed body=%d yaw=%.2f controller=%p",
+          "camera_immersive_heading_seed body=%d yaw=%.2f pitch=%.2f "
+          "controller=%p",
           body_heading,
           g_third_person_orbit_state.yaw * 180.0 / kOrbitPi,
+          g_third_person_orbit_state.pitch * 180.0 / kOrbitPi,
           reinterpret_cast<void*>(body_controller));
     }
   }
@@ -9712,45 +9715,62 @@ void __cdecl RouteImmersivePlayerRootMotion(void* node, int32_t local_x,
   g_player_root_motion_transform(node, local_x, local_y, local_z);
 }
 
+struct ImmersiveLocomotionTransaction {
+  ImmersiveLocomotionPlan plan{};
+  int32_t preserved_body_heading = 0;
+  uintptr_t controller = 0;
+  bool active = false;
+};
+
+ImmersiveLocomotionTransaction BeginImmersiveLocomotionTransaction() {
+  ImmersiveLocomotionTransaction transaction;
+  const uintptr_t expected_controller =
+      g_xinput_movement_controller.load(std::memory_order_acquire);
+  transaction.active =
+      !g_immersive_locomotion_transaction_active && expected_controller &&
+      g_xinput_camera_relative_intent.load(std::memory_order_acquire) &&
+      ResolveImmersiveLocomotionPlan(&transaction.plan) &&
+      ReadLivePlayerHeading(&transaction.preserved_body_heading,
+                            &transaction.controller) &&
+      transaction.controller == expected_controller &&
+      ApplyCanonicalPlayerHeading(expected_controller,
+                                  transaction.plan.transaction_heading);
+  g_immersive_locomotion_transaction_plan = transaction.plan;
+  g_immersive_locomotion_transaction_active = transaction.active;
+  return transaction;
+}
+
+void EndImmersiveLocomotionTransaction(
+    const ImmersiveLocomotionTransaction& transaction) {
+  g_immersive_locomotion_transaction_active = false;
+  g_immersive_locomotion_transaction_plan = {};
+  if (transaction.active) {
+    ApplyCanonicalPlayerHeading(transaction.controller,
+                                transaction.preserved_body_heading);
+  }
+}
+
 uintptr_t __cdecl HookImmersivePlayerMovementStage() {
   if (!g_original_player_movement_stage) {
     return 0;
   }
 
-  ImmersiveLocomotionPlan locomotion_plan;
-  int32_t preserved_body_heading = 0;
-  uintptr_t heading_controller = 0;
-  const uintptr_t expected_controller =
-      g_xinput_movement_controller.load(std::memory_order_acquire);
-  const bool route_immersive_motion =
-      expected_controller &&
-      g_xinput_camera_relative_intent.load(std::memory_order_acquire) &&
-      ResolveImmersiveLocomotionPlan(&locomotion_plan) &&
-      ReadLivePlayerHeading(&preserved_body_heading, &heading_controller) &&
-      heading_controller == expected_controller &&
-      ApplyCanonicalPlayerHeading(expected_controller,
-                                  locomotion_plan.transaction_heading);
-
-  g_immersive_locomotion_transaction_plan = locomotion_plan;
-  g_immersive_locomotion_transaction_active = route_immersive_motion;
+  const ImmersiveLocomotionTransaction transaction =
+      BeginImmersiveLocomotionTransaction();
   const uintptr_t result = g_original_player_movement_stage();
-  g_immersive_locomotion_transaction_active = false;
-  g_immersive_locomotion_transaction_plan = {};
+  EndImmersiveLocomotionTransaction(transaction);
 
-  if (route_immersive_motion) {
-    ApplyCanonicalPlayerHeading(expected_controller,
-                                preserved_body_heading);
-    if (g_debug_log &&
-        (g_source_ticks.load(std::memory_order_relaxed) % 60u) == 1u) {
-      AppendNativeLog(
-          "immersive movement_stage transaction motion_heading=%d "
-          "collision_heading=%d restored_heading=%d native_axis=%d "
-          "controller=%p",
-          locomotion_plan.motion_heading,
-          locomotion_plan.transaction_heading, preserved_body_heading,
-          locomotion_plan.native_axis_milli,
-          reinterpret_cast<void*>(expected_controller));
-    }
+  if (transaction.active && g_debug_log &&
+      (g_source_ticks.load(std::memory_order_relaxed) % 60u) == 1u) {
+    AppendNativeLog(
+        "immersive movement_stage transaction motion_heading=%d "
+        "collision_heading=%d restored_heading=%d native_axis=%d "
+        "controller=%p",
+        transaction.plan.motion_heading,
+        transaction.plan.transaction_heading,
+        transaction.preserved_body_heading,
+        transaction.plan.native_axis_milli,
+        reinterpret_cast<void*>(transaction.controller));
   }
   return result;
 }
@@ -14161,12 +14181,37 @@ bool RefreshCurrentRenderCaches(void* context) {
 
   // Refresh both exact-current caches once before capture. Their owner stamps
   // make the synthetic and exact renderer calls skip duplicate updates for the
-  // unchanged engine frame.
+  // unchanged engine frame. The scene refresh also publishes the large native
+  // animation-root contribution. At x2/x3 this explicit early call replaces
+  // the later retail refresh, so it must share the same complete immersive
+  // movement transaction as +0x810A0 rather than reverting to body-forward.
+  const ImmersiveLocomotionTransaction movement_transaction =
+      BeginImmersiveLocomotionTransaction();
+  bool scene_refreshed = false;
   __try {
     g_scene_cache_update(reinterpret_cast<void*>(scene_owner));
+    scene_refreshed = true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    scene_refreshed = false;
+  }
+  EndImmersiveLocomotionTransaction(movement_transaction);
+  if (!scene_refreshed) {
+    return false;
+  }
+  __try {
     g_camera_cache_update(reinterpret_cast<void*>(camera_owner));
   } __except (EXCEPTION_EXECUTE_HANDLER) {
     return false;
+  }
+  if (movement_transaction.active && g_debug_log &&
+      (g_source_ticks.load(std::memory_order_relaxed) % 60u) == 1u) {
+    AppendNativeLog(
+        "immersive scene_cache transaction motion_heading=%d "
+        "collision_heading=%d restored_heading=%d controller=%p",
+        movement_transaction.plan.motion_heading,
+        movement_transaction.plan.transaction_heading,
+        movement_transaction.preserved_body_heading,
+        reinterpret_cast<void*>(movement_transaction.controller));
   }
   return true;
 }

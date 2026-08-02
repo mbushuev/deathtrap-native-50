@@ -2615,3 +2615,26 @@ third-person radial yaw `173.79` degrees even though the live body heading
 user manually rotated to `2.43` degrees, view and body courses converged. On
 head-view entry v0.0.211 therefore converts the live Q10 body heading to its
 equivalent radial yaw. It does not alter pitch or ongoing mouse/stick input.
+
+## Interpolation cache refresh is part of movement (v0.0.212)
+
+The v0.0.211 outer-update trace removes the last ambiguity. The render node is
+identical at every boundary. Entry-to-stage is zero, `+0x810A0` contributes
+the requested lateral `-5/0/0` or `+4/0/-1`, and the post-stage interval
+consistently adds about `+2/0/+39` along the old body-forward course.
+
+Static ordering places the overlay-hooked `+0x80520 -> +0x80600` scheduler
+between callsite probes 11 and 12. The original `+0x80600` routine was already
+proved root-neutral by v0.0.210. The remaining writer is the overlay's early
+`RefreshCurrentRenderCaches` call: its explicit `g_scene_cache_update`
+publishes the large animation-root contribution before synthetic capture. At
+x2/x3 that refresh replaces the later stamped retail refresh, so the
+contribution is legitimate source motion, but it previously executed outside
+the immersive course transaction.
+
+Version 0.0.212 runs only this early scene-cache update through the same
+validated live-player heading/root-routing transaction as `+0x810A0`, then
+restores body heading before camera-cache work. It does not author coordinates
+or change magnitude. `update_truth` remains enabled for the validation run.
+Head-view entry now also resets inherited third-person pitch to neutral zero;
+v0.0.211 proved a retained `55` degrees caused the reported upward opening.

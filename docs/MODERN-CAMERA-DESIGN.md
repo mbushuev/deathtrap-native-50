@@ -2375,3 +2375,22 @@ open head view backwards. The entry transition now reads the live actor Q10
 heading and converts it to the corresponding behind-actor radial yaw. The
 shared yaw then continues normally for head input and places third person
 behind the current view if the user later exits immersive mode.
+
+## 0.0.212: cache publication shares the locomotion transaction
+
+At interpolated frame rates the overlay explicitly refreshes exact scene
+caches before snapshot capture. This is not presentation-only in Deathtrap:
+the scene refresh publishes the main animation-root displacement. The
+v0.0.211 trace measures that contribution after `+0x810A0` as approximately
+39 forward units per source tick, while the movement stage itself is already
+correctly lateral. The shared render node rules out buffer switching.
+
+The early scene refresh now uses the same temporary collision course and
+common root transform adapter as the complete movement stage. Body heading is
+restored immediately before camera-cache refresh. Thus both native root
+contributors use one requested world course without replacing the engine's
+animation magnitude, collision endpoint or coordinate writer.
+
+Immersive entry owns both initial view axes. Yaw is seeded from live body
+heading as in v0.0.211; pitch is initialized to zero instead of inheriting an
+arbitrary third-person orbit elevation such as the measured 55 degrees.
