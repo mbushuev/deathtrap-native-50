@@ -179,14 +179,13 @@ constexpr uintptr_t kPlayerTurnRva = 0x00044DD0u;
 // so it is the one recurring boundary shared by forward locomotion and both
 // direct turn-in-place implementations.
 constexpr uintptr_t kPlayerStateDispatcherRva = 0x00082750u;
-// 0x84230 applies the full animation root displacement through 0x32430;
-// 0x451E0 adds one of two smaller state-dependent fractions through the same
-// writer. 0x32430 transforms each local vector through the cached node basis
-// before adding it to the world position. Patching only these three calls
-// keeps unrelated actor/equipment transforms untouched.
+// 0x32430 is the common local-to-world root transform. Runtime evidence from
+// v0.0.207 proves that ordinary locomotion states reach it through many more
+// paths than the three initially identified callsites. The player-only hook
+// is therefore active only for the complete 0x810A0 movement stage and only
+// when its node matches the live player's render root.
 constexpr uintptr_t kPlayerRootMotionTransformRva = 0x00032430u;
-constexpr std::array<uintptr_t, 3> kImmersiveRootMotionCallsiteRvas = {
-    0x00084268u, 0x00045232u, 0x00045273u};
+constexpr uintptr_t kPlayerMovementStageRva = 0x000810A0u;
 // The retail DirectInput joystick boundary. 0x51500 returns the configured
 // 0..0x4000 X/Y axes and 16 packed buttons; 0x32CD0 reports whether joystick
 // input is enabled. Feeding XInput here keeps movement inside the game's
@@ -961,6 +960,7 @@ using PlayerLocomotionFn = void(__cdecl*)(void* controller);
 using PlayerStateDispatcherFn = void(__cdecl*)(void* outer_player);
 using PlayerRootMotionTransformFn = void(__cdecl*)(
     void* node, int32_t local_x, int32_t local_y, int32_t local_z);
+using PlayerMovementStageFn = uintptr_t(__cdecl*)();
 using NativeJoystickPollFn = int(__cdecl*)(int32_t* x, int32_t* y,
                                             uint32_t* buttons);
 using NativeJoystickEnabledFn = int(__cdecl*)();
@@ -1005,6 +1005,7 @@ PlayerLocomotionFn g_original_player_locomotion = nullptr;
 PlayerTurnFn g_player_turn_writer = nullptr;
 PlayerStateDispatcherFn g_original_player_state_dispatcher = nullptr;
 PlayerRootMotionTransformFn g_player_root_motion_transform = nullptr;
+PlayerMovementStageFn g_original_player_movement_stage = nullptr;
 NativeJoystickPollFn g_original_native_joystick_poll = nullptr;
 NativeJoystickEnabledFn g_original_native_joystick_enabled = nullptr;
 Mode3CameraFn g_original_mode3_camera = nullptr;
@@ -2256,7 +2257,7 @@ std::atomic<uint64_t> g_xinput_camera_relative_started_ms{0};
 std::atomic<uint64_t> g_xinput_last_locomotion_steer_ms{0};
 std::atomic<bool> g_player_turn_hook_installed{false};
 std::atomic<bool> g_player_state_dispatcher_hook_installed{false};
-std::atomic<bool> g_immersive_root_motion_callsites_installed{false};
+std::atomic<bool> g_immersive_root_motion_hooks_installed{false};
 uint64_t g_immersive_root_motion_routes = 0;
 uint64_t g_immersive_root_motion_rejections = 0;
 thread_local bool g_immersive_locomotion_transaction_active = false;
@@ -9682,8 +9683,58 @@ void __cdecl RouteImmersivePlayerRootMotion(void* node, int32_t local_x,
   g_player_root_motion_transform(node, local_x, local_y, local_z);
 }
 
+uintptr_t __cdecl HookImmersivePlayerMovementStage() {
+  if (!g_original_player_movement_stage) {
+    return 0;
+  }
+
+  ImmersiveLocomotionPlan locomotion_plan;
+  int32_t preserved_body_heading = 0;
+  uintptr_t heading_controller = 0;
+  const uintptr_t expected_controller =
+      g_xinput_movement_controller.load(std::memory_order_acquire);
+  const bool route_immersive_motion =
+      expected_controller &&
+      g_xinput_camera_relative_intent.load(std::memory_order_acquire) &&
+      ResolveImmersiveLocomotionPlan(&locomotion_plan) &&
+      ReadLivePlayerHeading(&preserved_body_heading, &heading_controller) &&
+      heading_controller == expected_controller &&
+      ApplyCanonicalPlayerHeading(expected_controller,
+                                  locomotion_plan.transaction_heading);
+
+  g_immersive_locomotion_transaction_plan = locomotion_plan;
+  g_immersive_locomotion_transaction_active = route_immersive_motion;
+  const uintptr_t result = g_original_player_movement_stage();
+  g_immersive_locomotion_transaction_active = false;
+  g_immersive_locomotion_transaction_plan = {};
+
+  if (route_immersive_motion) {
+    ApplyCanonicalPlayerHeading(expected_controller,
+                                preserved_body_heading);
+    if (g_debug_log &&
+        (g_source_ticks.load(std::memory_order_relaxed) % 60u) == 1u) {
+      AppendNativeLog(
+          "immersive movement_stage transaction motion_heading=%d "
+          "collision_heading=%d restored_heading=%d native_axis=%d "
+          "controller=%p",
+          locomotion_plan.motion_heading,
+          locomotion_plan.transaction_heading, preserved_body_heading,
+          locomotion_plan.native_axis_milli,
+          reinterpret_cast<void*>(expected_controller));
+    }
+  }
+  return result;
+}
+
 void __cdecl HookPlayerStateDispatcher(void* outer_player) {
   if (!g_original_player_state_dispatcher) {
+    return;
+  }
+  // The complete 0x810A0 movement stage owns immersive heading/root routing.
+  // Do not let this nested dispatcher start a shorter transaction or steer
+  // the temporary collision course back toward the visible body heading.
+  if (g_immersive_locomotion_transaction_active) {
+    g_original_player_state_dispatcher(outer_player);
     return;
   }
   uintptr_t validated_controller = 0;
@@ -10037,7 +10088,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         g_player_state_dispatcher_hook_installed.load(
             std::memory_order_acquire) &&
         (!custom_head_movement ||
-         g_immersive_root_motion_callsites_installed.load(
+         g_immersive_root_motion_hooks_installed.load(
              std::memory_order_acquire)) &&
         !selector_captures_controls && !strafe_modifier &&
         (!first_person_movement || custom_head_movement) &&
@@ -10957,94 +11008,85 @@ const std::array<MovementStageCallsite, kMovementStageProbeCount>
 #undef TWOARG_STAGE
 #undef THREEARG_STAGE
 
-bool RelativeCallTargets(uintptr_t callsite_rva, uintptr_t target_rva) {
-  uint8_t* const callsite = g_dungeon_base + callsite_rva;
-  uint8_t opcode = 0;
-  int32_t relative = 0;
-  return SafeRead(callsite, &opcode, sizeof(opcode)) && opcode == 0xE8u &&
-      SafeRead(callsite + 1u, &relative, sizeof(relative)) &&
-      callsite + 5u + relative == g_dungeon_base + target_rva;
-}
-
-bool WriteRelativeCallTarget(uintptr_t callsite_rva, const void* target) {
-  uint8_t* const callsite = g_dungeon_base + callsite_rva;
-  const intptr_t wide_relative =
-      reinterpret_cast<const uint8_t*>(target) - (callsite + 5u);
-  if (wide_relative < std::numeric_limits<int32_t>::min() ||
-      wide_relative > std::numeric_limits<int32_t>::max()) {
-    return false;
-  }
-  const int32_t relative = static_cast<int32_t>(wide_relative);
-  DWORD old_protection = 0;
-  if (!VirtualProtect(callsite + 1u, sizeof(relative),
-                      PAGE_EXECUTE_READWRITE, &old_protection)) {
-    return false;
-  }
-  const bool wrote =
-      SafeWrite(callsite + 1u, &relative, sizeof(relative));
-  FlushInstructionCache(GetCurrentProcess(), callsite, 5u);
-  DWORD ignored = 0;
-  VirtualProtect(callsite + 1u, sizeof(relative), old_protection, &ignored);
-  return wrote;
-}
-
-bool InstallImmersiveRootMotionCallsites() {
-  if (g_immersive_root_motion_callsites_installed.load(
+bool InstallImmersiveRootMotionHooks() {
+  if (g_immersive_root_motion_hooks_installed.load(
           std::memory_order_acquire)) {
     return true;
   }
-  for (const uintptr_t callsite_rva :
-       kImmersiveRootMotionCallsiteRvas) {
-    if (!RelativeCallTargets(callsite_rva,
-                             kPlayerRootMotionTransformRva)) {
-      AppendNativeLog(
-          "immersive root_motion callsite_invalid callsite=%08llX "
-          "expected_target=%08llX fallback=retail",
-          static_cast<unsigned long long>(callsite_rva),
-          static_cast<unsigned long long>(kPlayerRootMotionTransformRva));
-      return false;
-    }
-  }
 
-  g_player_root_motion_transform =
-      reinterpret_cast<PlayerRootMotionTransformFn>(
-          g_dungeon_base + kPlayerRootMotionTransformRva);
-  size_t installed = 0;
-  for (const uintptr_t callsite_rva :
-       kImmersiveRootMotionCallsiteRvas) {
-    if (!WriteRelativeCallTarget(
-            callsite_rva,
-            reinterpret_cast<const void*>(&RouteImmersivePlayerRootMotion))) {
-      break;
-    }
-    ++installed;
-  }
-  if (installed != kImmersiveRootMotionCallsiteRvas.size()) {
-    for (size_t index = 0; index < installed; ++index) {
-      WriteRelativeCallTarget(
-          kImmersiveRootMotionCallsiteRvas[index],
-          g_dungeon_base + kPlayerRootMotionTransformRva);
-    }
-    g_player_root_motion_transform = nullptr;
+  constexpr std::array<uint8_t, 12> kExpectedWriterPrologue = {
+      0x8B, 0x4C, 0x24, 0x04, 0x53, 0x8B,
+      0x54, 0x24, 0x0C, 0x56, 0x57, 0x8B};
+  constexpr std::array<uint8_t, 12> kExpectedStagePrologue = {
+      0x56, 0x57, 0x8B, 0x3D, 0x70, 0x7A,
+      0x1D, 0x10, 0x85, 0xFF, 0x74, 0x2E};
+  std::array<uint8_t, kExpectedWriterPrologue.size()> writer_prologue{};
+  std::array<uint8_t, kExpectedStagePrologue.size()> stage_prologue{};
+  void* const writer_target =
+      g_dungeon_base + kPlayerRootMotionTransformRva;
+  void* const stage_target = g_dungeon_base + kPlayerMovementStageRva;
+  const bool signatures_match =
+      SafeRead(writer_target, writer_prologue.data(),
+               writer_prologue.size()) &&
+      writer_prologue == kExpectedWriterPrologue &&
+      SafeRead(stage_target, stage_prologue.data(), stage_prologue.size()) &&
+      stage_prologue == kExpectedStagePrologue;
+  if (!signatures_match) {
     AppendNativeLog(
-        "immersive root_motion install_failed installed=%zu requested=%zu "
-        "fallback=retail",
-        installed, kImmersiveRootMotionCallsiteRvas.size());
+        "immersive root_motion signature_mismatch writer=%08llX "
+        "stage=%08llX fallback=retail",
+        static_cast<unsigned long long>(kPlayerRootMotionTransformRva),
+        static_cast<unsigned long long>(kPlayerMovementStageRva));
     return false;
   }
 
-  g_immersive_root_motion_callsites_installed.store(
+  const MH_STATUS create_writer = MH_CreateHook(
+      writer_target,
+      reinterpret_cast<void*>(&RouteImmersivePlayerRootMotion),
+      reinterpret_cast<void**>(&g_player_root_motion_transform));
+  const MH_STATUS create_stage = MH_CreateHook(
+      stage_target,
+      reinterpret_cast<void*>(&HookImmersivePlayerMovementStage),
+      reinterpret_cast<void**>(&g_original_player_movement_stage));
+  const bool writer_created =
+      create_writer == MH_OK || create_writer == MH_ERROR_ALREADY_CREATED;
+  const bool stage_created =
+      create_stage == MH_OK || create_stage == MH_ERROR_ALREADY_CREATED;
+  if (!writer_created || !stage_created) {
+    AppendNativeLog(
+        "immersive root_motion create_failed writer=%d stage=%d "
+        "fallback=retail",
+        static_cast<int>(create_writer), static_cast<int>(create_stage));
+    return false;
+  }
+
+  const MH_STATUS enable_writer = MH_EnableHook(writer_target);
+  const MH_STATUS enable_stage = MH_EnableHook(stage_target);
+  const bool writer_enabled =
+      enable_writer == MH_OK || enable_writer == MH_ERROR_ENABLED;
+  const bool stage_enabled =
+      enable_stage == MH_OK || enable_stage == MH_ERROR_ENABLED;
+  if (!writer_enabled || !stage_enabled) {
+    if (writer_enabled) {
+      MH_DisableHook(writer_target);
+    }
+    if (stage_enabled) {
+      MH_DisableHook(stage_target);
+    }
+    AppendNativeLog(
+        "immersive root_motion enable_failed writer=%d stage=%d "
+        "fallback=retail",
+        static_cast<int>(enable_writer), static_cast<int>(enable_stage));
+    return false;
+  }
+
+  g_immersive_root_motion_hooks_installed.store(
       true, std::memory_order_release);
   AppendNativeLog(
-      "immersive root_motion=active writer_rva=%08llX "
-      "callsites=%08llX/%08llX/%08llX scope=IMMERSIVE_FIRST_PERSON",
+      "immersive root_motion=active writer_rva=%08llX stage_rva=%08llX "
+      "scope=LIVE_PLAYER_FULL_MOVEMENT_STAGE",
       static_cast<unsigned long long>(kPlayerRootMotionTransformRva),
-      static_cast<unsigned long long>(
-          kImmersiveRootMotionCallsiteRvas[0]),
-      static_cast<unsigned long long>(
-          kImmersiveRootMotionCallsiteRvas[1]),
-      static_cast<unsigned long long>(
-          kImmersiveRootMotionCallsiteRvas[2]));
+      static_cast<unsigned long long>(kPlayerMovementStageRva));
   return true;
 }
 
@@ -14660,7 +14702,7 @@ bool DeathtrapImmersiveFirstPersonActive() {
 }
 
 bool DeathtrapImmersiveVectorLocomotionActive() {
-  return g_immersive_root_motion_callsites_installed.load(
+  return g_immersive_root_motion_hooks_installed.load(
       std::memory_order_acquire);
 }
 
@@ -14970,7 +15012,7 @@ bool InstallDeathtrapNativeRenderHooks() {
       (g_xinput_camera_relative_movement ||
        g_immersive_first_person_enabled)) {
     if (g_immersive_first_person_enabled) {
-      InstallImmersiveRootMotionCallsites();
+      InstallImmersiveRootMotionHooks();
     }
     void* const dispatcher_target =
         g_dungeon_base + kPlayerStateDispatcherRva;

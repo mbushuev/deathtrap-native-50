@@ -2311,3 +2311,20 @@ and records physical input, requested course and final `+0x810A0` root/cache/
 bounds deltas together. No further locomotion mechanism is accepted or
 changed until this probe identifies the layer that discards the lateral
 course.
+
+## 0.0.208: one stage invariant replaces a callsite allowlist
+
+The v0.0.207 same-tick evidence proves that the three-callsite model was
+incomplete. Pure A/D redirects a small root contribution, while other active
+movement callbacks retain the much larger forward component. The retail DLL
+contains twenty direct paths to the shared root transform, and animation
+states select different subsets over time.
+
+The movement contract is now expressed at stable semantic boundaries. The
+complete `+0x810A0` update temporarily owns the requested movement/collision
+course, and the shared `+0x32430` transform redirects all horizontal root
+inputs for the live player within that transaction. Player identity,
+thread-local stage ownership and active F10 movement are all required. This
+covers walking, running and state transitions without enumerating animation
+callbacks, while non-player transforms and collision correction remain
+retail-owned.

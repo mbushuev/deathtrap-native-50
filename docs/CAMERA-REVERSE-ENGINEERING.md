@@ -2533,3 +2533,25 @@ projection onto requested and body-forward courses, and simultaneous cached
 object/bounds deltas. This makes the next short run capable of identifying
 whether direction is lost inside the dispatcher, by a later native writer, or
 between the render root and the authoritative gameplay object.
+
+## Complete movement-stage root ownership (v0.0.208)
+
+The correlated v0.0.207 run identifies the missing forward writer. During an
+A hold, sampled `+0x810A0` calls redirected approximately `-5/-1` units in
+X/Z, but successive source endpoints advanced about `-90/+570` over fifteen
+ticks. D showed the mirrored result. The weak redirected contribution was
+real, but most forward displacement came from other active movement states.
+
+Static enumeration finds twenty direct calls to the common `+0x32430`
+local-to-world root writer, not three. Runtime callback probes specifically
+show `+0x60840`, `+0x7E530` and `+0x7E980` contributing root displacement
+outside the short `+0x82750` transaction used by v0.0.206. Therefore adding
+another guessed callsite cannot make the implementation complete.
+
+Version 0.0.208 replaces the three rewritten calls with two signature-checked
+hooks: the complete `+0x810A0` movement stage owns the temporary requested
+actor/collision course, and the common `+0x32430` writer redirects every
+horizontal root contribution made for the verified live player node during
+that exact thread-local stage. Calls for equipment, other actors and every
+call outside active F10 locomotion pass straight through. Direct collision
+projection writers such as `+0x68390` remain native and are not redirected.
