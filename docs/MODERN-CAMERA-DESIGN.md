@@ -1926,3 +1926,27 @@ focus and target and atomically publishes that as the movement reference. The
 next native input sample is consequently aligned with the last completed
 visible source pose. No valid horizontal vector means no invented replacement
 heading.
+
+## 0.0.184: collision cannot own the gameplay heading
+
+The v0.0.183 live result rejects latched angular composition as the primary
+gameplay response. Latching reduces immediate alternation but cannot make an
+automatically selected plus/minus 15--180-degree shot predictable to the
+player. Feeding that published offset back into camera-relative locomotion then
+lets collision modify both view and movement intent.
+
+The stable control rotation is now the raw user orbit yaw. Collision owns
+radius, not heading. The direct combined room+scene shot is accepted down to
+the 120-unit physical look-at minimum (and can remain direct inside that through
+its established hysteresis). Angular candidates are considered only when the
+direct result is effectively unusable; because evaluation is ordered by
+angular cost, the first physically usable emergency direction wins rather than
+the longest cinematic composition.
+
+Blocked radial recovery no longer requires a farther convex boundary to be
+monotonically increasing. That condition confuses changing plane distance with
+loss of clearance: a boundary varying between 1200 and 1500 is still sustained
+evidence that a 300-unit arm may extend. The owned path now counts consecutive
+samples whose safe distance remains beyond the current published radius. A
+sample that reaches the current radius resets evidence, and inward contraction
+remains immediate. The legacy hybrid policy is unchanged.

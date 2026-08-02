@@ -441,3 +441,21 @@ The successful live publication boundary now updates the camera-relative
 movement basis from the exact committed target. This couples input to the same
 pose that owns rendering without letting input participate in collision or
 publication. Failed owned transactions cannot publish a speculative heading.
+
+## 0.0.184 control rotation is not collision state
+
+The v0.0.183 run proves that atomic publication and collision-safe endpoints
+are insufficient if the collision solver may continuously author view yaw.
+Full gameplay ownership is split explicitly: user input owns control rotation;
+the combined room/scene solver owns radial obstruction; native authored scenes
+own their explicitly arbitrated takeover windows.
+
+Angular search remains only as a fail-closed near-pivot escape because a camera
+position, a nonzero look-at vector and wall exclusion cannot all be satisfied
+on a collapsed direct ray. Ordinary shortened shots no longer invoke it. The
+movement basis is never derived from an emergency collision offset.
+
+Owned blocked-radius recovery uses sustained margin over the current arm rather
+than monotonic motion of the remote boundary. This prevents convex corner
+planes from pinning a safe 300-unit publication while every current direct
+query is more than 1200 units long, without weakening immediate contraction.
