@@ -459,3 +459,18 @@ Owned blocked-radius recovery uses sustained margin over the current arm rather
 than monotonic motion of the remote boundary. This prevents convex corner
 planes from pinning a safe 300-unit publication while every current direct
 query is more than 1200 units long, without weakening immediate contraction.
+
+## 0.0.185 removal of collision-authored rotation
+
+The v0.0.184 run proves that an angular search cannot remain as an emergency
+exception to control ownership. Whenever the direct ray collapses it still
+produces observable candidate chains and arbitrary view changes. Full
+ownership now means the user orbit is the only gameplay angular candidate.
+
+The collapsed-arm case is represented by explicit temporal state rather than
+a different orbit. A collision-checked near-pivot endpoint is placed in front
+of the pivot along the same user view-forward direction. Its look target is
+derived only after the final room publication sweep, so a corrective endpoint
+push cannot silently rotate the view. Hysteretic exit requires four clear
+source ticks. Collision retains authority over endpoint safety and radius;
+neither room geometry nor scene meshes acquire yaw/pitch authority.

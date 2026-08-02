@@ -1927,6 +1927,24 @@ next native input sample is consequently aligned with the last completed
 visible source pose. No valid horizontal vector means no invented replacement
 heading.
 
+## 0.0.185: collision cannot select gameplay rotation
+
+Restricting angular avoidance to a physical emergency does not make it
+predictable. The v0.0.184 log still shows multi-candidate sequences whenever
+the direct arm collapses, and each sequence is visible as an unrequested
+camera direction change. Gameplay collision therefore has no angular
+candidates in v0.0.185: the runtime candidate list contains only the exact
+user orbit.
+
+A direct arm shorter than the nonzero look-at minimum enters a separate
+near-pivot presentation state. The camera moves to the horizontal projection
+of the same view-forward vector in front of the pivot, retains that exact
+forward direction after all collision corrections, and uses the normal full
+room-sphere and scene-mesh sweeps. Four consecutive ticks above the larger
+exit clearance are required before returning behind the player. Entry and exit
+are presentation cuts. Thus collision may change distance and third/near
+presentation, but never gameplay yaw, pitch or camera-relative movement basis.
+
 ## 0.0.184: collision cannot own the gameplay heading
 
 The v0.0.183 live result rejects latched angular composition as the primary
