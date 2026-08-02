@@ -119,6 +119,12 @@ struct CameraRelativeHeadingStep {
   int32_t heading_delta = 0;
 };
 
+struct CameraAvoidanceLatchStep {
+  uint32_t direct_clear_ticks = 0;
+  bool retain_previous = false;
+  bool release_to_direct = false;
+};
+
 struct CameraOrbitStickInput {
   double x = 0.0;
   double y = 0.0;
@@ -195,6 +201,50 @@ inline CameraRelativeHeadingTarget CameraRelativeHeadingFromOrbit(
   }
   result.heading = heading;
   result.valid = true;
+  return result;
+}
+
+inline double CameraOrbitYawFromPositions(
+    const std::array<int32_t, 3>& focus,
+    const std::array<int32_t, 3>& camera, bool* valid = nullptr) {
+  const double dx = static_cast<double>(camera[0] - focus[0]);
+  const double dz = static_cast<double>(camera[2] - focus[2]);
+  const bool usable = std::isfinite(dx) && std::isfinite(dz) &&
+      std::hypot(dx, dz) >= 1.0;
+  if (valid) {
+    *valid = usable;
+  }
+  return usable ? std::atan2(dx, dz) : 0.0;
+}
+
+inline CameraAvoidanceLatchStep StepCameraAvoidanceLatch(
+    bool previous_avoidance_valid, double direct_safe_distance,
+    double previous_safe_distance, double useful_distance,
+    double minimum_retained_distance, uint32_t direct_clear_ticks,
+    uint32_t release_ticks) {
+  CameraAvoidanceLatchStep result;
+  if (!previous_avoidance_valid || release_ticks == 0u ||
+      !std::isfinite(direct_safe_distance) ||
+      !std::isfinite(previous_safe_distance) ||
+      !std::isfinite(useful_distance) || useful_distance < 0.0 ||
+      !std::isfinite(minimum_retained_distance) ||
+      minimum_retained_distance < 0.0 ||
+      previous_safe_distance < minimum_retained_distance) {
+    return result;
+  }
+
+  if (direct_safe_distance < useful_distance) {
+    result.retain_previous = true;
+    return result;
+  }
+  result.direct_clear_ticks = std::min(
+      release_ticks, direct_clear_ticks +
+          static_cast<uint32_t>(direct_clear_ticks < release_ticks));
+  if (result.direct_clear_ticks < release_ticks) {
+    result.retain_previous = true;
+  } else {
+    result.release_to_direct = true;
+  }
   return result;
 }
 

@@ -1,15 +1,13 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.179` (diagnostic combined room-and-scene
-candidate scoring with clean radial dynamic-mesh sweeps; visible camera
-behaviour remains the `0.0.172` hybrid).
+Current development version: `0.0.183` (fully owned room-and-scene gameplay
+camera with collision-safe publication, latched angular avoidance and movement
+heading derived from the actually published camera position).
 
-The `modern-third-person-camera` branch contains the first opt-in native orbit
-prototype. It takes ownership at the mode-3 dispatcher before the retail
-fixed-camera pre-check, then composes native room collision with qualified
-scene-mesh collision. A fully clear endpoint owns the final position only
-after all seven focus traces and all seven camera-footprint traces pass;
-ambiguous and colliding ticks retain the original resolver. See
+The `modern-third-person-camera` branch contains the native modern-camera
+implementation. It takes ownership at the mode-3 dispatcher, composes the
+verified room graph with qualified dynamic scene meshes, and atomically
+publishes one validated camera pose per source tick. See
 [Camera reverse-engineering notes](docs/CAMERA-REVERSE-ENGINEERING.md) for the
 verified call path and [modern camera design](docs/MODERN-CAMERA-DESIGN.md) for
 the safety boundary. The replacement architecture and verified convex

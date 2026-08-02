@@ -667,6 +667,10 @@ struct ThirdPersonOrbitState {
   // candidate identity, never a retained world-space camera endpoint.
   size_t owned_room_shadow_candidate_index =
       std::numeric_limits<size_t>::max();
+  // Once collision selects an alternate angular shot, keep that side until it
+  // becomes physically unusable or the direct shot stays fully clear. This
+  // prevents a corner from re-authoring the camera direction every tick.
+  uint32_t owned_room_direct_clear_ticks = 0;
   double owned_room_shadow_applied_yaw = 0.0;
   double owned_room_shadow_applied_pitch = 0.0;
   bool owned_room_shadow_offset_initialized = false;
@@ -4122,8 +4126,10 @@ bool SelectOwnedCameraCombinedPlan(
     const deathtrap_camera::RoomOrbitPlan& room_plan,
     double preferred_useful_distance, double switch_hysteresis_distance,
     double minimum_retained_distance, size_t previous_selected_index,
+    uint32_t* direct_clear_ticks,
     OwnedCameraCombinedPlan* combined_plan) {
-  if (!combined_plan || !room_plan.valid || room_plan.candidates.empty() ||
+  if (!direct_clear_ticks || !combined_plan || !room_plan.valid ||
+      room_plan.candidates.empty() ||
       !std::isfinite(preferred_useful_distance) ||
       preferred_useful_distance < 0.0 ||
       !std::isfinite(switch_hysteresis_distance) ||
@@ -4171,6 +4177,27 @@ bool SelectOwnedCameraCombinedPlan(
   const double direct_quality = std::min(
       combined_plan->candidates[0].safe_distance,
       preferred_useful_distance);
+  constexpr uint32_t kDirectReleaseTicks = 8u;
+  const bool previous_avoidance_valid = previous_selected_index != 0u &&
+      previous_selected_index < combined_plan->candidates.size();
+  if (previous_avoidance_valid && !evaluate(previous_selected_index)) {
+    return false;
+  }
+  const CameraAvoidanceLatchStep latch = StepCameraAvoidanceLatch(
+      previous_avoidance_valid,
+      combined_plan->candidates[0].safe_distance,
+      previous_avoidance_valid
+          ? combined_plan->candidates[previous_selected_index].safe_distance
+          : 0.0,
+      preferred_useful_distance, minimum_retained_distance,
+      *direct_clear_ticks, kDirectReleaseTicks);
+  *direct_clear_ticks = latch.direct_clear_ticks;
+  if (latch.retain_previous) {
+    combined_plan->selected_index = previous_selected_index;
+    combined_plan->retained_previous = true;
+    combined_plan->valid = true;
+    return true;
+  }
   if (direct_quality >= preferred_useful_distance) {
     combined_plan->selected_index = 0u;
     combined_plan->valid = true;
@@ -4235,6 +4262,9 @@ bool SelectOwnedCameraCombinedPlan(
   }
 
   combined_plan->selected_index = best_index;
+  if (best_index == 0u) {
+    *direct_clear_ticks = 0u;
+  }
   combined_plan->valid = true;
   return true;
 }
@@ -4708,6 +4738,18 @@ bool PublishOwnedCameraEndpoint(
       std::memcmp(player_before.data(), player_committed.data(),
                   player_before.size()) == 0;
   committed = committed && player_still_untouched;
+  if (committed) {
+    bool heading_valid = false;
+    const double published_yaw = CameraOrbitYawFromPositions(
+        focus, target, &heading_valid);
+    if (heading_valid) {
+      g_third_person_heading_reference_microradians.store(
+          static_cast<int32_t>(std::lround(published_yaw * 1000000.0)),
+          std::memory_order_release);
+      g_third_person_heading_reference_valid.store(
+          true, std::memory_order_release);
+    }
+  }
   bool rollback_exact = true;
   if (backup_valid && !committed) {
     rollback_exact = RestoreOwnedCameraPublication(
@@ -6533,6 +6575,7 @@ void __cdecl HookMode3Camera(void* controller) {
           kCameraCollisionSphereRadius,
           owned_minimum_transition_distance,
           g_third_person_orbit_state.owned_room_shadow_candidate_index,
+          &g_third_person_orbit_state.owned_room_direct_clear_ticks,
           &owned_combined_plan);
   bool owned_room_applied_valid = false;
   bool owned_room_applied_safe_cut = false;
@@ -6752,7 +6795,8 @@ void __cdecl HookMode3Camera(void* controller) {
               "camera_owned_solution selected=%llu retained=%u "
               "direct=%.1f selected=%.1f combined=%.1f spring=%.1f "
               "revalidated=%.1f room=%u/%u scene=%u/%u overlap=%u "
-              "resource=%llu tri=%llu motion=%.1f blocker=%llu cut=%u",
+              "resource=%llu tri=%llu motion=%.1f blocker=%llu cut=%u "
+              "direct_clear=%u",
               static_cast<unsigned long long>(
                   owned_combined_plan.selected_index),
               owned_combined_plan.retained_previous ? 1u : 0u,
@@ -6778,7 +6822,8 @@ void __cdecl HookMode3Camera(void* controller) {
                   ? owned_spring_scene.diagnostic.bounds_motion
                   : owned_scene_sweep.diagnostic.bounds_motion,
               static_cast<unsigned long long>(combined_blocker_key),
-              owned_transition_cut ? 1u : 0u);
+              owned_transition_cut ? 1u : 0u,
+              g_third_person_orbit_state.owned_room_direct_clear_ticks);
         }
       }
 
@@ -6807,6 +6852,7 @@ void __cdecl HookMode3Camera(void* controller) {
     }
     g_third_person_orbit_state.owned_room_shadow_candidate_index =
         std::numeric_limits<size_t>::max();
+    g_third_person_orbit_state.owned_room_direct_clear_ticks = 0;
     g_third_person_orbit_state.owned_room_shadow_offset_initialized = false;
   }
   // Reaching the hybrid path means the complete owned transaction was not
@@ -13208,10 +13254,11 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.182 publishes one fully-owned "
+      "Deathtrap native render overlay 0.0.183 publishes one fully-owned "
       "collision-safe room+scene gameplay-camera pose per source tick, with "
       "detached matrix construction, atomic verified live publication, "
-      "initial-overlap ray exit, immediate contraction, sustained-evidence "
+      "initial-overlap ray exit, latched angular avoidance, published-view "
+      "movement heading, immediate contraction, sustained-evidence "
       "radial release and presentation cuts "
       "across disconnected safe shots; scripted reveals remain native and a "
       "transaction failure explicitly falls back to the 0.0.172 hybrid; "

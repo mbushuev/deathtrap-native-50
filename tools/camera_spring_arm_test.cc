@@ -84,6 +84,53 @@ int main() {
     std::cerr << "zero movement stick produced a heading\n";
     return 1;
   }
+  bool published_yaw_valid = false;
+  const double published_yaw = CameraOrbitYawFromPositions(
+      {100, 200, 300}, {1100, 900, 300}, &published_yaw_valid);
+  if (!published_yaw_valid) {
+    std::cerr << "published camera heading was not usable\n";
+    return 1;
+  }
+  ExpectNear(published_yaw, 3.14159265358979323846 / 2.0,
+             "published camera heading");
+  CameraOrbitYawFromPositions(
+      {100, 200, 300}, {100, 900, 300}, &published_yaw_valid);
+  if (published_yaw_valid) {
+    std::cerr << "vertical camera arm invented a horizontal heading\n";
+    return 1;
+  }
+
+  uint32_t direct_clear_ticks = 0;
+  for (uint32_t tick = 0; tick < 7u; ++tick) {
+    const CameraAvoidanceLatchStep latch = StepCameraAvoidanceLatch(
+        true, 900.0, 700.0, 650.0, 288.0, direct_clear_ticks, 8u);
+    direct_clear_ticks = latch.direct_clear_ticks;
+    if (!latch.retain_previous || latch.release_to_direct) {
+      std::cerr << "avoidance shot released before sustained direct clearance\n";
+      return 1;
+    }
+  }
+  const CameraAvoidanceLatchStep released = StepCameraAvoidanceLatch(
+      true, 900.0, 700.0, 650.0, 288.0, direct_clear_ticks, 8u);
+  if (released.retain_previous || !released.release_to_direct ||
+      released.direct_clear_ticks != 8u) {
+    std::cerr << "avoidance shot did not release after sustained clearance\n";
+    return 1;
+  }
+  const CameraAvoidanceLatchStep blocked_again = StepCameraAvoidanceLatch(
+      true, 400.0, 700.0, 650.0, 288.0, 7u, 8u);
+  if (!blocked_again.retain_previous ||
+      blocked_again.direct_clear_ticks != 0u) {
+    std::cerr << "interrupted direct clearance was not reset\n";
+    return 1;
+  }
+  const CameraAvoidanceLatchStep collapsed_side = StepCameraAvoidanceLatch(
+      true, 100.0, 287.0, 650.0, 288.0, 0u, 8u);
+  if (collapsed_side.retain_previous ||
+      collapsed_side.release_to_direct) {
+    std::cerr << "collapsed avoidance side remained latched\n";
+    return 1;
+  }
   const CameraRelativeHeadingStep aligned_steering =
       StepCameraRelativeHeading(0, 0, 1024, 34);
   if (aligned_steering.heading_error != 0 ||
