@@ -224,3 +224,27 @@ is at least three radii away; shadow state moves directly to that verified
 target and records `cut=1`. Future publication must pair this flag with a
 one-source-transition presentation cut so interpolation never draws the chord
 through the obstruction. The final target and cut remain diagnostic-only.
+
+## 0.0.177 safety-cut result and dynamic channel
+
+The completed run is
+`<game-directory>\logs\deathtrap-native-20260802-093622-642-pid13088.log`.
+All static-room gates pass. Across 495 shot samples, seven unsafe angular
+transitions are cut. Selected safe distance never falls below 487.6 units and
+the actually applied shadow distance never falls below 447.2 units. There are
+zero applied samples below 288, 120 or the 96-unit camera radius. All 54
+samples whose direct ray is zero retain at least 650 units. The hybrid misses
+321 room obstructions in the same run. Static room ownership, full-orbit shot
+selection and transition policy are therefore frozen; do not resume hybrid
+threshold tuning.
+
+Version 0.0.178 adds the independent dynamic-object evidence channel. It
+sweeps one 96-unit sphere from the current focus to the final applied static
+endpoint against stable, drawable render triangles. Thin clutter still uses
+the tested two-intrinsic-axis size qualification, while closed-door and block
+dimensions remain blocking. Initial overlap uses the triangle-direction test:
+moving away or tangent is ignored, moving deeper is a zero-distance contact.
+The result is radial only with an 8-unit contact backoff. It never calls the
+old expanded-OBB pushout, never chooses a supporting face and never retains a
+world-space fallback point. The shadow evidence channel is
+`camera_owned_scene_shadow`.

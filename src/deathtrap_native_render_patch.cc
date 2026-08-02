@@ -349,6 +349,17 @@ struct CameraMeshHitDiagnostic {
   bool valid = false;
 };
 
+struct OwnedCameraSceneSweepResult {
+  std::array<int32_t, 3> position{};
+  CameraMeshHitDiagnostic diagnostic{};
+  double requested_distance = 0.0;
+  double contact_distance = 0.0;
+  double safe_distance = 0.0;
+  bool valid = false;
+  bool blocked = false;
+  bool initial_overlap = false;
+};
+
 struct CameraMeshContactPreference {
   uintptr_t node = 0;
   uintptr_t resource = 0;
@@ -3856,6 +3867,152 @@ bool CameraMeshSweepDistance(const CameraCollisionMesh& mesh,
   return hit;
 }
 
+bool SweepOwnedCameraAgainstSceneMeshesInSnapshots(
+    const SceneSnapshot& scene, const SceneSnapshot& stable_scene,
+    const std::array<int32_t, 3>& focus,
+    const std::array<int32_t, 3>& requested,
+    OwnedCameraSceneSweepResult* result) {
+  if (!result) {
+    return false;
+  }
+  *result = {};
+  result->position = requested;
+  if (scene.nodes.empty() || stable_scene.nodes.empty() || !scene.player ||
+      scene.root != stable_scene.root) {
+    return false;
+  }
+
+  const Vec3 origin{static_cast<double>(focus[0]),
+                    static_cast<double>(focus[1]),
+                    static_cast<double>(focus[2])};
+  const Vec3 endpoint{static_cast<double>(requested[0]),
+                      static_cast<double>(requested[1]),
+                      static_cast<double>(requested[2])};
+  const Vec3 delta = CameraVectorSubtract(endpoint, origin);
+  const double requested_distance =
+      std::sqrt(CameraVectorDot(delta, delta));
+  if (!std::isfinite(requested_distance) || requested_distance < 1.0 ||
+      requested_distance > 5000.0) {
+    return false;
+  }
+  const Vec3 direction = CameraVectorScale(delta, 1.0 / requested_distance);
+  result->requested_distance = requested_distance;
+  result->contact_distance = requested_distance;
+  result->safe_distance = requested_distance;
+  result->valid = true;
+
+  constexpr double kContactBackoff = 8.0;
+  double nearest_contact = requested_distance;
+  CameraMeshHitDiagnostic nearest_diagnostic;
+  bool nearest_initial_overlap = false;
+  bool found = false;
+  std::lock_guard<std::mutex> mesh_lock(g_camera_collision_mesh_mutex);
+  for (const auto& entry : scene.nodes) {
+    const uintptr_t node = entry.first;
+    const NodeTransform& current = entry.second;
+    if (!node || node == scene.root || node == scene.camera ||
+        !current.render_resource_handle || !current.bounds_valid ||
+        current.bounds_radius > kCameraCollisionMaximumObjectRadius ||
+        !CameraCollisionNodeDrawsOwnResource(node, current)) {
+      continue;
+    }
+    if (SceneNodeDescendsFrom(scene, node, scene.player) ||
+        SceneNodeDescendsFrom(scene, scene.player, node)) {
+      continue;
+    }
+
+    const auto stable = stable_scene.nodes.find(node);
+    if (stable == stable_scene.nodes.end() ||
+        !stable->second.bounds_valid ||
+        stable->second.render_resource_handle !=
+            current.render_resource_handle) {
+      continue;
+    }
+    const double bounds_motion = CameraPositionDistance(
+        current.bounds_center, stable->second.bounds_center);
+    const double radius_motion =
+        std::abs(static_cast<double>(current.bounds_radius) -
+                 static_cast<double>(stable->second.bounds_radius));
+    if (!std::isfinite(bounds_motion) ||
+        radius_motion > kCameraCollisionRadiusMotionTolerance) {
+      continue;
+    }
+
+    const Vec3 relative_center{
+        static_cast<double>(current.bounds_center[0]) - origin.x,
+        static_cast<double>(current.bounds_center[1]) - origin.y,
+        static_cast<double>(current.bounds_center[2]) - origin.z};
+    const double inflated_radius =
+        static_cast<double>(current.bounds_radius) +
+        kCameraCollisionSphereRadius;
+    const double projection = CameraVectorDot(relative_center, direction);
+    if (projection + inflated_radius <= 0.0 ||
+        projection - inflated_radius >= nearest_contact) {
+      continue;
+    }
+    const double center_distance_squared =
+        CameraVectorDot(relative_center, relative_center);
+    const double perpendicular_squared = std::max(
+        0.0, center_distance_squared - projection * projection);
+    if (!std::isfinite(perpendicular_squared) ||
+        perpendicular_squared > inflated_radius * inflated_radius) {
+      continue;
+    }
+
+    const CameraCollisionMesh* mesh =
+        ResolveCameraCollisionMesh(current.render_resource_handle);
+    if (!mesh) {
+      continue;
+    }
+    double contact_distance = nearest_contact;
+    bool initial_overlap = false;
+    CameraMeshHitDiagnostic diagnostic;
+    if (!CameraMeshSweepDistance(
+            *mesh, current.world, origin, direction,
+            kCameraCollisionSphereRadius, 0.0, nearest_contact,
+            &contact_distance, &initial_overlap, &diagnostic)) {
+      continue;
+    }
+    std::array<double, 3> scaled_extents{};
+    if (!CameraCollisionMeshBlocksCameraVolume(
+            *mesh, current.world, &scaled_extents)) {
+      LogNonblockingCameraMesh(current.render_resource_handle,
+                               scaled_extents);
+      continue;
+    }
+
+    nearest_contact = contact_distance;
+    nearest_initial_overlap = initial_overlap;
+    nearest_diagnostic = diagnostic;
+    nearest_diagnostic.node = node;
+    nearest_diagnostic.resource = current.render_resource_handle;
+    nearest_diagnostic.bounds_center = current.bounds_center;
+    nearest_diagnostic.bounds_radius = current.bounds_radius;
+    nearest_diagnostic.bounds_motion = bounds_motion;
+    nearest_diagnostic.initial_overlap = initial_overlap;
+    nearest_diagnostic.overlap_pushout = false;
+    nearest_diagnostic.near_pivot_escape = false;
+    found = true;
+  }
+
+  if (!found) {
+    return true;
+  }
+  result->blocked = true;
+  result->initial_overlap = nearest_initial_overlap;
+  result->contact_distance = nearest_contact;
+  result->safe_distance = std::max(0.0, nearest_contact - kContactBackoff);
+  result->position = {
+      focus[0] + static_cast<int32_t>(
+                       std::lround(direction.x * result->safe_distance)),
+      focus[1] + static_cast<int32_t>(
+                       std::lround(direction.y * result->safe_distance)),
+      focus[2] + static_cast<int32_t>(
+                       std::lround(direction.z * result->safe_distance))};
+  result->diagnostic = nearest_diagnostic;
+  return true;
+}
+
 // Source camera endpoints are collision-resolved independently, but the 50 Hz
 // presentation path used to connect them with a straight Cartesian chord. An
 // orbit turning around a prop corner can have two valid endpoints while that
@@ -5620,6 +5777,21 @@ void __cdecl HookMode3Camera(void* controller) {
         std::numeric_limits<size_t>::max();
     g_third_person_orbit_state.owned_room_shadow_offset_initialized = false;
   }
+  OwnedCameraSceneSweepResult owned_scene_sweep;
+  bool owned_scene_query_valid = false;
+  if (owned_room_applied_valid) {
+    const std::array<int32_t, 3> owned_room_applied_position = {
+        static_cast<int32_t>(
+            std::lround(owned_room_applied_sweep.position.x)),
+        static_cast<int32_t>(
+            std::lround(owned_room_applied_sweep.position.y)),
+        static_cast<int32_t>(
+            std::lround(owned_room_applied_sweep.position.z))};
+    owned_scene_query_valid =
+        SweepOwnedCameraAgainstSceneMeshesInSnapshots(
+            g_previous_snapshot, g_older_snapshot, camera_focus,
+            owned_room_applied_position, &owned_scene_sweep);
+  }
 
   // The untouched retail callback runs first so authored-camera arbitration
   // can inspect it. If a transient native query failure prevents a new modern
@@ -5753,6 +5925,31 @@ void __cdecl HookMode3Camera(void* controller) {
             selected.sweep.position.x, selected.sweep.position.y,
             selected.sweep.position.z);
       }
+    }
+    if (owned_room_applied_valid &&
+        (owned_scene_sweep.blocked || !owned_scene_query_valid ||
+         (owned_room_shadow_sequence % 30u) == 1u)) {
+      AppendNativeLog(
+          "camera_owned_scene_shadow valid=%u blocked=%u overlap=%u "
+          "requested=%.1f contact=%.1f safe=%.1f endpoint=%d/%d/%d "
+          "node=%llu resource=%llu tri=%llu motion=%.1f",
+          owned_scene_query_valid ? 1u : 0u,
+          owned_scene_query_valid && owned_scene_sweep.blocked ? 1u : 0u,
+          owned_scene_query_valid && owned_scene_sweep.initial_overlap
+              ? 1u : 0u,
+          owned_scene_query_valid ? owned_scene_sweep.requested_distance
+                                  : 0.0,
+          owned_scene_query_valid ? owned_scene_sweep.contact_distance : 0.0,
+          owned_scene_query_valid ? owned_scene_sweep.safe_distance : 0.0,
+          owned_scene_sweep.position[0], owned_scene_sweep.position[1],
+          owned_scene_sweep.position[2],
+          static_cast<unsigned long long>(
+              owned_scene_sweep.diagnostic.node),
+          static_cast<unsigned long long>(
+              owned_scene_sweep.diagnostic.resource),
+          static_cast<unsigned long long>(
+              owned_scene_sweep.diagnostic.triangle_index),
+          owned_scene_sweep.diagnostic.bounds_motion);
     }
   }
 
@@ -11932,7 +12129,7 @@ void InitializePatchState() {
   g_camera_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraCacheUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.177 preserves the 0.0.172 "
+      "Deathtrap native render overlay 0.0.178 preserves the 0.0.172 "
       "hybrid camera while shadow-planning and angularly stepping a useful "
       "collision-safe room shot around the current focus; it uses one pre-history "
       "scene-mesh candidate owner before the retail position-ring average; "
