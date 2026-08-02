@@ -1,6 +1,6 @@
 # User-facing changelog
 
-## 0.0.199 — changes from the original Steam release
+## 0.0.200 — changes from the original Steam release
 
 This is a consolidated list of the changes players can see or use. Reverted
 experiments and internal development changes are intentionally omitted.
@@ -41,8 +41,9 @@ experiments and internal development changes are intentionally omitted.
   under player control.
 - Supports looking up and down through the full configured 75-degree range
   without dropping back to third person.
-- Resolves the animated head on both Red Lotus and Chaindog rather than
-  mistaking Red Lotus's braid child for a universal skeleton requirement.
+- Resolves the distinct animated head geometry of both Red Lotus and Chaindog
+  rather than treating Red Lotus's braid and shorter head offset as universal
+  skeleton requirements.
 - Restores native keyboard steering immediately after leaving immersive first
   person and uses a conventional physical-mouse vertical look direction.
 

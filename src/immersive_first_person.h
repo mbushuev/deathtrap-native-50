@@ -11,17 +11,19 @@ struct ImmersiveFirstPersonPose {
 };
 
 // Both playable characters share the central chest/neck/head structure, but
-// only Red Lotus has a braid descending from the head node.  Consequently the
-// head is allowed to be either a leaf (Chaindog) or to have the one verified
-// braid child.  The remaining geometry and ancestry checks keep hands,
-// weapons and decorative meshes out of the candidate set.
+// only Red Lotus has a braid descending from the head node. Their measured
+// head-local translations are also distinct: Red Lotus is 0/71/34 and
+// Chaindog is -1/100/21. Consequently the head is allowed to be either a leaf
+// or to have the one verified braid child, and the geometry envelope covers
+// both observed profiles. The remaining ancestry checks keep hands, weapons
+// and decorative meshes out of the candidate set.
 inline bool MatchesImmersiveHeadJoint(
     uint32_t child_count, uintptr_t parent_resource_handle,
     uint32_t grandparent_child_count, const std::array<int32_t, 3>& local,
     int32_t bounds_radius, uint32_t depth) {
   return child_count <= 1u && parent_resource_handle == 0u &&
       grandparent_child_count >= 3u && std::abs(local[0]) <= 8 &&
-      local[1] >= 55 && local[1] <= 90 && local[2] >= 15 &&
+      local[1] >= 55 && local[1] <= 105 && local[2] >= 15 &&
       local[2] <= 55 && bounds_radius >= 45 && bounds_radius <= 115 &&
       depth >= 4u && depth <= 7u;
 }

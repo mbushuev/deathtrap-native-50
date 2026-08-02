@@ -2191,3 +2191,17 @@ Mouse and right stick retain separate device conventions. The accepted stick
 path is unchanged. Physical mouse Y receives the head-mode boundary reversal
 only while building immersive pitch; ordinary third-person mouse orbit keeps
 its accepted sign and sensitivity.
+
+## 0.0.200: measured Chaindog geometry completes the shared resolver
+
+Allowing a leaf head in 0.0.199 corrected only half of the character-specific
+assumption. The automatic failure probe shows Chaindog's real head-local
+translation is `-1/100/21` with radius 90, not the female `0/71/34` with
+radius 76. The common structural signature remains exact: depth five,
+resource-free neck parent and three-child chest grandparent.
+
+Version 0.0.200 extends the local-Y envelope from 90 to 105 so it contains
+both measured profiles and nothing beyond their immediate range. The resolver
+still requires the complete structure and geometry; this is not a highest-node
+heuristic or a character pointer/resource allowlist. The two input corrections
+accepted from 0.0.199 are unchanged.

@@ -2363,3 +2363,25 @@ have opposite effective pitch signs in the live view. Version 0.0.199 reverses
 only the mouse contribution while custom head view is selected. Accepted
 third-person mouse orbit, right-stick pitch and the `InvertY` option remain
 otherwise unchanged.
+
+## v0.0.199 measured Chaindog profile (v0.0.200)
+
+The v0.0.199 acceptance log is
+`<game-directory>\logs\deathtrap-native-20260802-192252-139-pid5676.log`.
+It confirms the keyboard-exit and physical-mouse fixes, but Chaindog still
+fails head resolution. The new one-shot production probe captures all 23
+upper-body descendants at tick 1227.
+
+The unique central head candidate is `05E97B18`: depth 5, zero children,
+resource `0xF21`, local `-1/100/21`, relative world `13/514/-14`, radius 90.
+Its parent `05E96358` is a resource-free neck anchor and its grandparent
+`05E97C48` is the three-child chest branch. No other logged node satisfies
+that complete structure. Version 0.0.199 correctly allowed the leaf topology
+but retained the female-derived local-Y ceiling 90, rejecting Chaindog's
+measured Y=100.
+
+Version 0.0.200 raises only that geometry ceiling to 105. Tests now use the
+actual female `0/71/34`, radius-76 braid head and male `-1/100/21`, radius-90
+leaf head, plus rejection immediately beyond the observed envelope. Pointer
+addresses and resource IDs remain diagnostic evidence rather than runtime
+keys.
