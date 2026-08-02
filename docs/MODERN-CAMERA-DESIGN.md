@@ -2412,3 +2412,13 @@ yaw directly on exit places that radial endpoint on the viewing side instead
 of behind it. The explicit head-to-modern transition now adds a normalized
 half-turn before the presentation cut. This preserves the final viewing
 direction while moving the camera behind the player.
+
+## 0.0.215: accepted behavior without broad movement probes
+
+The accepted v0.0.214 result becomes the production baseline. The temporary
+95-callsite movement investigation is no longer installed and its page watch,
+per-stage truth and aggregate streams cannot affect normal runtime or inflate
+session logs. Required collision-projection capture remains narrowly scoped
+to its two verified callbacks plus the existing vtable bridge. Camera,
+locomotion, interpolation and collision decisions are otherwise identical to
+v0.0.214.

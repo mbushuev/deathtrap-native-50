@@ -11175,10 +11175,11 @@ uintptr_t __cdecl DispatchMovementCallbackProbe(uintptr_t target,
       g_dungeon_base &&
       (target == reinterpret_cast<uintptr_t>(g_dungeon_base) + 0x00054D00u ||
        target == reinterpret_cast<uintptr_t>(g_dungeon_base) + 0x00068390u);
-  // In production only the measured collision callbacks need sampling. The
-  // broad statistics path remains available when DebugLog=1, but has no
-  // per-callback coordinate-read cost in normal play.
-  if (!contact_projection_callback && !g_debug_log) {
+  // Production keeps only the two measured collision projections. The broad
+  // movement investigation is complete and must not add coordinate reads or
+  // statistics to unrelated animation callbacks merely because compact
+  // support logging is enabled.
+  if (!contact_projection_callback) {
     return reinterpret_cast<Fn>(target)(entry);
   }
   MovementStageSample before;
@@ -11188,13 +11189,6 @@ uintptr_t __cdecl DispatchMovementCallbackProbe(uintptr_t target,
   CaptureMovementStageSample(&after);
   if (contact_projection_callback) {
     RecordPendingContactProjection(before, after, target);
-  }
-  if (g_debug_log) {
-    MovementCallbackProbeStats* const stats =
-        FindMovementCallbackProbeStats(target, entry);
-    if (stats) {
-      RecordMovementProbeStats(stats->motion, before, after);
-    }
   }
   return result;
 }
@@ -11591,7 +11585,7 @@ bool InstallMovementDispatcherCallbackProbe() {
           std::find(kMovementResolverCallbackRvas.begin(),
                     kMovementResolverCallbackRvas.end(), callback_rva) !=
           kMovementResolverCallbackRvas.end();
-      if (!g_debug_log && !resolver_capture_callsite) {
+      if (!resolver_capture_callsite) {
         continue;
       }
       uint8_t* const callsite = g_dungeon_base + callback_rva;
@@ -11681,10 +11675,7 @@ bool InstallMovementDispatcherCallbackProbe() {
       }
     }
   }
-  const size_t requested =
-      (g_debug_log ? kMovementDynamicCallbackRvas.size()
-                   : kMovementResolverCallbackRvas.size()) +
-      1u;
+  const size_t requested = kMovementResolverCallbackRvas.size() + 1u;
   const bool complete = installed == requested;
   g_movement_callback_probe_installed.store(complete,
                                              std::memory_order_release);
@@ -14737,8 +14728,6 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
         static_cast<unsigned long long>(g_raw_axis_return_bins[2][1]),
         static_cast<unsigned long long>(g_raw_axis_return_bins[2][2]),
         static_cast<unsigned long long>(g_raw_axis_return_bins[2][3]));
-    FlushMovementStageProbeStats(source_tick);
-    FlushMovementCallbackProbeStats(source_tick);
     g_matrix_axis_return_bins = {};
     g_raw_axis_return_bins = {};
   }
@@ -15009,8 +14998,9 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.198 uses compact per-launch "
-      "diagnostics while preserving the accepted camera and controls; "
+      "Deathtrap native render overlay 0.0.215 uses compact per-launch "
+      "support logging and preserves the accepted v0.0.214 immersive camera "
+      "and camera-relative locomotion; "
       "0.0.197 keeps the animated head mount "
       "through the complete configured pitch range; "
       "0.0.196 keeps the animated head mount "
@@ -15722,10 +15712,9 @@ bool InstallDeathtrapNativeRenderHooks() {
                     static_cast<int>(create_consumable));
   }
 
-  // Diagnostic-only and non-fatal. Unlike the reverted V26 experiment, this
-  // patches only the direct calls made by the one gameplay main loop and does
-  // not detour any shared engine function globally.
-  InstallMovementStageCallsiteProbes();
+  // Preserve only the measured collision-projection callbacks required by
+  // exact player contact handling. The completed v0.0.207-v0.0.214 movement
+  // investigation no longer patches the 95 broad gameplay-loop callsites.
   InstallMovementDispatcherCallbackProbe();
   g_render_hook_installed.store(true, std::memory_order_release);
   return true;

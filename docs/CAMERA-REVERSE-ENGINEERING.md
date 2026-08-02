@@ -2662,3 +2662,16 @@ Version 0.0.214 adds exactly one half-turn when transitioning from custom head
 view to modern third person. The conversion is deterministic and covered for
 zero, wrapped half-turn and invalid input. Head movement, camera input and all
 other mode transitions remain unchanged.
+
+## Production movement diagnostics cleanup (v0.0.215)
+
+The user accepts the complete v0.0.214 immersive camera and locomotion result.
+Version 0.0.215 changes no camera or movement behavior. It stops installing
+the 95 direct gameplay-loop callsite probes used by v0.0.207--v0.0.214 and
+stops flushing their `movement_truth`, `update_truth`, page-watch and periodic
+callback statistics into normal support logs.
+
+The two measured dynamic collision-projection callsites and the vtable bridge
+remain installed because they feed exact player-contact handling rather than
+reverse-engineering telemetry. Their dispatcher now bypasses unrelated
+callbacks even when compact `DebugLog=1` support logging is enabled.
