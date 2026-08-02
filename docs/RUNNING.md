@@ -148,6 +148,9 @@ performs the same toggle. This is independent of the original Tab/R3
 first-person camera: the custom view keeps ordinary walking, running, attacks,
 the character body and the equipped weapon visible. Its eye height and forward
 offset are configured by `HeadHeight` and `HeadForwardOffset` under `[Camera]`.
+They are offsets from the game's live upper-body camera anchor, not from the
+character's feet; the shipped body-visible placement is `60` up and `80`
+forward.
 
 The installer updates `ASYLUM/keys.cfg` before launch. Horizontal mouse motion
 uses the game's original normal turn actions. Holding Shift adds the retail
@@ -251,6 +254,9 @@ first-person mouse-look and the modern orbit is suspended. Version `0.0.190`
 assigns SELECT to a separate overlay-owned immersive first-person view. It
 stays inside the persistent mode-3 rig and uses W/S plus the explicit
 side-step path on XInput, so it does not replace or mutate retail Tab/R3.
+Version `0.0.191` corrects the custom view's gamepad forward/back polarity and
+lowers its eye to the upper-body anchor so the hands, sword and lower body can
+enter the frame.
 Start is delivered to the retail menu action as Escape before frontend
 ownership changes. The camera watchdog then transfers the controller only
 after the game actually leaves its gameplay camera; this prevents Start from

@@ -910,7 +910,7 @@ Version `0.0.190` adds a new, narrowly scoped immersive first-person owner
 without reviving that discarded policy cycle. F10 or gamepad SELECT toggles
 only between the persistent modern third-person rig and an eye endpoint inside
 the same mode-3 source transaction. Tab/R3 and retail mode 4 remain unchanged.
-The eye is derived from the live player root, `HeadHeight` and
+The eye is derived from the live upper-body camera anchor, `HeadHeight` and
 `HeadForwardOffset`; its short path is checked against the owned room graph and
 qualified scene meshes before the detached camera matrix is atomically
 published. Orientation uses the persistent user yaw and the wider configured
@@ -918,6 +918,14 @@ head pitch range. No retail first-person callback is invoked and no player,
 weapon, visibility or culling field is changed, so the full animated body and
 equipped weapon remain render-owned by the game. This source-owned publication
 also works at x1; it is not the old x2/x3-only render translation.
+
+The first live v0.0.190 run proved that the controller pointer is already an
+upper-body anchor rather than the model root: adding the old render-only
+485-unit root height placed the eye around 400 units above the visible model.
+Version v0.0.191 therefore uses anchor-relative offsets `60/80`. It also
+reverses only the immersive view's signed native longitudinal XInput channel,
+matching the observed stick forward/back polarity without changing keyboard
+W/S, retail first person or third-person camera-relative movement.
 
 ### Phase C: spring-arm collision
 

@@ -607,8 +607,8 @@ double g_third_person_orbit_min_pitch_radians = 0.0;
 double g_third_person_orbit_max_pitch_radians = 0.0;
 double g_custom_head_min_pitch_radians = 0.0;
 double g_custom_head_max_pitch_radians = 0.0;
-int32_t g_custom_head_height = 485;
-int32_t g_custom_head_forward_offset = 180;
+int32_t g_custom_head_height = 60;
+int32_t g_custom_head_forward_offset = 80;
 double g_third_person_orbit_min_radius = 650.0;
 double g_third_person_orbit_max_radius = 1800.0;
 double g_third_person_orbit_preferred_radius = 1400.0;
@@ -5141,15 +5141,16 @@ bool PublishOwnedCameraEndpoint(
 bool PublishImmersiveFirstPersonEndpoint(
     void* controller, const std::array<int32_t, 3>& camera_focus,
     uintptr_t room_or_sector, bool transition_cut) {
-  std::array<int32_t, 3> player{};
-  if (!controller || !ReadCameraPlayerPosition(controller, &player)) {
+  std::array<int32_t, 3> upper_body_anchor{};
+  if (!controller ||
+      !ReadCameraPlayerPosition(controller, &upper_body_anchor)) {
     return false;
   }
 
   const double yaw = g_third_person_orbit_state.yaw;
   const double pitch = g_third_person_orbit_state.pitch;
   const ImmersiveFirstPersonPose pose = BuildImmersiveFirstPersonPose(
-      player, yaw, pitch, g_custom_head_height,
+      upper_body_anchor, yaw, pitch, g_custom_head_height,
       g_custom_head_forward_offset);
   if (!pose.valid) {
     return false;
@@ -9523,7 +9524,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
       // dispatcher applies the bounded camera-relative heading separately.
       PublishNativeJoystickMovement(
           true, 0.0, custom_head_movement
-                         ? movement_stick.y
+                         ? -movement_stick.y
                          : movement_stick.magnitude);
       if (g_debug_log &&
           (!g_xinput_direct_heading_steering_was_active ||
@@ -9532,7 +9533,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
             "xinput movement dispatcher_steering=1 target=%d "
             "current=%d native_axes=0.000/%.3f magnitude=%.3f",
             desired_heading, current_heading,
-            custom_head_movement ? movement_stick.y
+            custom_head_movement ? -movement_stick.y
                                  : movement_stick.magnitude,
             movement_stick.magnitude);
       }
@@ -13637,9 +13638,9 @@ void InitializePatchState() {
   g_custom_head_max_pitch_radians =
       static_cast<double>(head_maximum_pitch_degrees) * kOrbitPi / 180.0;
   g_custom_head_height = std::clamp(
-      ConfiguredInteger(L"Camera", L"HeadHeight", 485), 300, 700);
+      ConfiguredInteger(L"Camera", L"HeadHeight", 60), 0, 300);
   g_custom_head_forward_offset = std::clamp(
-      ConfiguredInteger(L"Camera", L"HeadForwardOffset", 180), 120, 300);
+      ConfiguredInteger(L"Camera", L"HeadForwardOffset", 80), 0, 220);
   g_third_person_orbit_min_radius = static_cast<double>(std::clamp(
       ConfiguredInteger(L"Camera", L"MinimumRadius", 650), 200, 3000));
   g_third_person_orbit_max_radius = static_cast<double>(std::clamp(
@@ -13762,8 +13763,9 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.190 adds an independent "
-      "body-visible immersive first-person camera and keeps the Steam "
+      "Deathtrap native render overlay 0.0.191 corrects immersive movement "
+      "polarity and places its body-visible eye on the upper-body anchor; "
+      "it keeps the Steam "
       "Redbook-to-MP3 routing fix; it publishes one fully-owned "
       "collision-safe room+scene gameplay-camera pose per source tick, with "
       "detached matrix construction, atomic verified live publication, "

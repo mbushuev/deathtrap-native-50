@@ -14,8 +14,8 @@ inline ImmersiveFirstPersonPose BuildImmersiveFirstPersonPose(
     const std::array<int32_t, 3>& player_root, double yaw, double pitch,
     int32_t height, int32_t forward_offset) {
   ImmersiveFirstPersonPose pose;
-  if (!std::isfinite(yaw) || !std::isfinite(pitch) || height <= 0 ||
-      forward_offset <= 0) {
+  if (!std::isfinite(yaw) || !std::isfinite(pitch) || height < 0 ||
+      forward_offset < 0) {
     return pose;
   }
   const double horizontal = std::cos(pitch);

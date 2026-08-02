@@ -1,8 +1,8 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.190` (the stable fully owned camera and
+Current development version: `0.0.191` (the stable fully owned camera and
 Steam music-routing fix plus an independent body-visible immersive
-first-person view).
+first-person view with corrected movement polarity and eye placement).
 
 The `modern-third-person-camera` branch contains the native modern-camera
 implementation. It takes ownership at the mode-3 dispatcher, composes the
@@ -132,6 +132,8 @@ D3D11 settings, first-run verification and troubleshooting.
   overlay-owned immersive first-person view is toggled by F10 or gamepad
   SELECT. It remains in mode 3, keeps walking, running, attacks and the full
   character/weapon render, and uses the modern mouse/right-stick look path.
+  Its eye sits at the upper-body anchor so looking down retains the hands,
+  sword and body in frame.
   Press F10/SELECT again to return to the preserved third-person orbit; R3
   still enters the untouched retail first-person mode independently.
   `Camera/InvertX=1` and `Camera/InvertY=1` reverse the conventional default
