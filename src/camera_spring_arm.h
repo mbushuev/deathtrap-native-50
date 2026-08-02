@@ -11,11 +11,92 @@ struct CameraSpringArmStep {
   double radius = 0.0;
   uint32_t clear_ticks = 0;
   uint32_t blocked_release_ticks = 0;
+  double blocked_candidate_distance = 0.0;
+  uint64_t blocker_key = 0;
 };
 
-struct CameraMeshPresentationLatchClearStep {
-  uint32_t clear_ticks = 0;
-  bool release = false;
+inline bool CameraPreHistoryMeshVetoMayApply(
+    bool modern_configure_scope_active, bool controller_matches,
+    bool position_history_ring_matches, bool scene_mesh_contact,
+    bool replacement_valid) {
+  // The native ring-adder is shared by five unrelated camera histories.
+  // Pre-publication replacement is legal only for the position ring belonging
+  // to the controller in the one explicit modern-camera configure call.
+  return modern_configure_scope_active && controller_matches &&
+         position_history_ring_matches && scene_mesh_contact &&
+         replacement_valid;
+}
+
+inline bool CameraPreHistoryUsesSubmittedFixedPoint(
+    bool candidate_replacement_valid, bool submitted_validation_valid,
+    bool submitted_unchanged) {
+  // Treat the modern configure call as a transaction. If retail's speculative
+  // position-ring candidate cannot be corrected, rollback is legal only when
+  // repeat validation returns the originally submitted endpoint byte-for-byte.
+  // Accepting a merely usable submitted-side correction would introduce a
+  // second collision owner and recreate the old four-tick loop.
+  return !candidate_replacement_valid && submitted_validation_valid &&
+         submitted_unchanged;
+}
+
+inline bool CameraPostNativeMeshContactIsIdempotent(
+    bool mesh_contact, double correction_distance) {
+  // The scene query works in floating point but the native controller stores
+  // integer positions. A correction within the validator's two-unit equality
+  // tolerance cannot materially improve camera safety. Re-committing that
+  // same boundary would only rewind the retail position ring and reset the
+  // spring-arm release counters on every source tick.
+  return mesh_contact && std::isfinite(correction_distance) &&
+         correction_distance <= 2.0;
+}
+
+inline bool CameraModernEndpointMayOwnFinalPosition(
+    bool configured, bool mesh_contact, bool exact_already_committed,
+    bool collision_solver_exhausted, bool full_radius_request,
+    bool strict_native_query_available, bool strict_native_volume_clear,
+    bool scene_endpoint_clear) {
+  // The modern endpoint may bypass the legacy fixed-camera positional
+  // resolver only on a completely unconstrained source tick. In particular,
+  // the ordinary 0x30910 predicate is insufficient here because it accepts
+  // the camera volume when any one of its seven room traces succeeds. Exact
+  // positional ownership requires the complete focus and endpoint footprint
+  // plus the scene endpoint check; every ambiguous or colliding case remains
+  // native-owned.
+  return configured && !mesh_contact && !exact_already_committed &&
+         !collision_solver_exhausted && full_radius_request &&
+         strict_native_query_available && strict_native_volume_clear &&
+         scene_endpoint_clear;
+}
+
+inline bool CameraPreNativeSceneContactMayOwnFinalPosition(
+    bool desired_scene_contact, bool configured_scene_contact,
+    bool exact_already_committed, bool collision_solver_exhausted,
+    bool minimum_distance_valid, bool strict_native_query_available,
+    bool strict_native_volume_clear, bool scene_endpoint_clear) {
+  // A scene-mesh spring-arm contraction is already the modern collision
+  // solution. The legacy fixed-camera resolver must not reshape that safe
+  // endpoint and create a second radius/height owner. Publication is still
+  // fail-closed: no conflicting post-native contact, prior exact owner or
+  // ambiguous room/endpoint result may be bypassed.
+  return desired_scene_contact && !configured_scene_contact &&
+         !exact_already_committed && !collision_solver_exhausted &&
+         minimum_distance_valid && strict_native_query_available &&
+         strict_native_volume_clear && scene_endpoint_clear;
+}
+
+struct CameraExpandedBoxRayExit {
+  bool valid = false;
+  double distance = 0.0;
+  size_t axis = std::numeric_limits<size_t>::max();
+};
+
+struct CameraPivotRelativeInterpolation {
+  std::array<double, 3> focus{};
+  std::array<double, 3> position{};
+  double yaw = 0.0;
+  double pitch = 0.0;
+  double radius = 0.0;
+  bool valid = false;
 };
 
 struct CameraFloorLimit {
@@ -37,6 +118,54 @@ struct CameraRelativeHeadingStep {
   int32_t heading_error = 0;
   int32_t heading_delta = 0;
 };
+
+struct CameraOrbitStickInput {
+  double x = 0.0;
+  double y = 0.0;
+};
+
+inline CameraOrbitStickInput CameraOrbitAxisLock(
+    double x, double y, double lock_ratio) {
+  CameraOrbitStickInput result;
+  if (!std::isfinite(x) || !std::isfinite(y) ||
+      !std::isfinite(lock_ratio)) {
+    return result;
+  }
+  lock_ratio = std::clamp(lock_ratio, 0.0, 0.95);
+  result = {x, y};
+  if (lock_ratio <= 0.0) {
+    return result;
+  }
+
+  const double absolute_x = std::abs(x);
+  const double absolute_y = std::abs(y);
+  // XInput sticks rarely sit on a mathematically exact axis. A large primary
+  // deflection can therefore accumulate unintended pitch/yaw for as long as
+  // the player holds the stick. Suppress the smaller component inside a
+  // proportional axial cone, then restore it continuously toward a true
+  // diagonal. The dominant component and full diagonals are unchanged.
+  const auto reshape_secondary = [lock_ratio](double secondary,
+                                               double primary_absolute) {
+    const double secondary_absolute = std::abs(secondary);
+    const double threshold = lock_ratio * primary_absolute;
+    if (secondary_absolute <= threshold) {
+      return 0.0;
+    }
+    const double denominator = primary_absolute - threshold;
+    if (denominator <= 0.000001) {
+      return secondary;
+    }
+    const double restored = primary_absolute *
+        (secondary_absolute - threshold) / denominator;
+    return std::copysign(restored, secondary);
+  };
+  if (absolute_x > absolute_y) {
+    result.y = reshape_secondary(y, absolute_x);
+  } else if (absolute_y > absolute_x) {
+    result.x = reshape_secondary(x, absolute_y);
+  }
+  return result;
+}
 
 inline CameraRelativeHeadingTarget CameraRelativeHeadingFromOrbit(
     double camera_yaw, double stick_x, double stick_y,
@@ -110,104 +239,155 @@ inline CameraChaseStep StepCameraChase(
     return result;
   }
 
-  // Critically damped chase state: smooth the followed pivot, never the
-  // collision result. This is the transferable part of Arkham Asylum's
-  // ChasePosition/ChaseVelocity architecture. Acceleration and velocity are
-  // bounded so one noisy target sample cannot become a visible camera cut.
+  // Smooth the followed pivot, never the collision result. Backward Euler is
+  // used for the critically damped system because the native camera advances
+  // only once every 60 ms. The previous semi-implicit Euler step has a
+  // negative discrete pole at the configured 2 Hz response and alternates
+  // around even a fixed target. This implicit form is unconditionally stable
+  // and keeps each axis independent, so a horizontal turn cannot consume the
+  // vertical acceleration or velocity budget.
   const double omega = 2.0 * 3.14159265358979323846 * response_hz;
-  std::array<double, 3> acceleration{};
-  double acceleration_length_squared = 0.0;
+  const double omega_squared = omega * omega;
+  const double denominator =
+      1.0 + 2.0 * omega * delta_seconds +
+      omega_squared * delta_seconds * delta_seconds;
+  const double maximum_velocity_delta =
+      maximum_acceleration * delta_seconds;
+  if (!std::isfinite(denominator) || denominator <= 0.0 ||
+      !std::isfinite(maximum_velocity_delta)) {
+    return result;
+  }
+
   for (size_t axis = 0; axis < 3; ++axis) {
     if (!std::isfinite(current[axis]) || !std::isfinite(velocity[axis]) ||
         !std::isfinite(target[axis])) {
       return CameraChaseStep{target, {0.0, 0.0, 0.0}};
     }
-    acceleration[axis] =
-        omega * omega * (target[axis] - current[axis]) -
-        2.0 * omega * velocity[axis];
-    acceleration_length_squared += acceleration[axis] * acceleration[axis];
-  }
-  const double acceleration_length = std::sqrt(acceleration_length_squared);
-  if (acceleration_length > maximum_acceleration) {
-    const double scale = maximum_acceleration / acceleration_length;
-    for (double& component : acceleration) {
-      component *= scale;
-    }
-  }
 
-  double velocity_length_squared = 0.0;
-  for (size_t axis = 0; axis < 3; ++axis) {
-    result.velocity[axis] += acceleration[axis] * delta_seconds;
-    velocity_length_squared +=
-        result.velocity[axis] * result.velocity[axis];
-  }
-  const double velocity_length = std::sqrt(velocity_length_squared);
-  if (velocity_length > maximum_speed) {
-    const double scale = maximum_speed / velocity_length;
-    for (double& component : result.velocity) {
-      component *= scale;
+    const double error = target[axis] - current[axis];
+    double next_velocity =
+        (velocity[axis] +
+         omega_squared * delta_seconds * error) /
+        denominator;
+    next_velocity = std::clamp(
+        next_velocity, velocity[axis] - maximum_velocity_delta,
+        velocity[axis] + maximum_velocity_delta);
+    next_velocity =
+        std::clamp(next_velocity, -maximum_speed, maximum_speed);
+
+    // A sampled target may reverse abruptly. Carrying the preceding velocity
+    // through the new target direction makes the visual pivot move away for a
+    // tick and later snap back. Stop at the reversal boundary; the next stable
+    // step accelerates toward the new target.
+    if (error == 0.0 || next_velocity * error <= 0.0) {
+      result.position[axis] = target[axis];
+      result.velocity[axis] = 0.0;
+      continue;
     }
-  }
-  for (size_t axis = 0; axis < 3; ++axis) {
-    result.position[axis] += result.velocity[axis] * delta_seconds;
+
+    const double displacement = next_velocity * delta_seconds;
+    if (std::abs(displacement) >= std::abs(error)) {
+      result.position[axis] = target[axis];
+      result.velocity[axis] = 0.0;
+    } else {
+      result.position[axis] = current[axis] + displacement;
+      result.velocity[axis] = next_velocity;
+    }
   }
   return result;
 }
 
-inline bool CameraMeshLatchRetainsPreviousTarget(
-    bool same_camera, bool owner_changed, bool incoming_usable,
-    bool manual_orbit_owned, bool authoritative_incoming) {
-  // Stable contact normally keeps the preceding face across adjacent mesh
-  // nodes. During a manual orbit, however, a usable incoming target is the
-  // user's current side of the obstruction; retaining the old face makes the
-  // latch jump back as soon as input grace expires.
-  return same_camera && (owner_changed || !incoming_usable) &&
-         !authoritative_incoming &&
-         !(manual_orbit_owned && incoming_usable);
+inline CameraChaseStep StepCameraPivotChase(
+    const std::array<double, 3>& current,
+    const std::array<double, 3>& velocity,
+    const std::array<double, 3>& target,
+    double delta_seconds, double response_hz,
+    double maximum_speed, double maximum_acceleration) {
+  CameraChaseStep result = StepCameraChase(
+      current, velocity, target, delta_seconds, response_hz,
+      maximum_speed, maximum_acceleration);
+  if (!std::isfinite(target[1])) {
+    return result;
+  }
+
+  // Horizontal damping gives the follow camera weight. Vertical damping is
+  // unsafe during fast falls: the orbit pivot trails the real focus, inflates
+  // the spring arm and eventually forces a reverse native-camera correction.
+  // Exact source ticks follow Y directly; x2/x3 presentation still
+  // interpolates between consecutive exact pivots.
+  result.position[1] = target[1];
+  result.velocity[1] = 0.0;
+  return result;
 }
 
-inline bool CameraContinuousMeshContactOwnsSubmittedTarget(
-    bool pre_native_mesh_contact, bool post_native_mesh_contact,
-    bool presentation_latch_active, bool submitted_usable,
-    bool submitted_arm_clear) {
-  // Once either collision phase has established a qualified mesh latch, the
-  // submitted endpoint is authoritative whenever its complete focus-to-camera
-  // arm is currently clear. This includes the post-only stale-history case:
-  // the requested arm is already leaving the prop, but 0x2F380 republishes the
-  // preceding near-pivot point and the post pass would otherwise commit that
-  // same point forever. First contact still uses the collision-derived target.
-  return (pre_native_mesh_contact || post_native_mesh_contact) &&
-         presentation_latch_active && submitted_usable &&
-         submitted_arm_clear;
+inline bool CameraPreNativeEscapeOwnsFinalTarget(
+    bool pre_native_mesh_contact, bool overlap_pushout,
+    bool near_pivot_escape, bool submitted_usable,
+    bool submitted_native_clear, bool post_native_result_consistent) {
+  // A contained-pivot OBB exit is already rebuilt from the current focus,
+  // requested ray and current object transform. Once its native room-volume
+  // validation succeeds, retail history must not replace it with an older
+  // radial point and create an escape/radial A/B cycle. A post-native sweep
+  // of that same submitted point remains newer evidence and can explicitly
+  // disprove the escape before it becomes authoritative.
+  return pre_native_mesh_contact &&
+         (overlap_pushout || near_pivot_escape) && submitted_usable &&
+         submitted_native_clear && post_native_result_consistent;
 }
 
-inline bool CameraPreviousClearArmOwnsMeshCorner(
-    bool previous_modern_sample_valid, bool mesh_orbit_blocked,
-    bool native_orbit_blocked, bool previous_target_usable,
-    bool previous_native_clear,
-    bool previous_mesh_arm_clear) {
-  // At a prop corner, the newly requested radial arm can become very short
-  // even though the preceding camera arm remains completely usable. Preserve
-  // that verified route as a continuous detour instead of snapping to the
-  // player's back. Native room obstruction is deliberately excluded: retail
-  // walls, floors and portals retain immediate contraction authority.
-  return previous_modern_sample_valid && mesh_orbit_blocked &&
-         !native_orbit_blocked && previous_target_usable &&
-         previous_native_clear && previous_mesh_arm_clear;
+inline bool CameraConfiguredMeshResultAllowsPreNativeEscape(
+    bool configured_mesh_contact, bool idempotent_contact,
+    bool configured_correction_applied,
+    bool accepted_target_matches_escape) {
+  // The scoped pre-history hook and the post-configure sweep both inspect
+  // geometry generated by the current configure call. If either one selects
+  // a different target, the exceptional pre-native escape is not safe with
+  // respect to the complete current constraint set. A delayed retail
+  // publication is not permission to overwrite that positive contact.
+  return !configured_mesh_contact || accepted_target_matches_escape ||
+         (idempotent_contact && !configured_correction_applied);
 }
 
-inline bool CameraEstablishedMeshContactPrefersTangentProgress(
-    bool presentation_latch_active, bool mesh_orbit_blocked,
-    bool native_orbit_blocked, bool mesh_diagnostic_valid,
-    bool previous_clear_arm_owned, bool previous_requested_orbit_valid) {
-  // A previous clear arm is a continuity seed, not a permanent world-space
-  // anchor. Once the mesh contact has been established, try the current
-  // source-tick orbit displacement projected onto the blocking face before
-  // falling back to that seed. Otherwise a rotating orbit can keep publishing
-  // the same verified old point forever even though a clear route exists.
-  return presentation_latch_active && mesh_orbit_blocked &&
-         !native_orbit_blocked && mesh_diagnostic_valid &&
-         previous_clear_arm_owned && previous_requested_orbit_valid;
+inline bool PreserveCameraEscapePitch(
+    const std::array<double, 3>& point,
+    const std::array<double, 3>& requested, size_t vertical_axis,
+    std::array<double, 3>* pushed) {
+  if (!pushed || vertical_axis >= point.size()) {
+    return false;
+  }
+  double requested_horizontal_squared = 0.0;
+  double pushed_horizontal_squared = 0.0;
+  for (size_t axis = 0; axis < point.size(); ++axis) {
+    if (!std::isfinite(point[axis]) || !std::isfinite(requested[axis]) ||
+        !std::isfinite((*pushed)[axis])) {
+      return false;
+    }
+    if (axis == vertical_axis) {
+      continue;
+    }
+    const double requested_delta = requested[axis] - point[axis];
+    const double pushed_delta = (*pushed)[axis] - point[axis];
+    requested_horizontal_squared += requested_delta * requested_delta;
+    pushed_horizontal_squared += pushed_delta * pushed_delta;
+  }
+  constexpr double kHorizontalEpsilon = 1.0e-9;
+  if (requested_horizontal_squared <= kHorizontalEpsilon) {
+    (*pushed)[vertical_axis] = point[vertical_axis];
+    return true;
+  }
+  const double progress = std::clamp(
+      std::sqrt(pushed_horizontal_squared / requested_horizontal_squared),
+      0.0, 1.0);
+  if (!std::isfinite(progress)) {
+    return false;
+  }
+  // The OBB solver chooses only a horizontal supporting face. Reapply the
+  // current orbit's vertical progress at the same horizontal progress so a
+  // collision cannot flatten a pitched orbit to focus height in one tick.
+  (*pushed)[vertical_axis] =
+      point[vertical_axis] +
+      (requested[vertical_axis] - point[vertical_axis]) * progress;
+  return std::isfinite((*pushed)[vertical_axis]);
 }
 
 inline CameraFloorLimit ResolveCameraFloorLimit(
@@ -244,20 +424,6 @@ inline CameraFloorLimit ResolveCameraFloorLimit(
   return result;
 }
 
-inline CameraMeshPresentationLatchClearStep
-StepCameraMeshPresentationLatchClear(
-    uint32_t previous_clear_ticks,
-    bool native_candidate_mesh_blocked) {
-  CameraMeshPresentationLatchClearStep result;
-  if (native_candidate_mesh_blocked) {
-    return result;
-  }
-  result.clear_ticks =
-      std::min(previous_clear_ticks + 1u, 120u);
-  result.release = result.clear_ticks >= 2u;
-  return result;
-}
-
 inline bool CameraInitialOverlapBlocks(double start_distance_squared,
                                        double probe_distance_squared) {
   if (!std::isfinite(start_distance_squared) ||
@@ -275,8 +441,10 @@ inline bool CameraInitialOverlapBlocks(double start_distance_squared,
 }
 
 inline bool CameraMeshExtentsBlockVolume(
-    const std::array<double, 3>& extents, double camera_diameter) {
-  if (!std::isfinite(camera_diameter) || camera_diameter <= 0.0) {
+    const std::array<double, 3>& extents,
+    double minimum_two_axis_span) {
+  if (!std::isfinite(minimum_two_axis_span) ||
+      minimum_two_axis_span <= 0.0) {
     return false;
   }
   std::array<double, 3> sorted = extents;
@@ -286,10 +454,11 @@ inline bool CameraMeshExtentsBlockVolume(
     }
   }
   std::sort(sorted.begin(), sorted.end());
-  // A thin lever may be long on one intrinsic mesh axis, but rotating it must
-  // not turn its world AABB into a camera wall. Require a blocker to span the
-  // complete camera diameter on at least two intrinsic axes.
-  return sorted[1] >= camera_diameter;
+  // A thin lever, flag or narrow housing may be long on one intrinsic mesh
+  // axis, but rotating it must not turn its world AABB into a camera wall.
+  // The caller supplies a conservative transverse-size threshold; a blocker
+  // must meet it on at least two intrinsic axes.
+  return sorted[1] >= minimum_two_axis_span;
 }
 
 inline bool PushCameraOutOfExpandedBox(
@@ -297,9 +466,13 @@ inline bool PushCameraOutOfExpandedBox(
     const std::array<double, 3>& reference,
     const std::array<double, 3>& half_extents,
     size_t excluded_axis, double margin,
-    std::array<double, 3>* pushed, size_t* pushed_axis = nullptr) {
+    std::array<double, 3>* pushed, size_t* pushed_axis = nullptr,
+    size_t preferred_axis = std::numeric_limits<size_t>::max(),
+    double preferred_axis_hysteresis = 0.0) {
   if (!pushed || excluded_axis >= point.size() ||
-      !std::isfinite(margin) || margin < 0.0) {
+      !std::isfinite(margin) || margin < 0.0 ||
+      !std::isfinite(preferred_axis_hysteresis) ||
+      preferred_axis_hysteresis < 0.0) {
     return false;
   }
   for (size_t axis = 0; axis < point.size(); ++axis) {
@@ -325,6 +498,22 @@ inline bool PushCameraOutOfExpandedBox(
   }
   if (nearest_axis >= point.size()) {
     return false;
+  }
+
+  // A moving OBB or a near-corner ray can make two horizontal faces differ
+  // by only a few world units. Picking the numerical minimum every source
+  // tick then alternates the camera between faces. Retain the preceding axis
+  // only while it is still valid and no alternative improves the escape by
+  // more than the explicit world-space hysteresis. The point itself is always
+  // rebuilt from the current pivot and current bounds; no absolute camera
+  // position is retained.
+  if (preferred_axis < point.size() && preferred_axis != excluded_axis) {
+    const double preferred_face =
+        half_extents[preferred_axis] - std::abs(point[preferred_axis]);
+    if (preferred_face >= 0.0 &&
+        preferred_face <= nearest_face + preferred_axis_hysteresis) {
+      nearest_axis = preferred_axis;
+    }
   }
 
   double sign = point[nearest_axis] < 0.0 ? -1.0 : 1.0;
@@ -430,7 +619,7 @@ inline bool PushCameraToUsableExpandedBoxFace(
   return true;
 }
 
-inline bool PushCameraToUsableExpandedBoxRayExit(
+inline bool PushCameraAlongExpandedBoxSupportingFace(
     const std::array<double, 3>& point,
     const std::array<double, 3>& requested,
     const std::array<double, 3>& half_extents,
@@ -439,6 +628,77 @@ inline bool PushCameraToUsableExpandedBoxRayExit(
   if (!pushed || excluded_axis >= point.size() ||
       !std::isfinite(margin) || margin < 0.0 ||
       !std::isfinite(minimum_distance) || minimum_distance <= 0.0) {
+    return false;
+  }
+
+  size_t outside_count = 0u;
+  size_t support_axis = point.size();
+  size_t tangent_axis = point.size();
+  for (size_t axis = 0; axis < point.size(); ++axis) {
+    if (!std::isfinite(point[axis]) || !std::isfinite(requested[axis]) ||
+        !std::isfinite(half_extents[axis]) || half_extents[axis] <= 0.0) {
+      return false;
+    }
+    if (axis == excluded_axis) {
+      continue;
+    }
+    if (std::abs(point[axis]) >= half_extents[axis]) {
+      ++outside_count;
+      support_axis = axis;
+    } else {
+      tangent_axis = axis;
+    }
+  }
+  if (outside_count != 1u || support_axis >= point.size() ||
+      tangent_axis >= point.size()) {
+    return false;
+  }
+
+  // Keep the complete route on the already safe side of the expanded box,
+  // but derive tangential progress from the current orbit request.  The old
+  // fallback changed only one discrete face coordinate and returned the same
+  // world point while yaw continued to move.  Near zero tangent, move farther
+  // out along a continuous minimum-radius arc instead of selecting another
+  // face.  No previous camera endpoint participates in this construction.
+  constexpr double kDirectionEpsilon = 1.0e-6;
+  const double support_sign = point[support_axis] < 0.0 ? -1.0 : 1.0;
+  const double tangent_delta =
+      requested[tangent_axis] - point[tangent_axis];
+  const double face_delta = std::max(
+      0.0, half_extents[support_axis] + margin -
+               std::abs(point[support_axis]));
+  const double minimum_support_delta = std::sqrt(std::max(
+      0.0, minimum_distance * minimum_distance -
+               tangent_delta * tangent_delta));
+  const double support_delta = std::max(face_delta, minimum_support_delta);
+  if (!std::isfinite(tangent_delta) || !std::isfinite(support_delta) ||
+      (std::abs(tangent_delta) <= kDirectionEpsilon &&
+       support_delta <= kDirectionEpsilon)) {
+    return false;
+  }
+
+  *pushed = point;
+  (*pushed)[support_axis] += support_sign * support_delta;
+  (*pushed)[tangent_axis] = requested[tangent_axis];
+  if (pushed_axis) {
+    *pushed_axis = support_axis;
+  }
+  return true;
+}
+
+inline bool PushCameraToUsableExpandedBoxRayExit(
+    const std::array<double, 3>& point,
+    const std::array<double, 3>& requested,
+    const std::array<double, 3>& half_extents,
+    size_t excluded_axis, double margin, double minimum_distance,
+    std::array<double, 3>* pushed, size_t* pushed_axis = nullptr,
+    size_t preferred_axis = std::numeric_limits<size_t>::max(),
+    double preferred_axis_hysteresis = 0.0) {
+  if (!pushed || excluded_axis >= point.size() ||
+      !std::isfinite(margin) || margin < 0.0 ||
+      !std::isfinite(minimum_distance) || minimum_distance <= 0.0 ||
+      !std::isfinite(preferred_axis_hysteresis) ||
+      preferred_axis_hysteresis < 0.0) {
     return false;
   }
 
@@ -468,6 +728,8 @@ inline bool PushCameraToUsableExpandedBoxRayExit(
     return false;
   }
 
+  std::array<double, 3> exit_scales{};
+  exit_scales.fill(std::numeric_limits<double>::infinity());
   double exit_scale = std::numeric_limits<double>::infinity();
   size_t exit_axis = point.size();
   for (size_t axis = 0; axis < point.size(); ++axis) {
@@ -480,6 +742,7 @@ inline bool PushCameraToUsableExpandedBoxRayExit(
             ? -(half_extents[axis] + margin)
             : half_extents[axis] + margin;
     const double scale = (face - point[axis]) / direction[axis];
+    exit_scales[axis] = scale;
     if (scale > 0.0 && scale < exit_scale) {
       exit_scale = scale;
       exit_axis = axis;
@@ -487,6 +750,22 @@ inline bool PushCameraToUsableExpandedBoxRayExit(
   }
   if (exit_axis >= point.size() || !std::isfinite(exit_scale)) {
     return false;
+  }
+
+
+  if (preferred_axis < point.size() && preferred_axis != excluded_axis) {
+    const double preferred_scale = exit_scales[preferred_axis];
+    const double extra_distance =
+        (preferred_scale - exit_scale) * horizontal_length;
+    // A scale above one would retain a face beyond the requested endpoint,
+    // which feels like a stuck camera. A negative scale means the ray now
+    // points away from the old face. Both cases release immediately.
+    if (preferred_scale > 0.0 && preferred_scale <= 1.0 &&
+        std::isfinite(extra_distance) &&
+        extra_distance <= preferred_axis_hysteresis) {
+      exit_scale = preferred_scale;
+      exit_axis = preferred_axis;
+    }
   }
 
   // Continue outward on the same requested ray when the box exit alone is
@@ -507,14 +786,50 @@ inline bool PushCameraToUsableExpandedBoxRayExit(
   return true;
 }
 
-inline std::array<int32_t, 3> SelectCameraMeshPresentationTarget(
-    bool post_native_mesh_contact,
-    const std::array<int32_t, 3>& submitted,
-    const std::array<int32_t, 3>& final_published) {
-  // A pre-configure mesh hit proves the submitted spring-arm point safe, but
-  // the native position-history ring may still publish an older point. Only a
-  // positive post-native mesh correction proves final_published safe.
-  return post_native_mesh_contact ? final_published : submitted;
+inline CameraExpandedBoxRayExit FindContainedExpandedBoxRayExit(
+    const std::array<double, 3>& point,
+    const std::array<double, 3>& direction,
+    const std::array<double, 3>& half_extents,
+    double margin, double maximum_distance) {
+  CameraExpandedBoxRayExit result;
+  if (!std::isfinite(margin) || margin < 0.0 ||
+      !std::isfinite(maximum_distance) || maximum_distance <= 0.0) {
+    return result;
+  }
+
+  constexpr double kDirectionEpsilon = 1.0e-9;
+  constexpr double kBoundaryTolerance = 1.0;
+  double exit_distance = std::numeric_limits<double>::infinity();
+  size_t exit_axis = point.size();
+  for (size_t axis = 0; axis < point.size(); ++axis) {
+    if (!std::isfinite(point[axis]) || !std::isfinite(direction[axis]) ||
+        !std::isfinite(half_extents[axis]) || half_extents[axis] <= 0.0) {
+      return result;
+    }
+    if (std::abs(point[axis]) >
+        half_extents[axis] + kBoundaryTolerance) {
+      return result;
+    }
+    if (std::abs(direction[axis]) <= kDirectionEpsilon) {
+      continue;
+    }
+    const double face = direction[axis] < 0.0
+                            ? -(half_extents[axis] + margin)
+                            : half_extents[axis] + margin;
+    const double candidate = (face - point[axis]) / direction[axis];
+    if (candidate > 0.0 && candidate < exit_distance) {
+      exit_distance = candidate;
+      exit_axis = axis;
+    }
+  }
+  if (exit_axis >= point.size() || !std::isfinite(exit_distance) ||
+      exit_distance > maximum_distance + kBoundaryTolerance) {
+    return result;
+  }
+  result.valid = true;
+  result.distance = std::min(exit_distance, maximum_distance);
+  result.axis = exit_axis;
+  return result;
 }
 
 inline std::array<int32_t, 3> TranslateCameraTargetWithFocus(
@@ -532,53 +847,6 @@ inline std::array<int32_t, 3> TranslateCameraTargetWithFocus(
         std::numeric_limits<int32_t>::max()));
   }
   return translated;
-}
-
-inline std::array<int32_t, 3> StepCameraPresentationFollow(
-    const std::array<int32_t, 3>& current,
-    const std::array<int32_t, 3>& target,
-    double response, double horizontal_maximum_step,
-    double vertical_maximum_step) {
-  if (!std::isfinite(response) || response <= 0.0 || response > 1.0 ||
-      !std::isfinite(horizontal_maximum_step) ||
-      horizontal_maximum_step <= 0.0 ||
-      !std::isfinite(vertical_maximum_step) ||
-      vertical_maximum_step <= 0.0) {
-    return current;
-  }
-
-  std::array<int32_t, 3> next{};
-  for (size_t axis = 0; axis < next.size(); ++axis) {
-    const int64_t delta =
-        static_cast<int64_t>(target[axis]) - current[axis];
-    if (std::abs(delta) <= 1) {
-      next[axis] = target[axis];
-      continue;
-    }
-    const double maximum_step =
-        axis == 1u ? vertical_maximum_step : horizontal_maximum_step;
-    double step = std::clamp(
-        static_cast<double>(delta) * response,
-        -maximum_step, maximum_step);
-    if (std::abs(step) < 1.0) {
-      step = delta < 0 ? -1.0 : 1.0;
-    }
-    const int64_t value =
-        static_cast<int64_t>(current[axis]) +
-        static_cast<int64_t>(std::llround(step));
-    next[axis] = static_cast<int32_t>(std::clamp<int64_t>(
-        value, std::numeric_limits<int32_t>::min(),
-        std::numeric_limits<int32_t>::max()));
-  }
-  return next;
-}
-
-inline bool CameraPresentationFollowInputIdle(
-    uint64_t now_ms, uint64_t last_input_ms, uint64_t grace_ms) {
-  if (!last_input_ms || !grace_ms || now_ms < last_input_ms) {
-    return false;
-  }
-  return now_ms - last_input_ms >= grace_ms;
 }
 
 inline bool CameraTargetMeetsMinimumDistance(
@@ -600,7 +868,10 @@ inline CameraSpringArmStep StepCameraSpringArm(
     double desired_distance, double hard_safe_distance,
     double previous_radius, bool obstruction_present,
     uint32_t previous_clear_ticks,
-    uint32_t previous_blocked_release_ticks) {
+    uint32_t previous_blocked_release_ticks,
+    double previous_blocked_candidate_distance = 0.0,
+    uint64_t previous_blocker_key = 0,
+    uint64_t current_blocker_key = 0) {
   CameraSpringArmStep result;
   if (!std::isfinite(desired_distance) || desired_distance <= 0.0) {
     return result;
@@ -610,7 +881,8 @@ inline CameraSpringArmStep StepCameraSpringArm(
   const double previous = std::clamp(
       previous_radius, 0.0, desired_distance);
   constexpr double kReleaseStep = 64.0;
-  constexpr uint32_t kClearTicksBeforeRelease = 2u;
+  constexpr double kBlockedCandidateRegressionTolerance = 2.0;
+  constexpr uint32_t kClearTicksBeforeRelease = 4u;
   constexpr uint32_t kBlockedTicksBeforeRelease = 3u;
 
   if (safe + 0.5 < previous) {
@@ -619,31 +891,118 @@ inline CameraSpringArmStep StepCameraSpringArm(
     result.radius = safe;
     result.clear_ticks = 0;
     result.blocked_release_ticks = 0;
+    result.blocked_candidate_distance = safe;
+    result.blocker_key = obstruction_present ? current_blocker_key : 0;
   } else if (obstruction_present) {
     // A boolean native volume boundary can alternate between adjacent portal
     // or prop samples even while the camera and input are unchanged. Do not
     // follow a one-frame outward sample: require a short run of consistently
     // available space first. A genuinely retracting wall/block still releases
     // at the bounded rate after confirmation.
-    if (safe > previous + 0.5) {
-      result.blocked_release_ticks = std::min(
-          previous_blocked_release_ticks + 1u, 120u);
+    const bool same_blocker = current_blocker_key != 0 &&
+                              current_blocker_key == previous_blocker_key;
+    const bool outward_space = safe > previous + 0.5;
+    const bool candidate_monotonic =
+        previous_blocked_release_ticks == 0u ||
+        safe + kBlockedCandidateRegressionTolerance >=
+            previous_blocked_candidate_distance;
+    if (outward_space) {
+      result.blocked_release_ticks =
+          same_blocker && candidate_monotonic
+              ? std::min(previous_blocked_release_ticks + 1u, 120u)
+              : 1u;
     }
     result.radius = previous;
     if (result.blocked_release_ticks >= kBlockedTicksBeforeRelease) {
       result.radius = std::min(safe, previous + kReleaseStep);
     }
     result.clear_ticks = 0;
+    result.blocked_candidate_distance = safe;
+    result.blocker_key = current_blocker_key;
   } else {
-    // Tolerate one missing scene snapshot. The second complete clear query
-    // begins a bounded spring return toward the desired endpoint.
+    // A missing scene snapshot or a flickering native portal must not count as
+    // proof that the previous contact has gone away. Four complete clear
+    // source ticks are required before bounded recovery begins. The previous
+    // blocker identity remains pending until the arm is fully restored.
     result.clear_ticks = std::min(previous_clear_ticks + 1u, 120u);
     result.blocked_release_ticks = 0;
     result.radius = previous;
     if (result.clear_ticks >= kClearTicksBeforeRelease) {
       result.radius = std::min(desired_distance, previous + kReleaseStep);
     }
+    result.blocked_candidate_distance =
+        previous_blocked_candidate_distance;
+    result.blocker_key = previous_blocker_key;
   }
   result.radius = std::clamp(result.radius, 0.0, safe);
+  if (!obstruction_present &&
+      result.radius + 0.5 >= desired_distance) {
+    result.blocked_candidate_distance = desired_distance;
+    result.blocker_key = 0;
+  }
+  return result;
+}
+
+inline CameraPivotRelativeInterpolation InterpolateCameraPivotRelative(
+    const std::array<double, 3>& previous_focus,
+    const std::array<double, 3>& previous_position,
+    const std::array<double, 3>& current_focus,
+    const std::array<double, 3>& current_position, double phase) {
+  CameraPivotRelativeInterpolation result;
+  if (!std::isfinite(phase)) {
+    return result;
+  }
+  phase = std::clamp(phase, 0.0, 1.0);
+  std::array<double, 3> previous_offset{};
+  std::array<double, 3> current_offset{};
+  for (size_t axis = 0; axis < 3u; ++axis) {
+    if (!std::isfinite(previous_focus[axis]) ||
+        !std::isfinite(previous_position[axis]) ||
+        !std::isfinite(current_focus[axis]) ||
+        !std::isfinite(current_position[axis])) {
+      return result;
+    }
+    result.focus[axis] = previous_focus[axis] +
+                         (current_focus[axis] - previous_focus[axis]) * phase;
+    previous_offset[axis] = previous_position[axis] - previous_focus[axis];
+    current_offset[axis] = current_position[axis] - current_focus[axis];
+  }
+  const double previous_horizontal =
+      std::hypot(previous_offset[0], previous_offset[2]);
+  const double current_horizontal =
+      std::hypot(current_offset[0], current_offset[2]);
+  const double previous_radius =
+      std::hypot(previous_horizontal, previous_offset[1]);
+  const double current_radius =
+      std::hypot(current_horizontal, current_offset[1]);
+  if (!std::isfinite(previous_radius) || !std::isfinite(current_radius) ||
+      previous_radius <= 0.0 || current_radius <= 0.0) {
+    return result;
+  }
+  constexpr double kPi = 3.14159265358979323846;
+  constexpr double kTwoPi = 2.0 * kPi;
+  const double previous_yaw =
+      std::atan2(previous_offset[0], previous_offset[2]);
+  const double current_yaw =
+      std::atan2(current_offset[0], current_offset[2]);
+  const double yaw_delta = std::remainder(
+      current_yaw - previous_yaw, kTwoPi);
+  const double previous_pitch =
+      std::atan2(previous_offset[1], previous_horizontal);
+  const double current_pitch =
+      std::atan2(current_offset[1], current_horizontal);
+  result.yaw = previous_yaw + yaw_delta * phase;
+  result.pitch = previous_pitch +
+                 (current_pitch - previous_pitch) * phase;
+  result.radius = previous_radius +
+                  (current_radius - previous_radius) * phase;
+  const double horizontal = std::cos(result.pitch) * result.radius;
+  result.position = {
+      result.focus[0] + std::sin(result.yaw) * horizontal,
+      result.focus[1] + std::sin(result.pitch) * result.radius,
+      result.focus[2] + std::cos(result.yaw) * horizontal};
+  result.valid = std::isfinite(result.position[0]) &&
+                 std::isfinite(result.position[1]) &&
+                 std::isfinite(result.position[2]);
   return result;
 }

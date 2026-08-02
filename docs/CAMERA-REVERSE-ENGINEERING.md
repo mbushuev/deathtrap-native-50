@@ -1250,3 +1250,979 @@ is reversed. Version `0.0.129` sets `CameraRelativeInvertY=1`. This negates only
 the longitudinal stick component before the camera-space heading calculation;
 screen-left/right, native forward magnitude and the dispatcher writer are
 unchanged.
+
+## 0.0.130 stable source-tick chase integration
+
+The post-`0.0.129` stability audit isolates a deterministic oscillation before
+collision. `StepCameraChase` described its continuous system as critically
+damped but advanced it with a semi-implicit Euler step. At the shipped 60 ms
+source period and 2 Hz response the discrete system has approximate poles
+`+0.6755` and `-0.7520`; the negative pole alternates position error and
+velocity for a fixed target. The old one-dimensional 0-to-100 step begins
+`56.849, 52.503, 81.712, 77.271`, proving that ordinary open-space follow can
+produce A/B source poses without a wall or scene mesh.
+
+Version `0.0.130` replaces only that integrator with a backward-Euler solve of
+the same critically damped position/velocity system. Its denominator
+`1 + 2*omega*dt + omega^2*dt^2` remains positive for the native step. Speed and
+acceleration limits are applied independently per axis instead of by one 3D
+vector budget, so horizontal course correction no longer delays vertical
+follow. A sampled target reversal stops the obsolete velocity at the boundary,
+and target crossing settles exactly rather than overshooting.
+
+The standalone test now requires monotonic fixed-target convergence, no
+opposite velocity after a 180-degree target reversal, bounded lag behind a
+constant-velocity target, and identical vertical response with and without a
+large simultaneous horizontal error. Mesh collision, spring recovery, retail
+`0x2F380` history, temporal chord selection and D3D presentation validation are
+deliberately unchanged so the first runtime result identifies this phase alone.
+
+The `0.0.130` runtime validates that isolation. For ordinary adjacent samples
+with player motion between 8 and 150 units and zero right-stick input, relative
+camera motion changed as follows versus the final `0.0.129` run:
+
+- median `41.0 -> 3.0` units per source tick;
+- p95 `222.3 -> 87.6`;
+- p99 `701.6 -> 226.7`;
+- adjacent opposite-direction deltas above 20 units `173 -> 30`.
+
+The temporal camera-chord guard fell from 102 unique source ticks to four even
+though its code was unchanged. The prior chase integrator was therefore a
+confirmed upstream cause of both exact source-pose instability and unsafe
+synthetic chords.
+
+## 0.0.131 rejected native position-history seeding
+
+The same `0.0.130` run isolates the next owner. Across 222 records where both
+native and scene-mesh obstruction flags are clear, submitted-to-published
+distance still has median 148.5, p95 429.9 and maximum 495.3 units. Separating
+the path gives median 110.8 for submitted-to-desired shaping and 103.4 for
+desired-to-published history publication. Stable custom chase output is still
+smoothed a second time by retail absolute-world history.
+
+Version `0.0.131` tested transactional writes to the cached average at `+0x20C`
+and four samples at `+0x218` before the one `0x2F380` call. The runtime rejects
+the hypothesis. All 433 diagnostic calls reported `history_seeded=1`, but the
+177 clear-flag records retained submitted-to-published median 177.9, p95 431.9
+and maximum 509.8. The preceding `0.0.130` values were 148.5, 429.9 and 495.3.
+
+Instruction-level reinspection finds the missed reset. `0x2F380` first calls
+`0x2F340`; that immediately calls `0x2DC40 -> 0x2DC80`. At `0x2DCAF`,
+`0x2DC80` passes controller `+0x204` to `0x2DE10`, which resets the ring's
+current and oldest pointers to its first slot. It does not make prewritten
+samples active. Only afterwards does `0x2F380` call `0x2DEF0`; `0x2EFFF`
+inserts the current native placement into the now-empty ring and publishes
+that one active sample. Pre-seeding bytes before `0x2F380` is therefore a
+no-op, and `0.0.132` removes it completely.
+
+The clear flags in the overlay describe its pre-native radial and scene-mesh
+queries; they do not assert that retail room/sector placement must equal the
+submitted point. Submitted-to-published distance can no longer be labelled a
+persistent second smoother without a same-stage measurement. The earlier
+Phase 2 interpretation is withdrawn.
+
+## 0.0.132 pivot-relative supporting-axis hysteresis
+
+The `0.0.131` trace does expose a separate deterministic contact problem.
+Unidentified scene-mesh resource `10017` has 49 sweep records, including 21
+contained/near-pivot non-radial escapes. Those 21 samples select axis 0 seven
+times, axis 1 nine times and axis 2 five times, with nine adjacent supporting-
+axis changes. Its render-node bounds move by as much as 105.1 units per source
+tick. The log contains no semantic object name, so this proves an animated or
+transform-changing scene node, not specifically a gameplay block. Near an OBB
+corner, transform or ray changes can exchange the two numerically nearest
+faces and move the camera between different escape solutions.
+
+Version `0.0.132` stores only node/resource/axis identity for this exceptional
+contact. For the same current object, the prior axis remains eligible while a
+competing exit improves the escape distance by no more than the 96-unit camera
+volume radius. A larger improvement, a ray which no longer reaches that face,
+a changed object, or return to ordinary radial/clear contact releases the
+preference immediately. The endpoint is never cached: it is rebuilt on the
+current requested ray from the current focus and current OBB transform. This
+preserves dynamic-block motion and orbit response and cannot recreate the
+absolute-point anchor rejected in `0.0.107`. Native walls/floors, ordinary
+radial spring contraction, thin-object classification and authored-camera
+arbitration are unchanged.
+
+## 0.0.133 contact-aware spring recovery
+
+The `0.0.132` runtime trace showed that supporting-axis persistence works for
+several stationary render resources but does not by itself eliminate global
+camera reversals. The spring-release counter could still accumulate across a
+different blocker or a regressing sequence of measured safe distances.
+
+Version `0.0.133` attaches blocked outward evidence to a launch-local blocker
+key. Native room geometry uses a reserved key; scene-mesh contacts mix the
+render node and resource handles. A key change or clearance regression restarts
+confirmation. Clear-space recovery begins only after four complete source
+ticks, while every inward safety contraction remains immediate.
+
+## 0.0.134 post-native scalar release gate
+
+The final `0.0.133` sequence isolates a cross-stage A/B loop. Native room
+geometry permitted the arm to grow from 580.1 through 644.1 to 708.1. Retail
+`0x2F380` shifted the 708.1 submission onto scene-mesh resource `12613`, whose
+post-native correction returned the published arm to 580.1. The pre-native
+sweep did not see that resource, so native blocker confirmation accumulated
+again and repeated the cycle every four source ticks.
+
+Version `0.0.134` feeds post-native acceptance back into recovery without
+retaining a position. It stores only a verified radius and launch-local blocker
+key. After stable samples it configures one bounded larger radius as an
+internal probe; the scalar ceiling advances only if the resulting retail
+position passes the post-native mesh sweep. A rejected probe is committed back
+inside the same source tick, before presentation snapshots are captured.
+
+## 0.0.135 contained-escape publication ownership
+
+The `0.0.134` run validates ordinary post-native recovery, including a complete
+267.9-to-1399.5 sequence of accepted bounded probes. At contained/near-pivot
+contact with resource `12613`, however, the current-transform OBB escape near
+619 units was still submitted through retail history. The post-native branch
+then intermittently classified the older shifted point as an ordinary radial
+contact near 128 units. The two stages alternated their publications.
+
+Version `0.0.135` still calls retail configure exactly once, but after native
+room validation it directly commits the current source tick's OBB escape as
+the final translation. The endpoint is not stored; the next tick recomputes it
+from the live pivot, requested ray and object transform. Post-native contact
+remains diagnostic on this exceptional path and cannot seed a radial gate from
+the stale intermediate retail-history point.
+
+## 0.0.136 post-native gate lifetime
+
+The `0.0.135` trace records seven successful contained-escape authoritative
+commits and no failures, removing the preceding 619/128 cycle. A smaller loop
+remained where resource `12613` established a post-native ceiling near 313,
+the current native obstruction clamped it near 269, and the gate immediately
+declared that temporary limit complete. The next tick rediscovered the same
+post-native contact.
+
+Version `0.0.136` does not release a scalar post-native gate merely because it
+reached a shorter pre-native safe radius. The complete desired arm must be
+pre-native clear and its verified ceiling must reach the desired distance.
+This preserves one contact lifetime across the native and scene-mesh stages
+without retaining any world-space endpoint.
+
+## 0.0.137 pivot-relative synthetic phases
+
+The `0.0.136` trace validates the corrected contact lifetime: the scalar gate
+has one legitimate OFF event, relative-camera median improves from 57.7 to
+13.6 units and direction reversals fall from 26 to 14. The remaining temporal
+guards are no longer spring ON/OFF events. They arise when two independently
+safe exact endpoints are joined by a Cartesian interpolation chord that enters
+a scene mesh.
+
+Version `0.0.137` captures the live mode-3 focus in each exact scene snapshot.
+For modern third person it interpolates focus, shortest-path yaw, pitch and
+radius, then reconstructs the synthetic camera around that pivot. The current
+native room-volume predicate and stable render-mesh sweep validate the complete
+synthetic ray. If no safe intermediate exists, both synthetic phases use the
+current exact safe translation while retaining interpolated rotation and all
+ordinary actor/UI interpolation. The old previous-at-1/3/current-at-2/3
+translation split remains only as a fallback for non-modern cameras or missing
+pivot data.
+
+The runtime test rejects translation-only fallback as incomplete. The old
+Cartesian guard disappears, but the D3D detector still rejects 132 synthetic
+Presents. At ticks 765 and 909, the guarded phases use the current accepted
+origin while retaining an interpolated orientation; both phases introduce new
+black cells. Version `0.0.138` copies the complete current world and local
+camera transforms when the pivot-relative arm is unsafe. This preserves one
+coherent accepted view for both synthetic phases without storing another
+collision endpoint.
+
+The `0.0.138` trace separates native and render-mesh failure cleanly: 1,122 of
+1,128 guarded phases are native-clear, while 1,098 name render resource 12613.
+Version `0.0.139` therefore attempts the missing intermediate collision solve
+instead of immediately cutting to the exact-current transform. It shortens the
+synthetic pivot ray against native geometry, clips it against stable scene
+meshes, and then reruns both full-ray validations. The result exists only on
+that synthetic render call; source-tick collision radius, blocker identity and
+published controller history are untouched.
+
+The `0.0.139` runtime reduces unresolvable synthetic fallbacks from 1,128 to
+97 phases. It resolves 420 phases locally and reduces D3D rejects on fallback
+ticks from 252 to 10. The remaining 206 rejects include 72 records on ticks
+with neither a synthetic clip nor fallback, so the last-exact partial-black
+comparison is now a separate presentation question. Version `0.0.140` records
+each rejected midpoint against the following exact sample of the same tick,
+including persisted and recovered collapsed cells. Camera output and rejection
+policy remain unchanged for this diagnostic run.
+
+The audit records 4,406 midpoint-collapsed cells, of which 3,425 recover in the
+following exact frame. The clearest midpoint-only failure is not missing render
+visibility: synthetic scene clipping accepts radii of 4.2--113.7 units on 644
+of 696 clip records. At ticks 654--669 a 173--216 unit interpolated arm is
+reduced to 4.5--8.1 units and passes both point/ray predicates, placing the view
+at the followed pivot. Version `0.0.141` rejects any phase-local result below
+the existing 120-unit `kThirdPersonMinimumCameraDistance`; it does not invent a
+new presentation margin or change source-tick contact state.
+
+The `0.0.141` audit shows that safe geometric endpoints alone are insufficient
+for synthetic presentation. Midpoint-only black cells recover at 91.3% on
+clipped phases and 84.5% even on clear pivot-relative phases, but at only 21.7%
+when the complete exact-current camera is used. The cache path at `0x3860`
+explains the split: owner stamp `+0x00` normally prevents its camera-dependent
+tail from running again after the exact pre-capture refresh. Version `0.0.142`
+temporarily makes that stamp differ from the unchanged engine frame and calls
+the original routine after installing the synthetic transform. The mode-3
+callback returns through its duplicate-source-tick guard; `0x3A980`, `0x3AC00`,
+the published matrix copy, `0x38E80` and `0x3B0C0` rebuild render state. The
+exact scene is restored and the same cache path is rerun before leaving the
+synthetic transaction.
+
+The `0.0.142` runtime disproves the assumption that this same-frame replay is
+render-isolated. It introduces continuous visible player jitter even though
+the camera-owner stamp reaches the current engine frame and the existing
+player-state rollback sees no covered-field mutation. State below `0x38E80` or
+`0x3B0C0` therefore escapes the known transaction. Version `0.0.143` removes
+all forced `0x3860` calls and restores the `0.0.141` presentation path. Future
+midpoint cache work must call a narrower verified render-only leaf or map and
+restore the complete mutated cache state first.
+
+The `0.0.143` runtime confirms the player-render jitter disappears after that
+replay is removed. It also shows that synthetic modern-camera transforms are
+the incompatible side of the boundary: same-tick midpoint-black recovery is
+89.6% for clipped synthetic phases and 84.4% for clear pivot-relative phases,
+but only 4.9% for the complete current exact transform. Version `0.0.144`
+therefore presents the modern camera atomically from the current exact source
+snapshot in both synthetic phases. Scene actors and animation remain
+interpolated; no camera callback or cache writer is replayed.
+
+Runtime `0.0.144` shows that cache compatibility alone is not sufficient for a
+normal synthetic phase: a current-tick camera viewing an interpolated player
+root produces visible player-relative shake and reduced smoothness. Version
+`0.0.145` restores pivot-relative camera interpolation and retains
+exact-current only as the existing unsafe-phase fallback.
+
+The run also exposes the source of long-standing stepped arm expansion. After
+each accepted 64-unit post-native probe, the caller reset the clearance counter
+and waited three more 60 ms source ticks. An accepted probe has already passed
+the native endpoint validation and the complete post-native scene-mesh pass,
+so `0.0.145` preserves release readiness after acceptance and checks the next
+bounded step on the immediately following source tick. Rejection/contact still
+resets readiness to zero.
+
+Runtime `0.0.145` validates the corrected cadence: the player remains visually
+stable, pull-back is smooth, and five logged recovery sequences advance by
+consecutive checked steps to `desired_clear`. Two candidates are rejected
+by the scalar gate and native endpoint validation reports no failure. This does
+not establish that other contact topologies are cycle-free.
+
+The same run reproduces a distinct player/flag/wall squeeze on resource
+`12613`. One contact generation commits `-70/400/15148` 39 times with stationary
+focus while requested orbit rotates, proving a fixed geometric anchor rather
+than scalar release jitter. Other passages switch the same resource's escape
+axis from 0 to 2 and back, with radius discontinuities `203 -> 561` and
+`679 -> 207`. Sixteen axis-2 escape targets are also changed by native wall
+clipping before the exceptional pre-native commit, so the scene-mesh face and
+published wall-safe point are not the same solution.
+
+The defect is in the outside-pivot fallback of
+`CameraMeshExpandedBoundsPushout`: `PushCameraToUsableExpandedBoxFace` retains
+the pivot coordinate and changes only one discrete face coordinate selected
+from the preceding camera. It does not actually slide with requested orbit.
+The next implementation must preserve only the safe supporting coordinate and
+derive the tangent coordinate from the current request, with the previous
+camera used only to choose a sign at the zero-direction singularity. This is a
+stateless geometric correction, not another contact threshold or retained
+camera endpoint.
+
+Version `0.0.146` implements that stateless construction. A pivot outside
+exactly one horizontal expanded-OBB face keeps its support coordinate on the
+safe side, but its tangent coordinate comes directly from the current requested
+orbit. When the requested tangent approaches zero, the support coordinate moves
+outward along a continuous minimum-radius arc; it never selects an unrelated
+opposite face. A contained pivot uses the true first ray exit without the old
+preferred-axis override. The resulting endpoint still passes the existing
+scene-mesh and native wall validation, and no spring/release timing changes.
+
+Runtime rejects `0.0.146`: the user reports increased jitter. The final
+captured failure does not invoke its new outside-face path at all. With focus
+fixed at `-606/425/14603` and orbit fixed at `541/1135/14979`, camera probes
+repeat `-440/535/14829 -> -505/492/14740 -> -443/537/14831 ->
+-509/491/14738`. On one half of the cycle, post-native resource `12613`
+contact contracts a roughly 302-unit retail publication to 179--183 units and
+commits it exactly. On the following apparently clear configure, the scalar
+gate remains at that same short radius but no exact commit occurs; a queued raw
+desired/history point later becomes visible at roughly 302 units. The next
+post-native pass clips it again. This is the deterministic delayed-history
+two-cycle previously characterized in `0.0.104`, not spring release or new OBB
+geometry.
+
+Version `0.0.147` removes the rejected `0.0.146` slide and closes that specific
+ownership gap inside the already-established post-native scalar gate. After a
+currently clear configure it examines the native resolved point, raw desired
+point, cached history average and all four position samples. If any pending
+point intersects a qualified scene mesh, release readiness cannot advance. A
+non-probe tick commits the current submitted endpoint; a rejected probe rebuilds
+the preceding verified ceiling on the current focus-to-orbit ray. The endpoint
+must meet the 120-unit minimum and independently pass the native volume and
+complete scene-mesh arm queries before it may normalize controller state,
+history, node matrices and the published camera. Thus the writer is current-
+tick and focus-relative; no previous world-space endpoint is retained.
+
+The `0.0.147` runtime confirms all 108 pending-history normalizations succeed
+and removes the preceding exact-source A/B sequence. Its final failure is a
+different presentation ownership contradiction. Focus, player and input are
+stationary. Every exact source tick publishes the pre-native near-pivot escape
+`-205/400/15283` at radius 725.7. The post-native sweep of that same unchanged
+point hits resource `12613` triangle 10 at radius 143 and commits
+`-588/400/14833` at radius 134.8. The exceptional pre-native branch then
+immediately commits the 725.7 point again. Both 1/3 and 2/3 pivot-relative
+presentation phases repeat the same 725.7-to-134.8 collision clip, while the
+exact phase returns to 725.7. The visible cycle is therefore short/short/long
+inside every source interval; it is neither history delay nor spring release.
+
+Version `0.0.148` gives the newer post-native evidence veto power over the
+exception. If retail published the submitted endpoint unchanged and its full
+focus-to-camera sweep selected a different mesh-safe point, the submitted OBB
+escape is explicitly disproved and cannot overwrite that correction. When
+retail instead publishes a different delayed-history point, the result does
+not test the current submitted escape and the `0.0.135` stale-history exception
+remains intact. This rule compares exact endpoints and stage provenance; it
+introduces no distance threshold, retained target or release delay.
+
+The `0.0.148` trace proves the veto fires 109 times, but exact probes still
+alternate `-143/400/15221` at radius 489.4 with `-274/400/15042` at radius
+267.6. On the intervening ticks retail initially publishes the preceding short
+history point, so the current long submission is not directly tested and the
+exception commits it. The following tick tests and rejects it again. The
+underlying state error is earlier: selection unconditionally disables an
+active post-native scalar gate whenever a non-radial escape is available, even
+when both diagnostics identify the same node/resource blocker.
+
+Version `0.0.149` gives the verified scalar gate priority over a non-radial
+escape with the identical launch-local blocker key. Its endpoint is rebuilt
+from current focus/orbit and the verified ceiling, so this adds no retained
+position. Existing bounded post-native probes remain the only route outward.
+A different blocker key, including changed native-wall participation, releases
+that ownership and permits a new escape immediately.
+
+## Exact collision-pose ownership (0.0.150--0.0.152)
+
+Version `0.0.150` makes rejected post-native probes transactional, and
+`0.0.151` keeps simultaneous pre- and post-native blockers in one constraint
+set. The latter removes the persistent exact-source two-point loop, but its
+runtime exposes a distinct pose split. With player `-712/0/14368` and focus
+`-712/400/14368`, the published translation remains at
+`-517/622/14372` for dozens of source ticks while the requested orbit completes
+full revolutions and the camera matrix basis changes every tick. The pivot is
+not lost in controller memory. A contact-only exact commit replaces node and
+matrix translation, while the angles and basis still describe the different
+position produced by native history. The view consequently appears to rotate
+around an invisible off-player point.
+
+Static disassembly identifies the missing owner precisely. `0x2F380` reaches
+`0x2DEF0 -> 0x2E950 -> 0x30790`. `0x30790` calls the pure leaf
+`Dungeon.dll+0x30730(camera_position, look_target, angles)`, stores the three
+results at camera node `+0x18/+0x1C/+0x20`, and the ordinary camera-cache tail
+then runs `0x3A980 -> 0x3AC00` before copying node world matrix `+0x9C` to the
+published camera matrix. The earlier `0.0.142` failure came from replaying the
+whole `0x3860` cache path, including camera callbacks and downstream render
+caches; it does not prohibit use of this narrow orientation leaf inside the
+existing callback.
+
+Version `0.0.152` therefore extends only
+`CommitImmediateSpringArmContraction`. For an already-authorized exact
+scene-mesh contraction it calls `0x30730` with that exact committed position
+and the current focus, then writes translation and the resulting node angles
+as one source-tick pose. The untouched cache tail constructs matching local,
+world and published bases. No cache replay, second configure call, retained
+world endpoint, new collision threshold or change to clear/native/authored
+camera ticks is introduced.
+
+The `0.0.152` runtime rejects the assumed look target. Static reinspection of
+the complete caller shows that `0x30790` receives a resolver-selected target
+from `0x2DF60/0x2E950` and may apply authored corrections before it invokes
+`0x30730`; the modern focus is not a proven substitute. The direct leaf call
+ran 542 times and amplified the fixed-boundary failure while leaving the
+underlying translation/history topology unchanged.
+
+Version `0.0.153` removes only that angle writer and changes three proven
+collision transactions:
+
+1. When the pivot lies in a camera-radius-expanded mesh OBB and a triangle
+   reports `initial_overlap`, compute the exact ray interval inside the OBB.
+   Discard only that contained interval, then sweep the remaining segment
+   against the actual triangles. A clean exit is not a collision; a later
+   re-entry remains an ordinary blocking contact.
+2. Before an exact contact commit, compare the complete controller position
+   transaction, camera-node translation, local/world translations and
+   published translation with the accepted target. An already normalized
+   boundary returns `UNCHANGED` and does not rewrite the same collision state.
+3. A post-native outward probe advances its scalar ceiling only to the radius
+   which was actually published and passed the post-native mesh sweep. A
+   submitted-but-delayed 64-unit request cannot release the gate before its
+   native publication exists.
+
+No world-space camera endpoint is retained. Native room, floor, sector and
+authored-camera orientation ownership remain in the original path.
+
+The verified x86 `0.0.153` DLL SHA-256 is
+`2FEE79A4898F4112CB94DC049A7558CE12FC3AEA2F1A0542AD042CCB2034EC25`.
+
+## 0.0.153 runtime correction and exact native pose capture
+
+The 0.0.153 log disproves its primary runtime diagnosis. Pivot-exit executes,
+but the reproduced fixed origins are ordinary `overlap=0` near-pivot escapes.
+For stationary focus `-597/400/14730`, exact publications remain fixed for
+21--52 source records while the desired orbit covers 2,100--3,470 units.
+Resources 12613 and 11432 both exhibit the pattern. The post-native sweep uses
+the previous accepted camera as its outside-pivot reference, so its old
+expanded-face fallback recreates the absolute anchor even though the current
+request changes.
+
+The same trace identifies a separate recovery-state defect. A speculative
+gate probe can publish substantially inside its previous verified ceiling
+without a scene-mesh hit. The conservative inward publication is valid, but
+retaining three clear ticks lets the next tick immediately probe outward and
+turn the delayed placement into a visible return jerk.
+
+Version 0.0.154 therefore:
+
+- replaces only the outside-one-face fallback with a current-orbit tangent
+  slide and continuous minimum-radius support arc;
+- resets post-native clear evidence when the native publication regresses;
+- hooks the pure `0x30730` leaf as a read-through capture boundary during
+  `0x2F380`. Its actual second argument is saved for that configure call. An
+  exact correction then invokes the original leaf with the corrected position
+  and captured resolver-owned target, installing the resulting angles with
+  the corrected translation.
+
+This differs from rejected 0.0.152: the patch does not substitute the modern
+focus for the native target. It also differs from rejected full-cache replay:
+no callback, scene cache or render-cache tail is called a second time.
+
+The verified installed x86 `0.0.154` DLL SHA-256 is
+`3A0936BF42AD7CEE80AAE7FE9E245263C207EC41FE439E96932B18C5E3DBB4EC`.
+The release build and both executable tests passed; the installer CRLF test
+also passed. Runtime validation is still required for the flag and narrow
+corner cases.
+
+## 0.0.154 runtime: rollback state became the anchor
+
+The final 0.0.154 trace proves that preserving the exact current publication
+was correct only as a one-tick visual result. Copying it into the resolver's
+future desired, average and complete four-sample history was not rollback: it
+destroyed every new tangential sample. The trace contains 290 such
+normalizations, zero idempotent transactions and 30 runs of a fixed published
+position while the requested orbit continues moving.
+
+Version 0.0.155 separates those time domains. Unsafe pending history defers
+gate release and keeps the current mesh-clear publication visible, but remains
+owned by the next native resolver tick and is not rewritten. A pending sample
+that later becomes current is still checked by the existing post-native scene
+mesh pass before presentation. Exact full-history commits remain available
+for actual new contractions; they are no longer used merely because a future
+sample differs from the safe current publication.
+
+The verified installed x86 `0.0.155` DLL SHA-256 is
+`387FAC51C52D5F252A2B0DD2DDC3D4F28256F53481475E84DFA820E13C096745`.
+
+## 0.0.155 runtime timing and 0.0.156 field ownership
+
+Runtime disproves the final 0.0.155 assumption. A deferred unsafe desired
+position is not harmless future state: `0x2F380` consumes it on the following
+source tick. In the completed trace, 142 of 146 deferrals become a mesh commit
+on the next camera record. Current publications therefore repeat in pairs and
+then jump by as much as 387.2 units even with a stationary focus/orbit.
+
+The confirmed position map is: resolved `controller+0x1DC` (index 0), desired
+`+0x1F4` (index 1), cached average `+0x20C` (index 2), and the four 12-byte ring
+entries beginning at `+0x218` (indices 3--6). Version 0.0.156 sweeps all seven
+but treats index 0 as read-only current publication. Each colliding future
+index carries its own address, original point, mesh-clipped point and resource
+diagnostic. The replacement is written only after native volume and repeat
+mesh validation; failure holds only that address at the verified current
+publication. This eliminates the two rejected extremes: full history collapse
+from 0.0.154 and unsafe future preservation from 0.0.155.
+
+The verified installed x86 `0.0.156` DLL SHA-256 is
+`592047A0871BCC6F3E423C672784DC4FD2B0A6E859D150C17C73ED294D9568C5`.
+
+## 0.0.156 runtime and the actual pre-history writer
+
+The 0.0.156 log contains 152 targeted three-field repairs with zero write
+failures. Nevertheless, all 152 next native configure calls recreate an
+initial publication exactly equal to the preceding unsafe candidate and all
+152 enter the mesh-commit path. Final defer-to-next-final jumps >=20 fall from
+102 to three, so targeted sanitation is a useful idempotent boundary fallback,
+but it does not own candidate creation.
+
+The exact instruction path is now confirmed. `0x2F380` calls `0x2F340`, whose
+first operation is `0x2DC40`; `0x2DC80` then initializes five history objects,
+including the four-sample position ring at `controller+0x204`. `0x2DEF0` calls
+`0x2E950 -> 0x2EDC0`. At `0x2EFFF`, `0x2EDC0` invokes
+`0x2DE30(controller+0x204, controller+0x1F4)`. The returned cached average is
+copied to the camera node at `0x2F015..0x2F025`, immediately before endpoint
+sector resolution and the native orientation/publication tail.
+
+Version 0.0.157 detours the generic `0x2DE30` but changes its input only when a
+thread-local modern `0x2F380` scope is active and the ring address equals that
+scope's controller plus `0x204`. The already-native-resolved candidate is
+scene-clipped before insertion. Native-volume and endpoint validation are
+repeated after any scene correction. Every other call uses the original
+arguments, and validation failure deliberately falls through to the existing
+post-native exact correction.
+
+The installed/build/dist x86 `0.0.157` DLL SHA-256 is
+`D4FB37A0E3F8A875378451C342DA97CDB79B7BEE85B2DC0A32EB01D0659E4CB0`.
+
+## 0.0.157 runtime: two camera clocks and 0.0.158
+
+The completed 0.0.157 x2 session proves that the remaining flag jitter has
+two owners. All 78 synthetic samples are phase `0.500`; long runs reject every
+midpoint pivot ray and select `current_transform_both`. The world and player
+remain at the midpoint while the camera advances to the future exact endpoint,
+producing an early jump followed by a hold. Fixed focus/orbit source records
+also publish changing positions, so presentation interpolation is not the only
+source.
+
+A zero `ConfiguredSubframes()` value also returned from initialization before
+resolving `Dungeon.dll` or installing any game hook. XInput, modern camera,
+first person, selector and event support therefore accidentally depended on
+x2/x3. Version 0.0.158 always initializes the supported gameplay patch and
+uses `g_subframes` only to gate synthetic passes.
+
+For a modern configure, the endpoint already accepted by the native room
+volume and current scene-mesh spring arm is revalidated at `0x2DE30` and
+supplied to the exact `controller+0x204` position ring. Native sector
+resolution and its resolver-owned look target/orientation remain downstream;
+position history no longer creates a second spring-arm endpoint. The old
+post-native scalar gate is not fed back while this deterministic insertion
+hook is active, while positive post-native correction remains fail-closed.
+
+Presentation builds a read-only phase scene from the already interpolated node
+hierarchy and bounds. It interpolates focus/yaw/pitch/radius, then composes
+native room clipping with the complete mesh solver, including the proven
+contained-pivot exit, against phase-local transforms. If no valid
+minimum-distance phase pose exists, it holds the preceding complete source
+pose until exact presentation instead of using the future exact pose at the
+midpoint. Runtime validation is pending.
+
+The installed/build/dist x86 `0.0.158` DLL SHA-256 is
+`539CF94C508D19F4C1337C621310CD87A91B87E10F8101BE2A405B6978A9BF85`.
+
+## 0.0.158 F11 isolation and 0.0.159 source-rate presentation
+
+The completed 0.0.158 x3 session is
+`<game-directory>\logs\deathtrap-native-20260801-211416-811-pid32636.log`.
+It contains four direct F11 disable/enable pairs. While synthetic passes are
+disabled the stationary flag case stops producing camera changes. Immediately
+after every enable, two valid source positions begin alternating once per
+engine tick. In the final sequence those positions are approximately
+`-459/497/14774` and `-627/617/14777`; 710 phase clip records repeatedly
+contract alternating 235/304-unit input radii to 166 units against resource
+12613. This is a presentation-to-source feedback loop, not an under-damped
+scalar spring.
+
+The same runtime also invalidates 0.0.158's unconditional position-ring
+replacement. Its pre-history hook could substitute the submitted endpoint
+without a positive scene-mesh contact. That bypassed the retail ring's ordinary
+wall and room-volume shaping and allowed camera travel through walls.
+
+Version 0.0.159 restores the narrow 0.0.157 ownership rule: only a positively
+intersecting qualified mesh candidate is eligible for pre-history replacement,
+and the replacement is validated against native volume before insertion. The
+post-native scalar gate remains available. Synthetic camera presentation no
+longer interpolates polar orbit state or runs a phase collision solve. It keeps
+the preceding complete exact matrix and translates it only by the interpolated
+focus delta. Native room visibility plus phase-local endpoint occupancy can
+reject that carried origin and select a complete exact fallback, but no
+synthetic result becomes a new radius, yaw, pitch or source-history owner.
+
+The installed/build/dist x86 `0.0.159` DLL SHA-256 is
+`9D5605FA3BFCB3CFF5656A4288974EAC9B717D46529C273B4548C4C949A88839`.
+
+## 0.0.159 runtime rejection and 0.0.160 camera-cache deferral
+
+The completed 0.0.159 x3 session is
+`<game-directory>\logs\deathtrap-native-20260801-212704-368-pid34160.log`.
+The phase endpoint-occupancy guard fires 410 times. Almost all records are
+native-clear but `endpoint=0`, and selection alternates between complete
+previous holds and current exact fallbacks. The conservative expanded OBB is
+therefore unsuitable as a presentation-origin predicate and directly explains
+the new continuous whole-level judder.
+
+The stationary flag interval still has one player position but cycles three
+exact camera positions while interpolation is enabled, including
+`-585/547/14551`, `-585/550/14564` and `-524/504/14541`. F11-disabled intervals
+remain visually stable. The remaining ON/OFF difference precedes snapshot
+interpolation: x2/x3 explicitly ran the complete native camera-cache update
+before midpoint capture, whereas x1 lets the original exact renderer invoke it
+at its retail position in the frame.
+
+Version 0.0.160 updates only the scene cache before capture. It saves the
+camera-owner frame stamp and temporarily writes the current engine frame so
+synthetic renderer calls skip the camera cache entirely. Immediately before
+the one exact original renderer, it restores the saved stamp. Native mode-3,
+position history, collision and camera-dependent cache work then run once at
+the same boundary as x1. After exact presentation the live camera world/local
+matrix and focus are recaptured into the source history. Every early return
+restores the stamp before entering the original renderer.
+
+The 0.0.159 phase OBB endpoint predicate is removed. A carried focus-follow
+pose is held only when the read-only native room-volume query rejects it; scene
+mesh ownership remains exclusively in the exact source camera path.
+
+The installed/build/dist x86 `0.0.160` DLL SHA-256 is
+`8C2D6F35949F3F900461A555F6524187FB76AD592C86EEC4AEB7B9F992468ED7`.
+
+## 0.0.160 runtime rejection and 0.0.161 four-tick source cycle fix
+
+The completed 0.0.160 session is
+`<game-directory>\logs\deathtrap-native-20260801-213651-902-pid2904.log`.
+Camera-cache deferral removes all `camera_source_rate_guard` events but does
+not remove the flag defect, so early cache timing is not its root. Source-rate
+camera presentation also makes the 50 Hz actor/world move against a 16.7 Hz
+view and visibly judders the complete scene.
+
+The exact log exposes a deterministic four-tick source loop. With stationary
+focus/orbit, `camera_pre_history_mesh` hits resource 13725. The clipped candidate
+fails validation, but the hook accepts the separate submitted endpoint with
+`submitted_fallback=1`. The post-native scalar gate then advances clear ticks
+1, 2 and 3 before the same fallback contact repeats. Published positions cycle
+between approximately `-412/515/2290` and `-317/449/2216`. This occurs before
+synthetic camera presentation.
+
+Version 0.0.161 removes submitted fallback authority from the position-ring
+veto. Only the actual scene-mesh-clipped candidate may replace a ring input,
+and only after native-volume plus endpoint validation. Failure passes the
+original candidate through for the post-native exact safety path.
+
+x1 now captures one read-only exact `SceneSnapshot` after the original renderer
+completes. These snapshots populate the same older/previous mesh history used
+by the source spring arm, so disabling interpolation no longer disables prop
+and moving-block collision. Camera probes also remain available at x1.
+
+x3 returns to exact-endpoint pivot-relative interpolation. Focus, shortest yaw,
+pitch and radius interpolate coherently; only native room-volume clipping may
+shorten a synthetic arm. The rejected phase scene-mesh/expanded-OBB solver and
+0.0.160 source-rate hold are absent.
+
+The installed/build/dist x86 `0.0.161` DLL SHA-256 is
+`CF31ABCBF375564247DED43871EA9D46B6EC3DEDBE1DC55FD6A70B6FC4DC6FA0`.
+
+## 0.0.161 runtime: contradictory boundary predicates and 0.0.162
+
+The 0.0.161 flag/door trace keeps focus, requested orbit and input fixed but
+alternates the native camera translation every source tick between
+`-588/626/14899` and `-588/556/14741`. Resource 12613 clips the former to the
+latter. The clip reports surface distance 368.1, camera radius 96 and safe arm
+360.1, which is the intended eight-unit contact backoff.
+
+`ValidateCameraPreHistoryMeshReplacement` then repeated the triangle sweep but
+called an endpoint predicate that also classified expanded-OBB containment as
+occupied. Resource 12613's OBB contains empty room space around its render
+triangles, so the backed-off candidate failed pre-history while the post-native
+real-mesh pass accepted and committed the identical point. This is the exact
+cause of `FALLBACK_POST -> exact commit -> clear/defer -> FALLBACK_POST`.
+
+The 0.0.162 endpoint predicate checks direct sphere-to-render-triangle distance
+only. The complete focus-to-endpoint sweep immediately before it still rejects
+real surface entry; the final endpoint check guards integer rounding, not
+conservative bounds occupancy. The pre-history hook can consequently insert
+the same safe point that post-native would otherwise commit one tick later.
+
+The dead render presentation latch/follow implementation and the 0.0.156
+post-history scan/repair implementation are removed. Neither had an active
+presentation call site, and the latter could not prevent `0x2F380` from
+recreating a candidate before the next `0x2DE30` insertion. Post-native exact
+commit and scalar release gate remain as fail-closed handling for native
+lateral/vertical shifts not visible before configure.
+
+Installed/build/dist x86 `0.0.162` SHA-256 is
+`4A0121D2C2205E8FA9CE202E7C6B2FEBB517846EFC7D2DE7B5FC02F3E3C26AB3`.
+
+## 0.0.162 runtime: retail history is not collision evidence
+
+The remaining `post_native_mesh_gate` assumed that the radius published after
+`0x2F380` measured the newly submitted probe. The runtime trace disproves that
+assumption. With fixed focus, zero orbit input and no current native or scene
+obstruction, the four-position history continued publishing older radii. The
+gate fed those values back into its verified ceiling for as many as 215
+consecutive diagnostic records and created a self-sustaining probe/regress
+cycle.
+
+The architectural distinction is now explicit: the scoped `0x2DE30` insertion
+hook is a point at which a current native candidate can be collision-tested;
+the position published after history averaging is a temporal output. It may be
+post-validated for safety, but its lag relative to the current request cannot
+prove a new obstruction. Version 0.0.163 removes the scalar post-native gate.
+A positive post-native real-mesh sweep still exact-commits the safe point and
+updates the ordinary spring-arm state; a clear sweep creates no separate
+memory or feedback transition.
+
+Installed/build/dist x86 `0.0.163` SHA-256 is
+`D9AABAA44A4AB9982C0DD732CF5C13E164CF5938FBDD2169D4769ACE0CEA2E34`.
+
+## 0.0.163 trace: two current scene constraints
+
+After removal of the ghost radius gate, the final trace alternates two genuine
+scene-query results. Resource 13676 produces a non-radial near-pivot escape at
+radius 741; the configure-scoped candidate and post pass detect resource 13679
+and contract to radius 129. `CameraPreNativeEscapeOwnsFinalTarget` was still
+allowed to overwrite that second result whenever the retail publication did
+not equal the submitted escape. That test confused history lag with absence of
+current collision evidence.
+
+Version 0.0.164 treats both scoped pre-history replacement and post-configure
+sweep as current-call constraints. A different accepted target makes the
+pre-native escape incompatible regardless of which point retail history
+publishes. The expanded-OBB solver also preserves orbit pitch: after choosing
+a horizontal face it restores vertical displacement at the same normalized
+horizontal progress. The prior horizontal-only output was responsible for
+instantaneous drops from requested `-440` to focus `-1400`, and from roughly
+`1129` to `400`.
+
+Installed/build/dist x86 `0.0.164` SHA-256 is
+`0FC6D6D6F43779116B02B54ED131E06F949E6EC8184A1111BB6DCD1A90724554`.
+
+## 0.0.164 trace: flag scale and falling-focus reset
+
+The completed `0.0.164` run is
+`<game-directory>\logs\deathtrap-native-20260801-222836-230-pid42228.log`.
+At the stationary door position, qualified resource 12613 alternates an
+approximately 916-unit escape with a 540-unit configured target. The resource
+is the narrow flag geometry: its measured span is approximately
+`309x1036x309`. The current one-camera-diameter threshold is only 192, so the
+flag is deliberately admitted as a volume blocker despite having no camera-
+scale transverse mass.
+
+Version 0.0.165 requires two intrinsic mesh axes to span two camera diameters
+(384 units). This is a geometry-class rule, not a resource exclusion. The
+known 180x900x180 lever, resource 12613 and small housings become nonblocking;
+walls and large static or moving blocks remain qualified.
+
+The falling jolt is independent of collision. From camera-probe ticks 52--60,
+player Y changes by exactly -400 per source tick while camera Y repeats
+approximately `-799/-169/-250`, `-781/-166/-249`, and `-785/-165/-247`.
+Those records contain no scene contact. `chase_focus` accumulated more than
+900 units of error against the fast moving target and was then reset directly
+to it every third tick. The existing 2500-unit single-tick focus-jump rule
+already detects real teleports. Version 0.0.165 removes only the accumulated-
+error reset, preserving the bounded backward-Euler chase during continuous
+falls.
+
+Installed/build/dist x86 `0.0.165` SHA-256 is
+`B5D13CB513B27B6CEE0879D3C39B8580F5F054A875BDCD06A42E73897A57E982`.
+
+## 0.0.165 trace: failed speculative history candidate
+
+At the final stationary flag position, the modern pre-configure endpoint is
+stable at `-548/414/14768`, while the retail `controller+0x204` ring insertion
+candidate is repeatedly `-715/544/14828`. The scoped scene veto detects
+resource 12613, but candidate-derived validation cannot resolve the complete
+nearby constraint set. Passing the original candidate to post-native safety
+creates a four-position loop through resources 12613 and 11432.
+
+Version 0.0.166 adds a transactional failure path at the same verified ring
+boundary. The original submitted endpoint is not trusted by identity. It is
+run through `ValidateCameraPreHistoryMeshReplacement`; replacement is allowed
+only when the validated result exactly equals the submitted integer endpoint.
+This preserves native wall/room shaping for ordinary candidates and differs
+from 0.0.161, whose broader submitted fallback could change the endpoint and
+alternate ownership.
+
+The v0.0.165 size threshold is reverted from 384 to 192 units because it did
+not remove the measured resource and could omit thin closed doors. No resource
+ID, flag asset or door asset is special-cased.
+
+The first installed x86 `0.0.166` SHA-256 is
+`6BF68DABAA36574228175DE75A2F042E0EF1F68E2EAFF695C20EE3D6140B03AE`.
+Latest build/dist SHA-256 is
+`0FC4C08438B5021AA244B1245146A2AB83E2AE6B0C344335348D9F23F828C3AF`;
+it adds only explicit submitted-validation coordinates and awaits installation
+after the running game exits.
+
+## 0.0.166 runtime: zero-motion exact-commit latch
+
+The completed run is
+`<game-directory>\logs\deathtrap-native-20260801-230007-111-pid41168.log`.
+At the final corner the focus is `-9095/-1400/16044`. Orbit input changes the
+requested camera through positions including `-9576/-253/16687`,
+`-9324/-253/15274`, `-8374/-253/15691` and `-9814/-255/15681`, proving that
+mouse/controller input and orbit integration continue to run. Publication,
+controller desired and controller resolved nevertheless remain fixed at
+`-8844/-884/16304`.
+
+The post-native sweep repeatedly reports resource 13676, initial overlap plus
+near-pivot escape, with both its input and result equal to that exact fixed
+coordinate. `CommitImmediateSpringArmContraction` then rewrites all camera
+history slots with the same old point. The persistent spring radius is 9 even
+when the current pre-native arm becomes clear, because every redundant commit
+resets the release evidence. Resource 12613 shows the same mechanism at the
+flag; this is not a flag-specific mesh classification error.
+
+Version 0.0.167 classifies a post-native result within two units of the current
+integer publication as `IDEMPOTENT_NOOP`. It retains contact diagnostics but
+does not commit, update the supporting-face preference, alter spring state or
+conflict with a current validated pre-native escape. The log exposes the rule
+as `camera_post_native_mesh action=IDEMPOTENT_NOOP` and
+`camera_native_mesh_pushout ... exact=0 idempotent=1`.
+
+Build/dist SHA-256 is
+`9C854ECD5276BE186272015D09C461DD6EDD3A2F7B8047C2A4C5CE48415FA4F7`.
+
+## 0.0.168 renderer-qualified scene nodes
+
+The final stationary orbit in
+`<game-directory>\logs\deathtrap-native-20260801-231502-040-pid31532.log`
+has a fixed focus at `-12940/-1437/17123`. Each full circle produces the same
+27-unit spring contraction against resource 12708 and then an immediate clear
+return to the requested 1400-unit arm. The user confirms that this part of the
+room contains no visible object within camera range, so the repeated contact
+is not a conservative response to visible clutter.
+
+Static analysis identifies a missing node-eligibility rule. In the supported
+binary, `Dungeon.dll+0x3B93F` tests node flags at `node+0x24`. Bit
+`0x02000000` branches around the resource draw call at `0x3B95F` but continues
+to the ordinary child traversal at `0x3B9BD`. It therefore means that this
+node's own render resource is not submitted, independently of whether its
+transform, resource handle and cached bounds remain in the scene tree.
+
+`NodeTransform` now captures the raw flags. Every scene-mesh sweep, endpoint
+test and temporal-chord query rejects a node whose own resource the renderer
+skips. Children remain individually eligible, matching the retail traversal.
+The exclusion is logged once per node as
+`camera_mesh_renderer_skip ... flags=........ reason=NO_OWN_DRAW`. No resource
+ID, room coordinate, triangle count or general object-size threshold is
+special-cased.
+
+The x86 build, spring-arm state test, DirectInput proxy smoke test and
+installer CRLF test pass. Installed/build/dist SHA-256 is
+`1972C919616133E29EF1FD9B16D8A9829E5F759AABB746B5473F0C223573CDDF`.
+
+## 0.0.169 stationary orbit: cross-axis input, not collision
+
+The completed v0.0.168 run is
+`<game-directory>\logs\deathtrap-native-20260801-233141-807-pid6972.log`.
+The final stationary circles contain no scene sweep, native-volume contraction
+or post-native correction. Player and focus remain fixed. The physical gesture
+was horizontal, but the probe records right-stick values `-32768/-11969` and
+later `-32768/-11137`. Independent per-axis deadzones leave a curved vertical
+input around `-0.079`; over successive source ticks it drives pitch to `-35`
+degrees. The requested endpoint then hits the floor envelope on every tick,
+and the retail resolver's published Y varies by about 25 units with yaw.
+
+Version 0.0.169 applies a continuous proportional axial lock before the
+third-person response curve. A minor component within 25 percent of the
+dominant axis becomes zero. Beyond that cone it is restored continuously and
+equals the original component at a true diagonal. This changes neither the
+dominant orbit speed nor mouse input and prevents a held cardinal gesture from
+accumulating unintended pitch/yaw. The percentage is configurable as
+`XInput/RightStickAxisLockPercent`.
+
+The x86 build, spring-arm state test, DirectInput proxy smoke test and
+installer CRLF test pass. Installed/build/dist SHA-256 is
+`1C3194A60E7E2ECDD61046526A3BC2E54E119FDD6E3C69F7102FB1DA549A7989`.
+
+## 0.0.170 clear-orbit positional ownership
+
+The completed v0.0.169 run is
+`<game-directory>\logs\deathtrap-native-20260801-235908-214-pid21704.log`.
+The axial lock works: the final horizontal gesture reaches the orbit as
+`-1.000/0.000`. Visible stutter nevertheless remains both in the first room
+and on the bridge. The final bridge circles isolate it from input, scene
+collision and synthetic-phase rejection. With fixed focus
+`-939/400/-21776`, the modern solver submits a 1400-unit circular orbit at
+constant Y `1099`, while the retail configure path publishes Y `739`, changes
+horizontal radius cyclically and reverses yaw by roughly two to three degrees
+for one source tick at repeatable angles.
+
+Static disassembly narrows the old v0.0.158 failure. `0x2F6D0` calls
+`0x30910`, and `0x30910` returns clear as soon as any one of its centre-plus-six
+room traces through `0x4E760` succeeds. That visibility rule is appropriate
+for the stock fallback-camera selector but is not proof that the complete
+modern camera footprint lies outside a wall. It explains how unconditional
+submitted-endpoint ownership could pass the old validation and still show
+wall/floor penetration.
+
+Version 0.0.170 leaves the ordinary native predicate and every constrained
+collision path unchanged. On a full-radius source tick with no qualified
+scene contact, it additionally resolves the same centre and six 30-unit focus
+offsets and calls `0x4E760` directly, requiring all seven traces to succeed.
+The endpoint must also pass the current scene-triangle test. Only then does the
+already verified exact transaction publish the modern endpoint after the one
+ordinary `0x2F380` call; native sector bookkeeping and its captured look target
+still determine orientation. A missing sector, failed trace, contracted arm,
+scene contact or exhausted solve leaves the complete retail result untouched.
+
+The x86 build, spring-arm state test, DirectInput proxy smoke test and installer
+CRLF test pass. Installed/build/dist SHA-256 is
+`B0A28F1B5D2FE6FB70CD7160A9F200FDE6FEFF74E68CBA48ED0E60BDCD6800E1`.
+
+## 0.0.171 endpoint footprint and sector coherence
+
+The completed v0.0.170 run is
+`<game-directory>\logs\deathtrap-native-20260802-002443-733-pid39140.log`.
+The user reports two remaining behaviours: in narrow spaces the camera can
+cross a wall, while stationary circles in an open area retain repeatable
+presentation hitches. The log separates them. During the final circles the
+focus is fixed at `-12899/-1450/16356`; every sampled source tick has
+`submitted == after_desired == after_resolved == published`, full radius,
+`blocked=0/0`, `mesh=0/0/0` and `exact=1`. The modern source orbit is therefore
+already circular. The visible discontinuities are the 126 rejected synthetic
+Presents, including repeatable midpoint-only `partial_black` regions that
+recover in the exact frame.
+
+The v0.0.170 strict predicate checked the seven 30-unit offsets around the
+*focus*. Those are the retail `0x30910` visibility samples, not the 96-unit
+camera sphere used by scene collision. It could consequently authorize a
+camera centre whose own footprint straddled a wall. Version 0.0.171 retains
+all seven focus traces and additionally resolves and traces the endpoint
+centre plus six cardinal points at radius 96. Failure of any focus or endpoint
+sample leaves final ownership with the ordinary native resolver.
+
+Static disassembly also closes a state-transaction gap. Retail `0x2F028`
+passes the camera node translation and `controller+0x200` seed to `0x06130`,
+then `0x2F041` writes the returned sector to `camera_node+0x100`. The modern
+exact commit previously replaced controller history, node translations and
+published matrices but retained the sector of the displaced native candidate.
+It now resolves the committed endpoint and writes both the endpoint-sector
+seed and camera-node sector in the same verified transaction. Synthetic
+passes likewise resolve `camera_node+0x100` from their actual interpolated
+translation immediately before rendering and restore the exact snapshot's
+sector afterward. No camera-cache callback is replayed and no synthetic
+sector survives the render transaction.
+
+The x86 build, spring-arm state test, DirectInput proxy smoke test and
+installer CRLF test pass. Installed/build/dist SHA-256 is
+`4BB179E196E6C668B240835290D56E506B0CA8DD9CDA7FA671DF87781B069F9C`.
+
+## 0.0.172 full-footprint spring and pre-native scene ownership
+
+The completed v0.0.171 run is
+`<game-directory>\logs\deathtrap-native-20260802-004112-811-pid11040.log`.
+It contains no `camera_midpoint_sector` change or failure. The synthetic
+sector hypothesis therefore does not explain the remaining final-circle
+hitches. The source trace instead records the same qualified mesh on every
+revolution: resource 12708 is a 24-triangle, radius-180 object. Its sweep
+contracts the desired arm from about 1400 to 1378, but the later native
+fixed-camera resolver replaces that already safe endpoint and changes its Y
+coordinate by roughly 156 units. The post-native mesh sweep then sees no
+contact at the displaced point, so neither collision owner restores the
+original modern solution.
+
+Version 0.0.172 does not hide resource 12708 or add an object ID/size filter.
+When the desired scene sweep has selected a contracted endpoint and the
+post-native sweep has no conflicting contact, the actual rounded endpoint is
+rechecked with the complete native footprint, minimum radius and current scene
+occupancy. It then exact-commits as `PRE_NATIVE_SCENE`, preventing the retail
+tail from becoming a second radius/height owner.
+
+The ceiling penetration has the complementary cause. Prior versions used the
+retail any-one-of-seven `0x30910` result for spring contraction and reserved
+the all-trace endpoint footprint for full-radius exact ownership. Thus an
+orbit could be treated as unblocked when only one offset ray cleared the
+ceiling. All modern source, binary-clip, validation and synthetic-phase room
+queries now use the complete focus-plus-96-unit-endpoint footprint. The weak
+retail predicate remains documented but no longer authorizes a modern camera
+position.
+
+The x86 build, spring-arm state test, DirectInput proxy smoke test and
+installer CRLF test pass. Installed/build/dist SHA-256 is
+`9F25C74A6BDDD5435917DC999BB27B6BABE524ADEB93153074AE3428FC197A54`.

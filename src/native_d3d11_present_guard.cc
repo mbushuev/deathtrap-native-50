@@ -216,6 +216,10 @@ struct State {
   std::unique_ptr<Sampler> sampler;
   VisualSample last_exact;
   bool last_exact_valid = false;
+  VisualSample rejected_midpoint;
+  uint64_t rejected_midpoint_tick = 0;
+  uint32_t rejected_midpoint_newly_black = 0;
+  bool rejected_midpoint_valid = false;
   uint32_t width = 0;
   uint32_t height = 0;
   DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
@@ -447,6 +451,7 @@ bool AllowNativeD3D11Present(IDXGISwapChain* swap_chain) {
     state->height = desc.Height;
     state->format = desc.Format;
     state->last_exact_valid = false;
+    state->rejected_midpoint_valid = false;
   }
   VisualSample sample;
   if (!state->sampler->Capture(backbuffer.Get(), &sample)) {
@@ -461,6 +466,10 @@ bool AllowNativeD3D11Present(IDXGISwapChain* swap_chain) {
     const char* reason = "none";
     if (IsCorrupt(state->last_exact, sample, &newly_black, &reason)) {
       ++state->rejected;
+      state->rejected_midpoint = sample;
+      state->rejected_midpoint_tick = source_tick;
+      state->rejected_midpoint_newly_black = newly_black;
+      state->rejected_midpoint_valid = true;
       Log("native phase rejected stage=midpoint tick=%llu reason=%s "
           "newly_black=%u total=%llu",
           static_cast<unsigned long long>(source_tick),
@@ -470,6 +479,38 @@ bool AllowNativeD3D11Present(IDXGISwapChain* swap_chain) {
     }
   }
   if (stage == DeathtrapNativePresentationStage::kExact) {
+    if (state->last_exact_valid && state->rejected_midpoint_valid &&
+        state->rejected_midpoint_tick == source_tick) {
+      uint32_t exact_newly_black = 0;
+      uint32_t persisted_black = 0;
+      for (size_t i = 0; i < sample.luma.size(); ++i) {
+        const bool midpoint_collapsed =
+            state->rejected_midpoint.luma[i] <= 8u &&
+            state->last_exact.luma[i] >= 36u;
+        const bool exact_collapsed =
+            sample.luma[i] <= 8u && state->last_exact.luma[i] >= 36u;
+        if (exact_collapsed) {
+          ++exact_newly_black;
+        }
+        if (midpoint_collapsed && sample.luma[i] <= 8u) {
+          ++persisted_black;
+        }
+      }
+      const uint32_t recovered_black =
+          state->rejected_midpoint_newly_black > persisted_black
+              ? state->rejected_midpoint_newly_black - persisted_black
+              : 0u;
+      Log("native phase audit tick=%llu midpoint_newly_black=%u "
+          "exact_newly_black=%u persisted=%u recovered=%u "
+          "near_black=%u/%u mean=%.1f/%.1f",
+          static_cast<unsigned long long>(source_tick),
+          state->rejected_midpoint_newly_black, exact_newly_black,
+          persisted_black, recovered_black,
+          state->rejected_midpoint.near_black_cells,
+          sample.near_black_cells, state->rejected_midpoint.mean_luma,
+          sample.mean_luma);
+    }
+    state->rejected_midpoint_valid = false;
     state->last_exact = sample;
     state->last_exact_valid = true;
   }

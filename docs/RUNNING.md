@@ -256,6 +256,9 @@ sets the unobstructed spring-arm distance. Mouse X/Y sensitivity uses
 `MouseVerticalMilliDegreesPerPixel`.
 `RightStickPixelsPerTick=12` and `RightStickResponseCurvePercent=135` provide a
 slower precision response near stick center without adding temporal latency.
+`RightStickAxisLockPercent=25` removes cross-axis leakage near horizontal and
+vertical third-person orbit gestures. Set it to `0` to disable the lock; true
+diagonal input remains two-axis.
 
 Lever, door and reveal cameras receive temporary priority only after an
 explicit X/operate input (including a physical `E`) and independently moving

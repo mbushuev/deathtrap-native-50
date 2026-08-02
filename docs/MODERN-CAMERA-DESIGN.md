@@ -1076,6 +1076,281 @@ turn step, native forward path or horizontal mapping.
 
 ## Acceptance criteria
 
+The post-`0.0.129` read-only investigation of remaining source-tick jitter,
+mesh sticking, synthetic-frame steps and Present stalls is recorded in
+[`CAMERA-STABILITY-AUDIT-2026-08-01.md`](CAMERA-STABILITY-AUDIT-2026-08-01.md).
+Its ordered phases supersede further threshold-only collision experiments:
+stabilize chase mathematics and remove double position smoothing before
+changing contact recovery or presentation guards.
+
+Version `0.0.130` implements only the first behavioural phase. The followed
+pivot now uses an implicit critically damped source-tick solve whose discrete
+poles cannot alternate at 60 ms. Per-axis limits isolate height response from
+horizontal turns. The native publication history and all collision and
+presentation layers remain unchanged pending the isolated runtime test.
+
+The runtime test validates that chase replacement: normal running median
+relative camera motion drops from 41.0 to 3.0 units per source tick and
+opposite-direction deltas drop from 173 to 30.
+
+Version `0.0.131` then tested the proposed Phase 2 position-ring seeding, but
+the isolated runtime rejected it. All 433 calls reported a successful write,
+yet clear-flag submitted-to-published error changed from median 148.5/p95 429.9
+to 177.9/431.9. Static reinspection explains the null result: `0x2F380` enters
+`0x2F340 -> 0x2DC40 -> 0x2DC80`, which resets the ring's current/oldest
+pointers before `0x2DEF0` inserts the one current native placement. Values
+written into inactive samples before `0x2F380` are not members of the ring.
+The old interpretation of clear-path error as a second persistent smoother is
+therefore withdrawn; the difference includes current native placement and
+source/publication timing.
+
+The same run isolates a contact defect in unidentified render resource
+`10017`. Its node transform/bounds change between samples, but the log has no
+semantic name and does not identify it as a gameplay block. It produces 21
+contained/near-pivot OBB escapes and changes supporting axis nine times.
+Version `0.0.132` removes the rejected seed and retains only the axis
+for the same node/resource while alternatives remain within a 96-unit
+hysteresis band. The endpoint remains pivot-relative and is recomputed on the
+current requested ray against the current OBB transform every source tick.
+Materially better faces, a changed object, a clear/radial contact or a ray that
+no longer reaches the retained face release it immediately. This is contact
+identity, not final-position smoothing or a retained absolute target.
+
+Version `0.0.133` makes collision-distance recovery contact-aware. Release
+confirmation belongs to one blocker key and a non-regressing safe-distance
+sequence; it is discarded when the blocker changes. A clear path must remain
+complete for four source ticks before the arm begins its bounded outward
+return. Immediate inward contraction remains authoritative.
+
+The `0.0.133` runtime trace proves that contact identity must cross the retail
+placement boundary. A pre-native native-wall release reached radii 644 and
+708, but only the post-native position at 708 intersected scene-mesh resource
+12613 and contracted to 580; the four-tick cycle then repeated. Version
+`0.0.134` retains the last post-native verified radius and tests the next
+bounded radius internally. Only a post-native-clear result advances the scalar
+ceiling. It stores no world-space target and therefore cannot become another
+orbit centre.
+
+The `0.0.134` trace validates that scalar release path but finds a different
+conflict for contained/near-pivot contact: the current OBB escape and a stale
+post-native radial point alternated at approximately 619 and 128 units. In
+`0.0.135`, the current-transform escape remains the final translation owner
+for that tick after retail configure has updated room metadata. It is rebuilt
+on the next tick and is never retained as an absolute position.
+
+Version `0.0.136` corrects the scalar gate lifetime found by the `0.0.135`
+trace. A temporary native-wall or pre-mesh safe radius is not evidence that a
+post-native contact ended. The gate therefore survives while any pre-native
+obstruction is present and releases only after the complete desired arm is
+clear and post-native verified.
+
+Version `0.0.137` moves synthetic modern-camera translation out of Cartesian
+node interpolation. It linearly interpolates the two captured live pivots,
+uses the shortest yaw arc, and interpolates pitch and collision radius. The
+resulting pivot-to-camera ray must pass both the native volume query and the
+stable scene-mesh sweep. When it does not, both synthetic phases select the
+same current safe endpoint instead of alternating previous/current translation
+inside one source tick.
+
+The `0.0.137` runtime proves that translation alone is not a coherent safe
+fallback: an accepted current origin with an interpolated orientation still
+produces black-region rejects. Version `0.0.138` therefore selects the complete
+current source-tick camera transform (world and local, including orientation)
+for both synthetic phases whenever the reconstructed pivot ray is unsafe.
+Clear pivot-relative phases continue to interpolate normally.
+
+Version `0.0.139` adds a stateless collision resolution step for an unsafe
+synthetic ray. The interpolated pivot/angle remains authoritative; only its
+phase-local radius or qualified near-pivot escape is clipped by the existing
+native and scene-mesh geometry routines. The complete result must pass both
+queries again. Failure still produces the atomic current-transform fallback,
+but a resolvable contact now slides through safe intermediate phases instead of
+jumping directly to the next exact view.
+
+Version `0.0.140` is a behaviour-neutral Phase 6 audit. A D3D-rejected
+midpoint sample is compared with the exact sample that follows it in the same
+source tick. Persisted black cells describe the new exact view; recovered cells
+exist only in the synthetic phase. This evidence is required before narrowing
+the synchronous guard or moving it off the Present path.
+
+That audit identifies a missing invariant rather than a visibility heuristic.
+The scene clipper may return a point only 4--8 units from the interpolated pivot
+when a near-pivot escape cannot be constructed. The source collision path
+already treats distances below 120 units as unusable, but the first synthetic
+resolver omitted that check. Version `0.0.141` applies the same minimum before
+acceptance and otherwise keeps the complete exact-current transform. This
+prevents a formally clear ray from becoming an inside-character near-plane
+view without adding persistent state.
+
+Version `0.0.142` aligns render-cache ownership with the phase-local camera.
+The retail camera-cache routine is not a gameplay integration when revisited
+at the same engine frame: the mode-3 callback is idempotently rejected, after
+which only the camera node, published matrix, bounds and camera-dependent
+render caches are rebuilt. Each midpoint performs that refresh after its
+transform is installed; restoring the exact snapshot performs it again. Thus
+the synthetic camera and its visibility/render state belong to one transform,
+while the source tick remains the sole owner of orbit input and collision
+history.
+
+Runtime rejects the `0.0.142` replay boundary: player rendering jitters during
+movement, proving that the camera-cache tail mutates additional presentation
+state outside the known transaction. Version `0.0.143` removes that experiment
+and returns to `0.0.141` behaviour while retaining its minimum synthetic
+distance and D3D audit. The full `0x3860` routine must not be replayed at a
+synthetic phase without a complete rollback contract.
+
+The `0.0.143` rollback validates that boundary: player jitter is gone, while
+same-tick audits attribute recovered black regions overwhelmingly to arbitrary
+synthetic camera transforms (89.6% recovery after clipped phases and 84.4%
+after clear pivot-relative phases). Complete current-exact fallback recovers
+only 4.9%, so it agrees with the following exact render-cache state.
+
+Version `0.0.144` makes that fallback the normal modern-camera presentation
+policy. Both synthetic phases use the complete current exact camera transform;
+actors, animation and UI keep their 50 Hz interpolation. This trades camera-
+transform interpolation for a single cache-compatible camera owner and does
+not alter source-tick chase, collision, input or authored-camera arbitration.
+
+Runtime rejects `0.0.144` as a global policy: the current exact camera and the
+interpolated followed actor belong to different presentation times, producing
+visible player shake and reduced smoothness. Version `0.0.145` restores the
+coherent pivot-relative path from `0.0.143`; exact-current remains a local
+fallback for unsafe synthetic phases rather than the normal camera owner.
+
+Distance release is independently changed in `0.0.145`. The post-native gate
+still requires three clear source ticks before its first outward probe. Once a
+probe is accepted by both native and scene-mesh validation, the gate retains
+release readiness and may test the next 64-unit step on the next source tick.
+It no longer inserts three stationary ticks after every accepted step. A
+rejected candidate or renewed contact resets readiness immediately.
+
+The `0.0.145` runtime accepts this policy. Player-relative presentation is
+stable again, the user reports smooth camera pull-back, and five logged gate
+releases reach the requested arm through consecutive validated steps. This
+accepts only the release-cadence change; it does not accept global collision
+stability.
+
+The same run contains a separate resource-`12613` squeeze between the player,
+flag geometry and native wall. The near-pivot fallback publishes the identical
+world point `-70/400/15148` for 39 consecutive contacts while requested orbit
+continues rotating, then changes escape face. Elsewhere the same resource jumps
+`203 -> 561` and `679 -> 207` units as local axes 0 and 2 exchange ownership.
+The outside-pivot branch claims to slide along a supporting face, but its
+candidate changes only one discrete face coordinate and uses the preceding
+camera as the selector; it therefore recreates the fixed-point anchor rejected
+by `0.0.107`. The required correction is a stateless supporting-face slide:
+hold only the current safe outside coordinate and derive the tangent coordinate
+from the current requested orbit. No world-space endpoint or larger axis
+hysteresis may be retained.
+
+Version `0.0.146` makes the outside-pivot path a real stateless surface slide.
+The single safe support coordinate cannot cross the expanded OBB, while the
+tangent coordinate follows the current requested orbit. At tangent zero the
+camera moves outward on a continuous 120-unit arc instead of choosing either
+discrete neighbouring face. Contained pivots use their actual first ray exit,
+not a later preferred face. Native wall and complete scene-mesh validation
+remain authoritative after construction.
+
+The runtime does not accept this path: overall jitter increased, so `0.0.147`
+removes it. More importantly, the final trace isolates a different four-source-
+tick loop while that path is inactive. Retail history alternates a roughly
+302-unit delayed publication with the scalar gate's 179--183-unit exact mesh
+correction even though the requested orbit and player pivot are stationary.
+
+`0.0.147` makes the established post-native scalar gate own pending native
+history as well as its radius. A currently clear published sample is accepted
+only when the resolver's desired point, resolved point, average and complete
+four-sample ring are mesh-clear. Otherwise the current verified scalar radius
+is rebuilt on the current orbit, rechecked against both native volume and the
+full scene-mesh arm, and published exactly in the same source tick. This is not
+a camera-position latch: only the scalar ceiling persists, so player movement
+and mouse/right-stick orbit always rebuild a new endpoint.
+
+Runtime validates that pending-history ownership but exposes a separate
+source/presentation disagreement. At one stationary resource-12613 contact,
+the exact phase repeatedly shows a 725.7-unit pre-native OBB escape while both
+synthetic phases clip the same arm to 134.8. The post-native source pass also
+clips it to 134.8, but the pre-native exceptional commit then restores 725.7
+before the exact snapshot is captured.
+
+`0.0.148` orders these two sources of evidence explicitly. A post-native sweep
+of an unchanged submitted endpoint is a complete current-arm test and wins
+when it returns a materially different safe endpoint. The pre-native escape
+continues to override only a different stale retail-history publication, which
+has not tested the current escape. Exact and synthetic phases should therefore
+share the same collision solution without weakening the older delayed-history
+protection.
+
+The next runtime shows that per-tick veto alone is insufficient: direct tests
+are rejected, but alternating delayed-history ticks still recommit the escape,
+producing a stable 489.4/267.6 exact-source two-cycle. `0.0.149` fixes the state
+priority rather than adding another predicate. Once a post-native gate has a
+verified ceiling for the same blocker key, its current-orbit scalar solution
+owns selection ahead of the non-radial escape. Checked outward probes or a
+changed blocker are the only release mechanisms.
+
+Runtime `0.0.149` exposes the more general defect beneath those ownership
+rules. A rejected outward probe is currently "restored" by rebuilding the
+verified scalar radius on the requested orbit. Equal radius does not imply an
+equal camera transform: the final stationary loop alternates two 214-unit arms
+whose endpoints are about 186 units apart.
+
+The correct recovery model is transactional. `0x2F380` supplies the current
+native publication plus queued speculative state. When the current publication
+is scene-mesh clear but a queued point is not, the speculative transaction must
+be rolled back to that exact current native publication. It must not synthesize
+a replacement from the scalar ceiling. This makes a rejected probe visually
+and historically idempotent while preserving native room, floor, sector and
+orientation ownership. Only acceptance may change the visible endpoint or
+advance the ceiling.
+
+The same invariant covers a current publication which does intersect a scene
+mesh. The post-native sweep has already shortened and exactly committed the
+current focus-to-publication ray. That Cartesian safe prefix is the accepted
+transaction result. Rebuilding the former ceiling on the requested orbit would
+again be a new camera position, not rollback, and is forbidden regardless of
+resource identity or room coordinates.
+
+Runtime `0.0.150` then isolates a constraint-composition error rather than
+another failed rollback. A pre-native near-pivot escape around one scene node
+and a post-native radial clip against a second node alternate ownership every
+source tick. Comparing their resource keys is invalid: pipeline stages observe
+different portions of the same constrained camera path, so different keys may
+describe simultaneous blockers. An active post-native gate consequently owns
+ahead of every pre-native escape until the complete desired arm is pre-native
+clear and its outward candidate passes post-native validation. Blocker keys
+remain diagnostics and reset recovery evidence; they do not grant publication
+ownership.
+
+Runtime `0.0.151` validates that composition rule: the permanent contact loop
+is gone. The remaining narrow-corner failure is instead a non-atomic camera
+pose. Exact scene-mesh commits update translation and positional history while
+leaving the orientation produced for another native-history endpoint. A fixed
+camera origin can therefore retain collision ownership while its view basis
+continues to follow a rotating requested arm.
+
+`0.0.152` restores the missing invariant: a collision result owns a complete
+pose, not translation alone. On the exceptional exact-commit path the retail
+`0x30730` look-at leaf derives angles from the accepted endpoint and current
+focus. The normal downstream `0x3A980/0x3AC00` node update constructs the
+matching bases and published matrix. Ordinary `0x2F380` publications remain
+byte-for-byte native, and authored modes never enter this writer. This is
+deliberately narrower than the rejected `0.0.142` cache replay and the rejected
+`0.0.85` global position override.
+
+Runtime rejects the `0.0.152` target assumption. The retail caller does not
+pass the modern focus directly to `0x30730`; it passes a target selected by the
+native resolver and optionally modified by authored camera logic. Version
+`0.0.153` removes that direct call rather than guessing the missing target.
+
+The narrow-space fix is instead placed at the geometric and transactional
+owners. Pivot containment in an expanded object OBB is an allowed prefix of
+the camera ray, not proof that every orbit direction is blocked. The prefix is
+removed and only the segment after its exit is swept against real triangles.
+The accepted boundary is idempotent, and the post-native scalar gate advances
+only by actually published, post-mesh-verified distance. These rules preserve
+current-orbit responsiveness and cannot create a retained invisible centre.
+
 - Full 360-degree horizontal orbit and bounded vertical orbit from the right
   stick, with no character rotation while only looking.
 - Camera-relative movement in every direction with native walk/run, animation
@@ -1087,3 +1362,460 @@ turn step, native forward path or horizontal mapping.
   combat, text and vibration behave exactly as in `v0.0.48-stable`.
 - Disabling the feature restores the original camera without restarting the
   game.
+
+## 0.0.154 measured ownership correction
+
+The 0.0.153 runtime demonstrates that containment, post-native escape and
+native release delay are distinct. `initial_overlap` ray exits occur, but the
+reported invisible-centre/sticking runs use the old outside-pivot
+`near_pivot_escape` and repeatedly commit one point while yaw changes.
+
+The outside-pivot constraint is now a surface, not a point: one safe support
+coordinate remains outside the expanded OBB, the tangent follows the current
+orbit, and a continuous 120-unit arc handles zero tangent. Exact collision
+translation and orientation are also one transaction. The look target is
+captured from the actual native `0x2F380 -> 0x30790 -> 0x30730` call and reused
+only for its same-tick exact correction. Finally, an unexpectedly shorter
+native publication is immediate safety contraction and invalidates outward
+release readiness; it cannot be paired with an immediate return probe.
+
+The resulting `0.0.154` release is installed with SHA-256
+`3A0936BF42AD7CEE80AAE7FE9E245263C207EC41FE439E96932B18C5E3DBB4EC`.
+Local state, proxy and installer tests pass; the flag and narrow-corner runtime
+cases remain the acceptance test.
+
+## 0.0.155 publication/history ownership
+
+A safe source-tick publication and the resolver's queued next position are
+different temporal state. When the current native publication is mesh-clear
+but a pending sample intersects a scene object, collision owns only the
+current visible result and release readiness. It must not copy that world point
+over desired, average and the history ring. Doing so removes all tangential
+orbit progress and creates the invisible-centre behaviour measured in
+0.0.154. The queued state remains native-owned until its next publication,
+where the ordinary post-native sweep can accept or contract it before render
+presentation consumes it.
+
+The installed `0.0.155` runtime SHA-256 is
+`387FAC51C52D5F252A2B0DD2DDC3D4F28256F53481475E84DFA820E13C096745`.
+
+## 0.0.156 targeted future-state sanitation
+
+The 0.0.155 assumption that an unsafe queued desired position could simply be
+left for the ordinary next-tick post-native clip was false. That next tick made
+the unsafe value visible before contracting it, producing alternating
+defer/commit positions and an effective half-rate camera update.
+
+Pending collision ownership is now per position field. The current resolved
+publication is immutable in this path. Desired, cached average and each of the
+four history samples are swept independently, and only a field with positive
+scene-mesh contact is eligible for replacement. Its replacement remains on
+the field's own focus ray and must pass native room-volume, scene endpoint and
+repeat-clip stability checks. Failure retains the verified current point in
+that one field rather than flattening the entire temporal filter. This keeps
+both safety and tangential progress without introducing another camera owner.
+
+The installed x86 `0.0.156` DLL SHA-256 is
+`592047A0871BCC6F3E423C672784DC4FD2B0A6E859D150C17C73ED294D9568C5`.
+
+## 0.0.157 pre-publication mesh veto
+
+Runtime 0.0.156 confirms that individual future-slot sanitation makes the
+final endpoint much steadier but cannot prevent `0x2F380` from recreating the
+unsafe candidate after its ring reset. Collision ownership therefore moves to
+the last native candidate boundary before temporal filtering:
+`0x2EDC0 -> 0x2EFFF -> 0x2DE30(controller+0x204, position)`.
+
+The generic ring-adder is not globally redefined. Replacement is permitted
+only while the overlay's one modern configure call is active, for its exact
+controller, and for the `+0x204` position ring. The four other histories and
+all retail/authored calls pass through byte-for-byte. A positive scene-mesh
+contact is clipped and checked against native room volume and the complete
+scene endpoint before insertion. Invalid or unavailable validation calls the
+original ring-adder with the original position and leaves the existing
+post-native exact safety net responsible.
+
+The installed/build/dist x86 `0.0.157` DLL SHA-256 is
+`D4FB37A0E3F8A875378451C342DA97CDB79B7BEE85B2DC0A32EB01D0659E4CB0`.
+
+## 0.0.158 independent gameplay and render-rate solve
+
+Gameplay hooks no longer depend on presentation multiplication. The supported
+game image, modern mode-3 hook, native joystick bridge, camera-relative
+dispatcher, selector, first-person and event hooks initialize regardless of
+NativeRender `Enabled` or `Subframes`. With zero subframes, the installed
+scheduler remains the single real input boundary but calls the original
+renderer once without synthetic capture or interpolation.
+
+The source camera has one position owner. The current focus-to-endpoint spring
+arm is resolved before native configure, revalidated at the native position
+ring insertion and replaces a different resolver-shaped positional candidate.
+Sector bookkeeping and the resolver-selected look target/orientation remain
+native. This differs from rejected 0.0.85: no finished matrix is globally
+overwritten, and ownership is limited to one modern configure scope and one
+position ring.
+
+The render-rate camera is a phase solve rather than interpolation between two
+finished collision answers. Each synthetic pass builds collision geometry
+from interpolated node transforms and bounds, interpolates the pivot and polar
+arm, then solves native plus scene-mesh collision for that phase. A genuinely
+unsolved phase holds the preceding complete pose and never advances to the
+future exact transform before the rest of the scene reaches that source tick.
+
+The installed/build/dist x86 `0.0.158` DLL SHA-256 is
+`539CF94C508D19F4C1337C621310CD87A91B87E10F8101BE2A405B6978A9BF85`.
+
+## 0.0.159: one camera clock, interpolated focus follow
+
+The camera controller is a source-rate gameplay system even when the renderer
+presents two synthetic phases. Its accepted exact matrix is the only complete
+camera pose. A synthetic phase computes an interpolated focus and adds its
+delta from the preceding focus to the preceding exact camera origin. Rotation,
+orbit radius and collision state remain byte-for-byte from that exact pose.
+This gives the 50 Hz actor a matching translational follow without asking a
+second collision solver to reinterpret the flag, wall or dynamic-object
+topology between source ticks.
+
+Safety at presentation rate is origin-based. The carried origin must pass the
+native room-volume query and must not occupy a qualified phase-local scene
+mesh. If it fails, presentation selects one complete exact matrix; it never
+combines one endpoint's translation with another endpoint's orientation and
+never publishes a newly clipped radial point. The next source tick therefore
+cannot inherit presentation-only collision state.
+
+The native `controller+0x204` history detour is a mesh veto, not a general
+position owner. No positive scene-mesh intersection means the original native
+candidate and its wall/room shaping pass through unchanged. A mesh correction
+still requires native-volume and endpoint validation, with the existing
+post-native path retained as fail-closed backup.
+
+The installed/build/dist x86 `0.0.159` DLL SHA-256 is
+`9D5605FA3BFCB3CFF5656A4288974EAC9B717D46529C273B4548C4C949A88839`.
+
+## 0.0.160: defer gameplay camera until exact render
+
+Synthetic presentation must not move the gameplay camera update earlier in
+the frame. The actor scene cache is refreshed before capture as before. The
+camera cache is instead deferred transactionally: save `camera_owner+0`, stamp
+it with the current engine frame for midpoint renderer calls, then restore the
+saved value before the exact original renderer. Thus synthetic calls observe
+the last complete exact pose but cannot invoke mode-3, history or downstream
+camera cache work. The exact call follows the same native sequence as x1.
+
+After the exact renderer returns, the live camera world/local matrices and
+focus replace the stale camera fields in the current scene snapshot before it
+is advanced into interpolation history. The next interval therefore follows a
+real exact endpoint rather than a synthetic or pre-cache estimate.
+
+The phase-local expanded-OBB endpoint test is not part of presentation safety.
+Runtime 0.0.159 classified ordinary clear camera origins as occupied on 410
+phases and caused continuous exact-pose switching. Focus-follow now falls back
+to the preceding complete exact pose only for a native room-volume rejection.
+Qualified scene meshes remain handled by the exact spring-arm transaction.
+
+The installed/build/dist x86 `0.0.160` DLL SHA-256 is
+`8C2D6F35949F3F900461A555F6524187FB76AD592C86EEC4AEB7B9F992468ED7`.
+
+## 0.0.161: exact mesh ownership and x1 scene history
+
+Runtime rejects camera-cache deferral: it removes presentation guards but not
+the stationary flag cycle, while the source-rate camera makes an interpolated
+actor/world visibly judder. Exact diagnostics instead show a four-tick loop
+created by `submitted_fallback=1` in the pre-history mesh veto.
+
+Pre-history replacement is now single-source. A positive mesh contact produces
+one scene-clipped candidate. If that exact candidate cannot pass native volume
+and endpoint validation, no alternate submitted point is inserted into the
+native ring. The unmodified candidate continues to post-native correction.
+This prevents a failed constraint from periodically changing positional owner
+after the scalar gate reaches its third clear tick.
+
+Synthetic camera presentation again interpolates the two complete exact
+orbits in pivot space, including shortest yaw, pitch and radius. Native room
+volume is the only presentation-time clip. Qualified scene props remain owned
+by the exact source spring arm rather than a second phase-local OBB solver.
+
+When synthetic presentation is off, the original renderer runs first and the
+overlay captures its completed exact scene afterward. Two consecutive x1
+snapshots therefore keep source mesh collision supplied with current/stable
+object transforms. No additional camera callback or render is executed.
+
+The installed/build/dist x86 `0.0.161` DLL SHA-256 is
+`CF31ABCBF375564247DED43871EA9D46B6EC3DEDBE1DC55FD6A70B6FC4DC6FA0`.
+
+## 0.0.162: one boundary contract and one candidate owner
+
+The flag/door failure was not a damping problem. Two source stages disagreed
+about geometry: the spring-arm sweep used real triangles and returned an
+eight-unit-backed-off endpoint, while pre-history endpoint validation rejected
+that same point for remaining inside a much larger conservative OBB. Native
+history therefore received the unsafe point and post-native code corrected it
+after publication, producing a deterministic A/B camera.
+
+The source pipeline now has the following non-overlapping responsibilities:
+
+- orbit/chase state owns the requested focus-relative arm;
+- native volume queries own rooms, walls, floors and portal traversal;
+- the scoped pre-history hook owns qualified scene-mesh candidate replacement
+  before the retail position-ring average;
+- retail owns the average, sector and resolver look target;
+- post-native mesh correction is safety-only and cannot become a second normal
+  candidate path;
+- exact snapshots own x1/x2/x3 history, while synthetic interpolation is
+  read-only with respect to gameplay camera state.
+
+Expanded OBBs remain valid broad-phase and exceptional contained-pivot escape
+tools. They are not proof that an already swept, backed-off endpoint occupies
+render geometry. Render-only latch/follow state and targeted future-history
+repair have no role in this design and are deleted.
+
+Installed/build/dist x86 `0.0.162` SHA-256 is
+`4A0121D2C2205E8FA9CE202E7C6B2FEBB517846EFC7D2DE7B5FC02F3E3C26AB3`.
+
+## 0.0.163: one collision state machine
+
+Runtime 0.0.162 showed that a separate post-native radius ceiling violates the
+one-owner design. Retail position history is deliberately delayed; using its
+published radius to approve or reject an outward collision probe closes a
+feedback loop around a temporal filter. That loop can oscillate even when the
+current requested arm, native volume and scene mesh are all clear.
+
+The camera therefore has exactly one persistent collision state machine:
+`ResolveThirdPersonSpringArm`. Its input is the current desired arm plus the
+nearest safe endpoint from current native and qualified scene sweeps. It owns
+immediate contraction, blocker identity, clear confirmation and bounded
+outward recovery. The post-native pass owns no recovery state. On positive
+current contact it exact-commits a safe endpoint and contracts the same spring
+state; on a clear result it does nothing. Native history remains presentation
+output and can never lower a collision ceiling.
+
+Installed/build/dist x86 `0.0.163` SHA-256 is
+`D9AABAA44A4AB9982C0DD732CF5C13E164CF5938FBDD2169D4769ACE0CEA2E34`.
+
+## 0.0.164: escape is a complete-current-constraint candidate
+
+A non-radial escape is exceptional topology handling, not an authoritative
+override. It may be committed only when the complete current configure call
+does not produce a different qualified scene target. Native history latency is
+irrelevant to that decision. This makes a squeeze between two objects
+fail-closed to the configured safe result instead of alternating each object's
+individually valid projection.
+
+Escape construction also preserves the requested pitch. The OBB solver still
+selects a deterministic horizontal supporting face, but its vertical component
+is reconstructed from the requested orbit using the escape's normalized
+horizontal progress. Thus rotating around a prop changes the collision target
+continuously instead of snapping the camera to pivot height.
+
+Installed/build/dist x86 `0.0.164` SHA-256 is
+`0FC6D6D6F43779116B02B54ED131E06F949E6EC8184A1111BB6DCD1A90724554`.
+
+## 0.0.165: obstacle scale and continuous moving-target chase
+
+Render meshes are camera obstacles only when at least two intrinsic scaled
+axes span two complete camera diameters. This prevents long thin decoration
+from becoming a wall merely because its world AABB rotates, while retaining
+large static and kinematic blocks. The rule is geometry-based and applies
+uniformly to every resource.
+
+Follow-state discontinuities are reserved for initialization, invalid data and
+the existing single-tick teleport test. Accumulated chase lag is not a
+teleport signal: a continuously falling focus may legitimately stay more than
+900 units ahead of a bounded smoother. It must converge through the same
+backward-Euler state rather than periodically resetting to the target.
+
+Installed/build/dist x86 `0.0.165` SHA-256 is
+`B5D13CB513B27B6CEE0879D3C39B8580F5F054A875BDCD06A42E73897A57E982`.
+
+## 0.0.166: fixed-point history transaction
+
+The v0.0.165 stationary flag trace disproves object-size filtering as the
+solution. Resource 12613 still enters the collision path, while increasing the
+general threshold risks ignoring thin closed doors. The 192-unit two-axis rule
+is restored; collision resolution, not asset shape, owns this defect.
+
+The final trace has a constant focus, requested orbit and submitted endpoint
+`-548/414/14768`, but retail repeatedly inserts candidate
+`-715/544/14828`. Candidate-derived validation cannot compose the two nearby
+mesh constraints, so the unmodified candidate reaches post-native correction
+and produces the exact four-position loop. The configure call is now a
+transaction. Candidate-derived replacement remains primary. On failure, the
+submitted endpoint passes through the same complete native-volume,
+scene-sweep, endpoint and repeat-stability validator. It may replace the ring
+candidate only if the validator returns it byte-for-byte unchanged. No changed
+submitted-side point, retained world latch or resource exception is accepted.
+
+This follows the common engine invariant rather than copying an engine API:
+
+- Unreal Spring Arm separates the unfixed desired position from one collision
+  result and uses a sized camera probe;
+- Godot SpringArm3D performs one ray/shape motion cast from pivot to desired
+  length, with a margin, and recommends a volume (often a sphere) instead of a
+  point ray for smooth edge behaviour;
+- Unity Cinemachine selects the obstacle nearest the target, handles multiple
+  contacts within one bounded solve, retains the accepted correction, and
+  separates occlusion response from slower return damping.
+
+Primary references:
+
+- https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Runtime/Engine/USpringArmComponent
+- https://docs.godotengine.org/en/stable/classes/class_springarm3d.html
+- https://docs.godotengine.org/en/latest/tutorials/3d/spring_arm.html
+- https://docs.unity.cn/Packages/com.unity.cinemachine@3.0/manual/CinemachineDeoccluder.html
+- https://github.com/Unity-Technologies/com.unity.cinemachine/blob/main/com.unity.cinemachine/Runtime/Behaviours/CinemachineDeoccluder.cs
+
+The fall correction is independent. Exact vertical pivot damping is removed:
+Y follows the current focus directly while horizontal follow remains damped.
+This prevents a continuously falling target from stretching a 1400-unit orbit
+above 2100 units and provoking a reverse native correction. Presentation
+interpolation still supplies smooth intermediate Y at x2/x3.
+
+The first installed x86 `0.0.166` SHA-256 is
+`6BF68DABAA36574228175DE75A2F042E0EF1F68E2EAFF695C20EE3D6140B03AE`.
+The latest build/dist adds only explicit submitted-validation coordinates and
+has SHA-256
+`0FC4C08438B5021AA244B1245146A2AB83E2AE6B0C344335348D9F23F828C3AF`;
+installation is deferred while the game process is running.
+
+## 0.0.167: idempotent accepted boundaries
+
+The completed v0.0.166 run is
+`<game-directory>\logs\deathtrap-native-20260801-230007-111-pid41168.log`.
+It proves that input ownership is intact in both failures. In the final
+two-block corner, requested orbit positions traverse every quadrant, but the
+published, desired and resolved positions remain exactly
+`-8844/-884/16304`. Resource 13676 returns that same point as its post-native
+escape on every tick. The former implementation nevertheless performs an
+exact commit every time, leaving the arm at radius 9 and resetting
+`clear_ticks` to zero. Resource 12613 produces the same unchanged-publication
+pattern at the flag.
+
+The correction phase must be idempotent. If its result differs from the
+already published integer position by no more than two world units, committing
+it cannot materially improve safety. Version 0.0.167 records the contact but
+performs no state transition: it does not rewrite the native history ring,
+does not change the collision radius or release counters, and does not veto a
+validated pre-native escape derived from current orbit input. Material
+corrections still use the existing exact fail-closed transaction.
+
+The x86 build, spring-arm state test, DirectInput proxy smoke test and installer
+CRLF test pass. Build/dist SHA-256 is
+`9C854ECD5276BE186272015D09C461DD6EDD3A2F7B8047C2A4C5CE48415FA4F7`.
+
+## 0.0.168: collision follows renderer membership
+
+Presence in the scene-node tree is necessary but not sufficient for camera
+collision. The retail renderer can retain a node's transform, resource handle
+and bounds while suppressing that node's own draw. Its verified
+`0x02000000` node flag skips only the resource submission and preserves child
+traversal. Treating such a retained resource as solid creates deterministic
+invisible contacts at the same yaw in an otherwise empty room.
+
+Scene collision now captures the node flags and applies the same own-resource
+eligibility decision before all broad phases and triangle queries. This is a
+semantic collision-channel correction, not temporal damping: visible walls,
+doors, moving blocks and drawable children keep their existing sized-sphere
+sweeps, immediate safety contraction and bounded recovery. Hidden/inactive
+parent resources cannot create a `1400 -> 1373 -> 1400` orbit sawtooth.
+
+The x86 build and both repository tests pass. Installed/build/dist SHA-256 is
+`1972C919616133E29EF1FD9B16D8A9829E5F759AABB746B5473F0C223573CDDF`.
+
+## 0.0.169: cardinal right-stick intent
+
+Collision and look input are independent owners. A camera may follow a
+perfectly clear scene path and still develop a repeatable low-pitch wobble if
+a nominally horizontal physical stick reports a persistent vertical component.
+Because orbit input is velocity, even a small residual accumulates until the
+pitch or floor constraint is reached.
+
+Third-person stick input therefore passes through a proportional axial cone
+before its response curve. The dominant axis is unchanged. The secondary axis
+is zero inside the cone and restored continuously toward a diagonal, avoiding
+both long-term cross-axis drift and a hard angular threshold. This filter is
+limited to third-person orbit and does not reinterpret mouse deltas, movement,
+the radial selector, menus or native first-person control.
+
+The x86 build and both repository tests pass. Installed/build/dist SHA-256 is
+`1C3194A60E7E2ECDD61046526A3BC2E54E119FDD6E3C69F7102FB1DA549A7989`.
+
+## 0.0.170: strict-clear final position owner
+
+The modern solver and the retail fixed-camera resolver must not both shape a
+clear orbit. Runtime v0.0.169 proves that the requested arm can be an exact
+circle while the downstream retail position repeatedly changes radius,
+height and even reverses yaw for one tick. Interpolating that result only makes
+the source discontinuity visible at more presentation samples.
+
+Final position ownership is therefore explicit but fail-closed. `0x2F380`
+still runs exactly once for room/sector state and the native look target. The
+modern endpoint replaces only its positional result when all of these are
+true:
+
+- the arm is at its complete requested radius;
+- neither the desired-arm nor post-native scene query has contact;
+- no exact correction or exhausted solver already owns the tick;
+- the endpoint is clear of qualified scene triangles;
+- every one of the seven underlying native room traces succeeds.
+
+The last requirement is intentionally stronger than retail `0x30910`, which
+accepts when any one of those traces succeeds. It is the missing safety
+distinction from rejected v0.0.158. Any constrained or ambiguous tick remains
+fully native-owned, so this change does not reinterpret walls, floors, portals,
+moving blocks or contained-pivot escapes.
+
+Installed/build/dist x86 `0.0.170` SHA-256 is
+`B0A28F1B5D2FE6FB70CD7160A9F200FDE6FEFF74E68CBA48ED0E60BDCD6800E1`.
+
+## 0.0.171: position, volume and sector are one camera state
+
+A valid camera endpoint is not only a translation. It consists of three
+coherent parts:
+
+- the centre position and orientation;
+- the collision footprint around that centre;
+- the room sector used by traversal and culling.
+
+Version 0.0.170 enforced source position ownership but its strict room proof
+sampled only the focus-side offsets inherited from retail `0x30910`. Version
+0.0.171 adds a separate endpoint footprint: centre plus six cardinal samples
+at the established 96-unit camera radius must all resolve and trace to the
+focus sector. This deliberately remains fail-closed; it does not make thin
+objects pass-through and it does not add another spring or fallback position.
+
+The retail cache tail proves that `camera_node+0x100` is the sector belonging
+to the final node translation. Exact modern publication therefore resolves
+the submitted endpoint and commits that node sector together with
+`controller+0x200`, controller position/history, node matrices and published
+matrix. The transaction matcher includes both sector fields, so an apparently
+unchanged translation cannot conceal stale room ownership.
+
+Interpolation receives the same invariant without becoming a persistent
+gameplay writer. Each synthetic pass resolves the camera node sector from the
+already selected midpoint translation immediately before rendering. It then
+restores the exact-current sector along with the exact matrices. The unsafe
+same-frame `0x3860` camera-cache replay rejected in v0.0.143 is not restored.
+
+Installed/build/dist x86 `0.0.171` SHA-256 is
+`4BB179E196E6C668B240835290D56E506B0CA8DD9CDA7FA671DF87781B069F9C`.
+
+## 0.0.172: one collision predicate and one contracted-position owner
+
+The complete camera footprint is now a general modern spring-arm invariant,
+not merely permission for an unconstrained exact endpoint. Desired orbit,
+binary contraction, rounded endpoint validation, scene-pushout validation and
+synthetic pivot phases all use the same all-trace room predicate. This closes
+the ceiling case where retail `0x30910` returned clear because one of seven
+rays survived while the camera sphere crossed the plane.
+
+Room geometry and scene geometry remain separate collision channels, but they
+no longer publish competing positions. A scene-mesh contact first selects the
+safe spring radius. After the required ordinary native configure transaction,
+the same selected point must still pass the complete room footprint, minimum
+distance and scene endpoint occupancy tests. With no conflicting post-native
+contact it owns final translation atomically; the legacy fixed-camera result
+cannot substitute a different height or radius. Ambiguous results remain
+fail-closed on the native path.
+
+Installed/build/dist x86 `0.0.172` SHA-256 is
+`9F25C74A6BDDD5435917DC999BB27B6BABE524ADEB93153074AE3428FC197A54`.
