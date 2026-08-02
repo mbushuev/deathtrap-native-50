@@ -608,8 +608,8 @@ double g_third_person_orbit_min_pitch_radians = 0.0;
 double g_third_person_orbit_max_pitch_radians = 0.0;
 double g_custom_head_min_pitch_radians = 0.0;
 double g_custom_head_max_pitch_radians = 0.0;
-int32_t g_custom_head_height = 60;
-int32_t g_custom_head_forward_offset = 120;
+int32_t g_custom_head_height = 10;
+int32_t g_custom_head_forward_offset = 55;
 double g_third_person_orbit_min_radius = 650.0;
 double g_third_person_orbit_max_radius = 1800.0;
 double g_third_person_orbit_preferred_radius = 1400.0;
@@ -3510,6 +3510,120 @@ struct HeadJointProbeCandidate {
   const NodeTransform* transform = nullptr;
 };
 
+uintptr_t ResolvePlayerHeadJoint(const SceneSnapshot& scene) {
+  if (!scene.player || scene.nodes.find(scene.player) == scene.nodes.end()) {
+    return 0;
+  }
+
+  std::unordered_map<uintptr_t, uint32_t> child_counts;
+  child_counts.reserve(scene.nodes.size());
+  for (const auto& [node, transform] : scene.nodes) {
+    if (node != scene.player && transform.parent) {
+      ++child_counts[transform.parent];
+    }
+  }
+
+  uintptr_t selected = 0;
+  int64_t selected_score = std::numeric_limits<int64_t>::max();
+  for (const auto& [node, transform] : scene.nodes) {
+    if (node == scene.player ||
+        !SceneNodeDescendsFrom(scene, node, scene.player) ||
+        !transform.bounds_valid || transform.bounds_radius < 45 ||
+        transform.bounds_radius > 115 || child_counts[node] != 1u) {
+      continue;
+    }
+    const auto parent = scene.nodes.find(transform.parent);
+    if (parent == scene.nodes.end() ||
+        parent->second.render_resource_handle != 0 ||
+        child_counts[parent->second.parent] < 3u) {
+      continue;
+    }
+    const auto& local = transform.local.values;
+    const auto& parent_local = parent->second.local.values;
+    if (std::abs(local[9]) > 8 || local[10] < 55 || local[10] > 90 ||
+        local[11] < 15 || local[11] > 55 ||
+        std::abs(parent_local[9]) > 8 ||
+        std::abs(parent_local[10]) > 8 ||
+        std::abs(parent_local[11]) > 8) {
+      continue;
+    }
+
+    uint32_t depth = 0;
+    uintptr_t ancestor = node;
+    for (; ancestor && depth < 128u; ++depth) {
+      if (ancestor == scene.player) {
+        break;
+      }
+      const auto entry = scene.nodes.find(ancestor);
+      if (entry == scene.nodes.end() || entry->second.parent == ancestor) {
+        break;
+      }
+      ancestor = entry->second.parent;
+    }
+    if (ancestor != scene.player || depth < 4u || depth > 7u) {
+      continue;
+    }
+
+    const int64_t score =
+        static_cast<int64_t>(std::abs(local[9])) * 4 +
+        std::abs(local[10] - 71) + std::abs(local[11] - 34) +
+        std::abs(transform.bounds_radius - 76);
+    if (score < selected_score) {
+      selected = node;
+      selected_score = score;
+    }
+  }
+  return selected;
+}
+
+bool ResolveLivePlayerHeadMount(
+    const SceneSnapshot& scene,
+    const std::array<int32_t, 3>& current_camera_focus,
+    std::array<int32_t, 3>* head_center, uintptr_t* head_node) {
+  if (!head_center) {
+    return false;
+  }
+  const uintptr_t node = ResolvePlayerHeadJoint(scene);
+  const auto player = scene.nodes.find(scene.player);
+  const auto head = scene.nodes.find(node);
+  if (!node || player == scene.nodes.end() || head == scene.nodes.end()) {
+    return false;
+  }
+
+  Matrix3x4 live_player = player->second.world;
+  Matrix3x4 live_head = head->second.world;
+  // The source camera hook runs after animation/cache preparation in the
+  // supported renderer. Read the live matrices so the new endpoint and the
+  // body rendered for that endpoint belong to the same animation sample.
+  SafeRead(reinterpret_cast<const void*>(scene.player + kMatrixOffset),
+           &live_player, sizeof(live_player));
+  SafeRead(reinterpret_cast<const void*>(node + kMatrixOffset),
+           &live_head, sizeof(live_head));
+
+  std::array<int32_t, 3> focus_from_snapshot_root = {0, 400, 0};
+  if (scene.camera_focus_valid) {
+    for (size_t axis = 0; axis < 3u; ++axis) {
+      focus_from_snapshot_root[axis] =
+          scene.camera_focus[axis] - player->second.world.values[9u + axis];
+    }
+  }
+  for (size_t axis = 0; axis < 3u; ++axis) {
+    const int64_t current_root =
+        static_cast<int64_t>(current_camera_focus[axis]) -
+        focus_from_snapshot_root[axis];
+    const int64_t animated_offset =
+        static_cast<int64_t>(live_head.values[9u + axis]) -
+        live_player.values[9u + axis];
+    (*head_center)[axis] = static_cast<int32_t>(std::clamp<int64_t>(
+        current_root + animated_offset, std::numeric_limits<int32_t>::min(),
+        std::numeric_limits<int32_t>::max()));
+  }
+  if (head_node) {
+    *head_node = node;
+  }
+  return true;
+}
+
 void ProbePlayerHeadJoints(const SceneSnapshot& scene, uint64_t source_tick) {
   if (!g_head_joint_probe_enabled || !g_debug_log ||
       !CustomHeadViewSelected() || !scene.player ||
@@ -5276,13 +5390,16 @@ bool PublishImmersiveFirstPersonEndpoint(
 
   const double yaw = g_third_person_orbit_state.yaw;
   const double pitch = g_third_person_orbit_state.pitch;
-  // camera_focus is the stable character-relative source anchor: runtime
-  // probes hold it at player render-root +0/+400/+0 while the controller's
-  // three coordinate pointers can lead or lag the animated model by more than
-  // 180 units during forward/reverse motion. Building the eye from those
-  // pointers made the body slide through a nominally first-person camera.
-  const ImmersiveFirstPersonPose pose = BuildImmersiveFirstPersonPose(
-      camera_focus, yaw, pitch, g_custom_head_height,
+  std::array<int32_t, 3> head_center{};
+  uintptr_t head_node = 0;
+  if (!ResolveLivePlayerHeadMount(g_previous_snapshot, camera_focus,
+                                  &head_center, &head_node)) {
+    AppendNativeLog(
+        "camera_immersive_first_person valid=0 reason=HEAD_JOINT");
+    return false;
+  }
+  const ImmersiveFirstPersonPose pose = BuildImmersiveHeadMountedPose(
+      head_center, yaw, pitch, g_custom_head_height,
       g_custom_head_forward_offset);
   if (!pose.valid) {
     return false;
@@ -5295,7 +5412,7 @@ bool PublishImmersiveFirstPersonEndpoint(
   std::array<int32_t, 3> safe_eye = requested_eye;
   size_t start_sector_index = std::numeric_limits<size_t>::max();
   if (!SweepOwnedCameraAgainstRooms(
-          camera_focus, requested_eye, room_or_sector, &room_sweep, &safe_eye,
+          head_center, requested_eye, room_or_sector, &room_sweep, &safe_eye,
           nullptr, std::numeric_limits<size_t>::max(), &start_sector_index)) {
     AppendNativeLog("camera_immersive_first_person valid=0 reason=ROOM");
     return false;
@@ -5303,14 +5420,14 @@ bool PublishImmersiveFirstPersonEndpoint(
 
   OwnedCameraSceneSweepResult scene_sweep;
   const bool scene_valid = SweepOwnedCameraAgainstSceneMeshesInSnapshots(
-      g_previous_snapshot, g_older_snapshot, camera_focus, safe_eye,
+      g_previous_snapshot, g_older_snapshot, head_center, safe_eye,
       &scene_sweep);
   if (scene_valid && scene_sweep.blocked) {
     safe_eye = scene_sweep.position;
   }
 
   const bool committed = PublishOwnedCameraEndpoint(
-      controller, camera_focus, camera_focus, &look_at_forward, safe_eye,
+      controller, head_center, head_center, &look_at_forward, safe_eye,
       start_sector_index, transition_cut);
   static uint64_t head_sequence = 0;
   ++head_sequence;
@@ -5319,9 +5436,12 @@ bool PublishImmersiveFirstPersonEndpoint(
       (head_sequence % 30u) == 1u) {
     AppendNativeLog(
         "camera_immersive_first_person valid=%u eye=%d/%d/%d safe=%d/%d/%d "
-        "yaw=%.2f pitch=%.2f room=%u scene=%u/%u cut=%u",
+        "head=%d/%d/%d node=%08llX yaw=%.2f pitch=%.2f "
+        "room=%u scene=%u/%u cut=%u",
         committed ? 1u : 0u, requested_eye[0], requested_eye[1],
         requested_eye[2], safe_eye[0], safe_eye[1], safe_eye[2],
+        head_center[0], head_center[1], head_center[2],
+        static_cast<unsigned long long>(head_node),
         yaw * 180.0 / kOrbitPi, pitch * 180.0 / kOrbitPi,
         room_sweep.blocked ? 1u : 0u, scene_valid ? 1u : 0u,
         scene_valid && scene_sweep.blocked ? 1u : 0u,
@@ -13775,9 +13895,9 @@ void InitializePatchState() {
   g_custom_head_max_pitch_radians =
       static_cast<double>(head_maximum_pitch_degrees) * kOrbitPi / 180.0;
   g_custom_head_height = std::clamp(
-      ConfiguredInteger(L"Camera", L"HeadHeight", 60), 0, 300);
+      ConfiguredInteger(L"Camera", L"HeadHeight", 10), 0, 300);
   g_custom_head_forward_offset = std::clamp(
-      ConfiguredInteger(L"Camera", L"HeadForwardOffset", 120), 0, 220);
+      ConfiguredInteger(L"Camera", L"HeadForwardOffset", 55), 0, 220);
   g_third_person_orbit_min_radius = static_cast<double>(std::clamp(
       ConfiguredInteger(L"Camera", L"MinimumRadius", 650), 200, 3000));
   g_third_person_orbit_max_radius = static_cast<double>(std::clamp(
@@ -13900,9 +14020,10 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.194 adds a read-only animated "
-      "head-joint probe while preserving the 0.0.193 immersive camera; "
-      "0.0.193 binds the immersive eye to "
+      "Deathtrap native render overlay 0.0.195 mounts the immersive eye on "
+      "the structurally resolved animated head joint and advances it in "
+      "front of the face while preserving user-owned rotation; "
+      "0.0.193 bound the immersive eye to "
       "the stable player focus, corrects its look-at orientation and keeps "
       "the body-visible placement; "
       "it keeps the Steam "

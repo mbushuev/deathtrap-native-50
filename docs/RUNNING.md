@@ -348,6 +348,13 @@ two or three attacks, then stand again. It preserves the v0.0.193 camera pose;
 its only purpose is to identify the animated head/neck node before changing
 camera ownership.
 
+Version 0.0.195 consumes that result. `HeadHeight=10` is the small upward
+offset from the animated head centre and `HeadForwardOffset=55` advances the
+near plane in front of the face along the current view heading. These are no
+longer offsets from the player root or `camera_focus`. Keep `HeadJointProbe=1`
+for the first acceptance run; it remains read-only and confirms the resolved
+branch while the camera log records the selected node and head centre.
+
 The layout follows two established conventions: the right stick acts as a
 pointer in menus and as camera look in gameplay, while hold, select and release
 matches the standard radial-menu interaction.

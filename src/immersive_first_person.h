@@ -41,3 +41,35 @@ inline ImmersiveFirstPersonPose BuildImmersiveFirstPersonPose(
       std::isfinite(pose.forward[1]) && std::isfinite(pose.forward[2]);
   return pose;
 }
+
+// A visible-body head mount uses the animated head centre as its pivot. The
+// engine-facing look vector is the direction actually published to Dungeon's
+// look-at builder, so advancing the eye along it puts the near plane in front
+// of the face instead of behind the skull. Rotation remains user-owned: only
+// the skeletal translation is inherited, avoiding animation-driven head bob
+// and roll.
+inline ImmersiveFirstPersonPose BuildImmersiveHeadMountedPose(
+    const std::array<int32_t, 3>& head_center, double yaw, double pitch,
+    int32_t upward_offset, int32_t forward_offset) {
+  ImmersiveFirstPersonPose pose = BuildImmersiveFirstPersonPose(
+      head_center, yaw, pitch, 0, 0);
+  if (!pose.valid || upward_offset < 0 || forward_offset < 0) {
+    pose.valid = false;
+    return pose;
+  }
+  const std::array<double, 3> camera_forward =
+      ImmersiveFirstPersonLookAtVector(pose.forward);
+  const double horizontal_length =
+      std::hypot(camera_forward[0], camera_forward[2]);
+  if (!std::isfinite(horizontal_length) || horizontal_length < 0.5) {
+    pose.valid = false;
+    return pose;
+  }
+  pose.eye = {
+      head_center[0] + static_cast<int32_t>(std::lround(
+          camera_forward[0] / horizontal_length * forward_offset)),
+      head_center[1] + upward_offset,
+      head_center[2] + static_cast<int32_t>(std::lround(
+          camera_forward[2] / horizontal_length * forward_offset))};
+  return pose;
+}

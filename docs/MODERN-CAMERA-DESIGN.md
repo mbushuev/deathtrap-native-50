@@ -2080,3 +2080,29 @@ child count, resource, flags, local/world translation and player-relative
 translation. Idle, forward, backward and attack samples distinguish a stable
 head/neck branch from hands, sword and decorative meshes before any joint is
 allowed to own the camera.
+
+## 0.0.195: animated, translation-only head mount
+
+The v0.0.194 capture identifies one stable central branch in every sampled
+state: chest node with three children, a zero-transform neck anchor, a
+resource-bearing head node at local translation `0/71/34`, then five small
+single-child braid segments. The head node retains a 76-unit bound and the
+same topology while its resource handle changes across streamed areas. Hands,
+weapon helpers and braid tips move far away during attacks and are rejected by
+the structural predicate.
+
+Version 0.0.195 resolves that topology rather than a pointer or resource ID,
+reads the live head and player matrices at the source camera update, aligns
+their animated relative offset with the current engine `camera_focus`, and
+uses the resulting world-space head centre as the first-person pivot. The eye
+is ten units above and 55 units forward from that centre along the actually
+published horizontal view direction. This corrects the former near-third-
+person placement: v0.0.193 put the eye on the opposite side of the view and
+therefore looked back through the character's back.
+
+Only head translation is inherited. Camera yaw and pitch remain entirely
+user-owned, so skeletal nod/roll does not create forced head bob or motion
+sickness. Both room and scene-mesh collision sweeps now begin at the animated
+head pivot rather than the old root-relative focus. A missing or ambiguous
+joint fails closed to the accepted modern third-person owner; it never guesses
+a different skeletal node.

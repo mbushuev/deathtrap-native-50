@@ -2269,3 +2269,31 @@ translation, player-relative translation and bounds metadata are retained.
 The camera output itself remains behaviourally identical to v0.0.193; the next
 implementation must be selected from a short animated capture rather than
 from another static height guess.
+
+## v0.0.194 live skeletal result and v0.0.195 mount
+
+The capture is
+`<game-directory>\logs\deathtrap-native-20260802-143017-803-pid23120.log`.
+It contains 58 sampled source ticks and 1,399 head-probe records across idle,
+forward/reverse locomotion, falling/room transitions and melee animation.
+
+The resolved player render node is `05DDFA18` for this process only. Its
+stable central upper-body path is:
+
+`player -> 05DDF8E8 -> 05DDDA08 -> 05DDF7B8 -> 05DDD8D8 -> 05DDF688`.
+
+`05DDF7B8` has three children (left arm, right arm and central neck branch).
+`05DDD8D8` is the zero-transform central anchor. `05DDF688` is the head: depth
+5, one child, local `0/71/34`, bound radius 76. Its descendants
+`05DDF558 -> 05DDF428 -> 05DDF2F8 -> 05DDF1C8 -> 05DDF098` form the descending
+braid. During streaming the head resource changes from `0xF40` to `0x1048`
+without changing address, topology, local translation or bound, proving that
+neither resource ID nor allocation address is an acceptable persistent key.
+
+v0.0.195 scores the topology and local/bound invariants, then reads the chosen
+head and player world matrices live at the mode-3 source update. The previous
+snapshot supplies only the verified topology and focus-to-root relationship;
+current root translation comes from current `camera_focus`. The head-relative
+animation offset is therefore retained without inheriting skeletal rotation.
+Collision origin, exact publication and subsequent x2/x3 endpoint
+interpolation all use the head-mounted source pose.

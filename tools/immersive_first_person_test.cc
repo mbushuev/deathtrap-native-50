@@ -65,6 +65,19 @@ int main() {
       BuildImmersiveFirstPersonPose(root, 0.0, 0.0, -1, 120);
   Require(!invalid.valid, "negative eye height must fail closed");
 
+  const ImmersiveFirstPersonPose mounted =
+      BuildImmersiveHeadMountedPose(root, 0.0, 0.0, 10, 55);
+  Require(mounted.valid, "head-mounted pose must be valid");
+  Require(mounted.eye == std::array<int32_t, 3>{100, 210, 355},
+          "head-mounted eye must advance along Dungeon's published view");
+  Require(mounted.forward == forward.forward,
+          "head mounting must not change user-owned look rotation");
+
+  const ImmersiveFirstPersonPose mounted_right =
+      BuildImmersiveHeadMountedPose(root, -kPi / 2.0, 0.0, 10, 55);
+  Require(mounted_right.eye == std::array<int32_t, 3>{45, 210, 300},
+          "head-mounted eye must track the published horizontal heading");
+
   std::cout << "immersive first-person pose tests passed\n";
   return 0;
 }
