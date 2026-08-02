@@ -32,6 +32,10 @@ int main() {
   // structural head identity.
   Require(!MatchesImmersiveHeadJoint(2, 0, 3, 76, 5),
           "branching hand or equipment node must not resolve as a head");
+  Require(CountsTowardImmersiveJointTopology(0xE58u, 0xE58u),
+          "female braid child must count toward head topology");
+  Require(!CountsTowardImmersiveJointTopology(0xE58u, 0xE00u),
+          "embedded arrow attachment must not count as a head child");
   Require(!MatchesImmersiveHeadJoint(0, 1, 3, 76, 5),
           "render-bearing parent must not resolve as a neck anchor");
   Require(!MatchesImmersiveHeadJoint(0, 0, 2, 90, 5),

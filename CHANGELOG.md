@@ -46,6 +46,8 @@ experiments and internal development changes are intentionally omitted.
   skeleton requirements.
 - Keeps immersive first person attached during attacks, jumps and other
   animations instead of treating the animated head translation as identity.
+- Keeps immersive first person attached when arrows or other temporary
+  projectiles remain embedded in the character model.
 - Restores native keyboard steering immediately after leaving immersive first
   person and uses a conventional physical-mouse vertical look direction.
 - Allows simultaneous forward/back and lateral movement in immersive first

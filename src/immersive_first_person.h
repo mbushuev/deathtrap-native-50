@@ -151,6 +151,16 @@ inline bool MatchesImmersiveHeadJoint(
       bounds_radius <= 115 && depth >= 4u && depth <= 7u;
 }
 
+// Embedded projectiles and other temporary attachments become ordinary scene
+// children of the struck body joint.  They do not belong to the animated
+// skeleton: unlike a real joint child, their scene-node flags differ from the
+// parent.  Exclude them before applying the stable head-topology predicate so
+// an arrow lodged in the head cannot turn first person into third person.
+inline bool CountsTowardImmersiveJointTopology(uint32_t parent_flags,
+                                                uint32_t child_flags) {
+  return parent_flags == child_flags;
+}
+
 // Physical DirectInput mouse Y needs the opposite sign at Dungeon's
 // head-mounted look-at boundary. InvertY deliberately reverses that default.
 inline double ImmersivePhysicalMouseVerticalSign(bool invert_y) {

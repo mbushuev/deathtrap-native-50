@@ -3617,11 +3617,15 @@ uintptr_t ResolvePlayerHeadJoint(const SceneSnapshot& scene) {
     return 0;
   }
 
-  std::unordered_map<uintptr_t, uint32_t> child_counts;
-  child_counts.reserve(scene.nodes.size());
+  std::unordered_map<uintptr_t, uint32_t> topology_child_counts;
+  topology_child_counts.reserve(scene.nodes.size());
   for (const auto& [node, transform] : scene.nodes) {
     if (node != scene.player && transform.parent) {
-      ++child_counts[transform.parent];
+      const auto parent = scene.nodes.find(transform.parent);
+      if (parent != scene.nodes.end() && CountsTowardImmersiveJointTopology(
+              parent->second.flags, transform.flags)) {
+        ++topology_child_counts[transform.parent];
+      }
     }
   }
 
@@ -3650,8 +3654,10 @@ uintptr_t ResolvePlayerHeadJoint(const SceneSnapshot& scene) {
     }
     if (ancestor != scene.player ||
         !MatchesImmersiveHeadJoint(
-            child_counts[node], parent->second.render_resource_handle,
-            child_counts[parent->second.parent], transform.bounds_radius,
+            topology_child_counts[node],
+            parent->second.render_resource_handle,
+            topology_child_counts[parent->second.parent],
+            transform.bounds_radius,
             depth)) {
       continue;
     }

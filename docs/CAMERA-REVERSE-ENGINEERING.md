@@ -2675,3 +2675,25 @@ The two measured dynamic collision-projection callsites and the vtable bridge
 remain installed because they feed exact player-contact handling rather than
 reverse-engineering telemetry. Their dispatcher now bypasses unrelated
 callbacks even when compact `DebugLog=1` support logging is enabled.
+
+## Embedded-arrow head topology (v0.0.216)
+
+The 2026-08-03 run
+`<game-directory>\logs\deathtrap-native-20260803-000456-493-pid16296.log`
+captures the reported head-shot failure. The immersive request repeatedly
+returns `valid=0 reason=HEAD_JOINT` and falls back to modern third person, then
+resumes on the same head node `05FF9688` as soon as the arrow disappears.
+
+The forced candidate snapshot at tick 2676 exposes the cause. Female head node
+`05FF9688` still has the measured radius 76, depth 5 and resource-free neck
+parent, but its raw child count is two. Child `05FF9558` is the normal braid
+root with matching flags `00000E58`; child `05FA8A88` is a transient embedded
+render object with resource `000030F6`, flags `00000E00`, zero local transform
+and radius 93. The scene graph therefore attaches the projectile directly to
+the hit joint without making it part of the animated skeleton.
+
+The resolver now derives topology counts only from parent/child pairs with
+equal scene-node flags. In this captured state the head retains one topology
+child rather than two. This is attachment-class filtering, not an allowance
+for a second child, so multiple embedded projectiles cannot reintroduce the
+failure and branching equipment nodes remain rejected.

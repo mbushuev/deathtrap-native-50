@@ -2422,3 +2422,18 @@ session logs. Required collision-projection capture remains narrowly scoped
 to its two verified callbacks plus the existing vtable bridge. Camera,
 locomotion, interpolation and collision decisions are otherwise identical to
 v0.0.214.
+
+## 0.0.216: temporary attachments are not skeletal topology
+
+The accepted head resolver identifies the unique head from stable ancestry,
+bounds and the number of animated children. A projectile embedded in the
+character is represented as an ordinary child of the struck joint, so counting
+all scene children makes a head shot alter that otherwise stable topology.
+The custom view then remains requested but falls back to modern third person
+until the projectile is removed.
+
+Head matching now counts only children whose scene-node flags match their
+parent. This preserves Red Lotus's animated braid child and Chaindog's leaf
+head while excluding independently rendered projectile attachments. The
+radius, depth, resource-free neck and three-branch chest constraints remain
+unchanged; no pointer latch or projectile-specific resource ID is used.
