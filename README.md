@@ -1,8 +1,8 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.184` (fully owned room-and-scene gameplay
-camera with collision-safe publication, user-owned movement heading and angular
-avoidance restricted to a near-pivot emergency).
+Current development version: `0.0.185` (fully owned room-and-scene gameplay
+camera with collision-safe publication, no automatic gameplay yaw selection
+and a direction-preserving near-pivot view).
 
 The `modern-third-person-camera` branch contains the native modern-camera
 implementation. It takes ownership at the mode-3 dispatcher, composes the

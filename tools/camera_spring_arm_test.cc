@@ -115,6 +115,37 @@ int main() {
     std::cerr << "collapsed avoidance side remained latched\n";
     return 1;
   }
+  CameraNearPivotModeStep near_pivot = StepCameraNearPivotMode(
+      false, 119.0, 0u, 120.0, 288.0, 4u);
+  if (!near_pivot.active || !near_pivot.changed) {
+    std::cerr << "collapsed direct arm did not enter near-pivot view\n";
+    return 1;
+  }
+  for (uint32_t clear_tick = 1; clear_tick < 4u; ++clear_tick) {
+    near_pivot = StepCameraNearPivotMode(
+        near_pivot.active, 400.0, near_pivot.direct_clear_ticks,
+        120.0, 288.0, 4u);
+    if (!near_pivot.active || near_pivot.changed ||
+        near_pivot.direct_clear_ticks != clear_tick) {
+      std::cerr << "near-pivot view exited without sustained direct room\n";
+      return 1;
+    }
+  }
+  near_pivot = StepCameraNearPivotMode(
+      near_pivot.active, 400.0, near_pivot.direct_clear_ticks,
+      120.0, 288.0, 4u);
+  if (near_pivot.active || !near_pivot.changed ||
+      near_pivot.direct_clear_ticks != 4u) {
+    std::cerr << "near-pivot view did not exit after sustained direct room\n";
+    return 1;
+  }
+  near_pivot = StepCameraNearPivotMode(
+      true, 287.0, 3u, 120.0, 288.0, 4u);
+  if (!near_pivot.active || near_pivot.changed ||
+      near_pivot.direct_clear_ticks != 0u) {
+    std::cerr << "near-pivot direct-clear evidence survived a relapse\n";
+    return 1;
+  }
   const CameraRelativeHeadingStep aligned_steering =
       StepCameraRelativeHeading(0, 0, 1024, 34);
   if (aligned_steering.heading_error != 0 ||

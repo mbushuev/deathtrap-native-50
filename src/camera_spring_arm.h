@@ -125,6 +125,12 @@ struct CameraAvoidanceLatchStep {
   bool release_to_direct = false;
 };
 
+struct CameraNearPivotModeStep {
+  uint32_t direct_clear_ticks = 0;
+  bool active = false;
+  bool changed = false;
+};
+
 struct CameraOrbitStickInput {
   double x = 0.0;
   double y = 0.0;
@@ -231,6 +237,37 @@ inline CameraAvoidanceLatchStep StepCameraAvoidanceLatch(
     result.retain_previous = true;
   } else {
     result.release_to_direct = true;
+  }
+  return result;
+}
+
+inline CameraNearPivotModeStep StepCameraNearPivotMode(
+    bool previously_active, double direct_safe_distance,
+    uint32_t previous_direct_clear_ticks, double enter_distance,
+    double exit_distance, uint32_t exit_clear_ticks) {
+  CameraNearPivotModeStep result;
+  if (!std::isfinite(direct_safe_distance) ||
+      !std::isfinite(enter_distance) || enter_distance < 0.0 ||
+      !std::isfinite(exit_distance) || exit_distance < enter_distance ||
+      exit_clear_ticks == 0u) {
+    result.active = previously_active;
+    return result;
+  }
+  if (!previously_active) {
+    result.active = direct_safe_distance < enter_distance;
+    result.changed = result.active;
+    return result;
+  }
+  result.active = true;
+  if (direct_safe_distance >= exit_distance) {
+    result.direct_clear_ticks = std::min(
+        exit_clear_ticks, previous_direct_clear_ticks +
+            static_cast<uint32_t>(
+                previous_direct_clear_ticks < exit_clear_ticks));
+    if (result.direct_clear_ticks >= exit_clear_ticks) {
+      result.active = false;
+      result.changed = true;
+    }
   }
   return result;
 }

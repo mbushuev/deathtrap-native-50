@@ -671,6 +671,11 @@ struct ThirdPersonOrbitState {
   // becomes physically unusable or the direct shot stays fully clear. This
   // prevents a corner from re-authoring the camera direction every tick.
   uint32_t owned_room_direct_clear_ticks = 0;
+  // A collapsed direct arm cannot provide both a nonzero look-at vector and a
+  // third-person position behind the player. The owned camera temporarily
+  // moves in front of the pivot without changing user control rotation.
+  bool owned_near_pivot_view_active = false;
+  uint32_t owned_near_pivot_direct_clear_ticks = 0;
   double owned_room_shadow_applied_yaw = 0.0;
   double owned_room_shadow_applied_pitch = 0.0;
   bool owned_room_shadow_offset_initialized = false;
@@ -1786,64 +1791,9 @@ bool SweepOwnedCameraAgainstRooms(
       static_cast<double>(requested[0]), static_cast<double>(requested[1]),
       static_cast<double>(requested[2])};
   if (orbit_plan) {
-    constexpr double kDegreesToRadians =
-        3.14159265358979323846 / 180.0;
     static const std::vector<deathtrap_camera::RoomOrbitCandidateOffset>
         kCandidateOffsets = {
             {0.0, 0.0},
-            {15.0 * kDegreesToRadians, 0.0},
-            {-15.0 * kDegreesToRadians, 0.0},
-            {30.0 * kDegreesToRadians, 0.0},
-            {-30.0 * kDegreesToRadians, 0.0},
-            {45.0 * kDegreesToRadians, 0.0},
-            {-45.0 * kDegreesToRadians, 0.0},
-            {60.0 * kDegreesToRadians, 0.0},
-            {-60.0 * kDegreesToRadians, 0.0},
-            {90.0 * kDegreesToRadians, 0.0},
-            {-90.0 * kDegreesToRadians, 0.0},
-            {0.0, 15.0 * kDegreesToRadians},
-            {0.0, -15.0 * kDegreesToRadians},
-            {0.0, 30.0 * kDegreesToRadians},
-            {0.0, -30.0 * kDegreesToRadians},
-            {30.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
-            {30.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
-            {-30.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
-            {-30.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
-            {60.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
-            {60.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
-            {-60.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
-            {-60.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
-            {120.0 * kDegreesToRadians, 0.0},
-            {-120.0 * kDegreesToRadians, 0.0},
-            {150.0 * kDegreesToRadians, 0.0},
-            {-150.0 * kDegreesToRadians, 0.0},
-            {180.0 * kDegreesToRadians, 0.0},
-            {0.0, 45.0 * kDegreesToRadians},
-            {0.0, -45.0 * kDegreesToRadians},
-            {90.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
-            {90.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
-            {-90.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
-            {-90.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
-            {120.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
-            {120.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
-            {-120.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
-            {-120.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
-            {150.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
-            {150.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
-            {-150.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
-            {-150.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
-            {180.0 * kDegreesToRadians, 15.0 * kDegreesToRadians},
-            {180.0 * kDegreesToRadians, -15.0 * kDegreesToRadians},
-            {60.0 * kDegreesToRadians, 30.0 * kDegreesToRadians},
-            {60.0 * kDegreesToRadians, -30.0 * kDegreesToRadians},
-            {-60.0 * kDegreesToRadians, 30.0 * kDegreesToRadians},
-            {-60.0 * kDegreesToRadians, -30.0 * kDegreesToRadians},
-            {120.0 * kDegreesToRadians, 30.0 * kDegreesToRadians},
-            {120.0 * kDegreesToRadians, -30.0 * kDegreesToRadians},
-            {-120.0 * kDegreesToRadians, 30.0 * kDegreesToRadians},
-            {-120.0 * kDegreesToRadians, -30.0 * kDegreesToRadians},
-            {180.0 * kDegreesToRadians, 30.0 * kDegreesToRadians},
-            {180.0 * kDegreesToRadians, -30.0 * kDegreesToRadians},
         };
     *orbit_plan = deathtrap_camera::SelectRoomOrbitPlan(
         cache.sectors, start_index, room_focus, room_requested,
@@ -4269,6 +4219,82 @@ bool SelectOwnedCameraCombinedPlan(
   return true;
 }
 
+struct OwnedNearPivotCameraPose {
+  std::array<int32_t, 3> position{};
+  std::array<double, 3> view_forward{};
+  double safe_distance = 0.0;
+  bool room_blocked = false;
+  bool scene_blocked = false;
+  bool valid = false;
+};
+
+bool BuildOwnedNearPivotCameraPose(
+    const SceneSnapshot& scene, const SceneSnapshot& stable_scene,
+    const std::array<int32_t, 3>& focus,
+    const std::array<int32_t, 3>& requested,
+    size_t start_sector_index, OwnedNearPivotCameraPose* pose) {
+  if (!pose || !g_runtime_room_graph.valid ||
+      start_sector_index >= g_runtime_room_graph.sectors.size()) {
+    return false;
+  }
+  *pose = {};
+  const double dx = static_cast<double>(requested[0] - focus[0]);
+  const double dy = static_cast<double>(requested[1] - focus[1]);
+  const double dz = static_cast<double>(requested[2] - focus[2]);
+  const double horizontal = std::hypot(dx, dz);
+  const double distance = std::hypot(horizontal, dy);
+  if (!std::isfinite(distance) || !std::isfinite(horizontal) ||
+      distance < 1.0 || horizontal < 1.0) {
+    return false;
+  }
+
+  // The normal third-person endpoint lies along +direction and looks back
+  // along -direction. When +direction has no usable room, place the camera a
+  // short distance along the same view-forward vector's horizontal projection.
+  // This changes third/near presentation, never yaw or movement authority.
+  const double near_distance = static_cast<double>(
+      std::max(g_custom_head_forward_offset,
+               static_cast<int32_t>(kThirdPersonMinimumCameraDistance)));
+  const deathtrap_camera::RoomVec3 room_focus{
+      static_cast<double>(focus[0]), static_cast<double>(focus[1]),
+      static_cast<double>(focus[2])};
+  const deathtrap_camera::RoomVec3 near_requested{
+      room_focus.x - dx / horizontal * near_distance,
+      room_focus.y,
+      room_focus.z - dz / horizontal * near_distance};
+  const deathtrap_camera::RoomSweepResult room =
+      deathtrap_camera::SweepSphereThroughRooms(
+          g_runtime_room_graph.sectors, start_sector_index, room_focus,
+          near_requested, kCameraCollisionSphereRadius, 8.0, 32u);
+  if (!room.valid) {
+    return false;
+  }
+  std::array<int32_t, 3> position = {
+      static_cast<int32_t>(std::lround(room.position.x)),
+      static_cast<int32_t>(std::lround(room.position.y)),
+      static_cast<int32_t>(std::lround(room.position.z))};
+  OwnedCameraSceneSweepResult scene_sweep;
+  if (!SweepOwnedCameraAgainstSceneMeshesInSnapshots(
+          scene, stable_scene, focus, position, &scene_sweep)) {
+    return false;
+  }
+  if (scene_sweep.blocked) {
+    position = scene_sweep.position;
+  }
+  const double safe_distance = CameraPositionDistance(focus, position);
+  if (!std::isfinite(safe_distance) || safe_distance < 1.0) {
+    return false;
+  }
+
+  pose->position = position;
+  pose->view_forward = {-dx / distance, -dy / distance, -dz / distance};
+  pose->safe_distance = safe_distance;
+  pose->room_blocked = room.blocked;
+  pose->scene_blocked = scene_sweep.blocked;
+  pose->valid = true;
+  return true;
+}
+
 bool BuildDetachedCameraMatrices(
     const std::array<uint32_t, kCameraNodeProbeDwords>& live_node,
     const std::array<int32_t, 3>& position,
@@ -4522,7 +4548,9 @@ bool OwnedCameraPublicationBackupMatches(
 }
 
 bool PublishOwnedCameraEndpoint(
-    void* controller, const std::array<int32_t, 3>& focus,
+    void* controller, const std::array<int32_t, 3>& collision_origin,
+    const std::array<int32_t, 3>& look_target,
+    const std::array<double, 3>* fixed_view_forward,
     const std::array<int32_t, 3>& combined_position,
     size_t start_sector_index, bool transition_cut) {
   if (!controller || !g_original_camera_look_at ||
@@ -4533,8 +4561,9 @@ bool PublishOwnedCameraEndpoint(
   }
 
   const deathtrap_camera::RoomVec3 room_focus{
-      static_cast<double>(focus[0]), static_cast<double>(focus[1]),
-      static_cast<double>(focus[2])};
+      static_cast<double>(collision_origin[0]),
+      static_cast<double>(collision_origin[1]),
+      static_cast<double>(collision_origin[2])};
   const deathtrap_camera::RoomVec3 room_target{
       static_cast<double>(combined_position[0]),
       static_cast<double>(combined_position[1]),
@@ -4634,13 +4663,34 @@ bool PublishOwnedCameraEndpoint(
       previous_pose_valid ? previous_camera->second.angles
                           : current_angles;
 
+  std::array<int32_t, 3> publication_look_target = look_target;
+  if (fixed_view_forward) {
+    constexpr double kLookAheadDistance = 1400.0;
+    const double forward_length = std::hypot(
+        std::hypot((*fixed_view_forward)[0], (*fixed_view_forward)[2]),
+        (*fixed_view_forward)[1]);
+    if (!std::isfinite(forward_length) || forward_length < 0.5) {
+      return false;
+    }
+    publication_look_target = {
+        target[0] + static_cast<int32_t>(std::lround(
+            (*fixed_view_forward)[0] / forward_length *
+            kLookAheadDistance)),
+        target[1] + static_cast<int32_t>(std::lround(
+            (*fixed_view_forward)[1] / forward_length *
+            kLookAheadDistance)),
+        target[2] + static_cast<int32_t>(std::lround(
+            (*fixed_view_forward)[2] / forward_length *
+            kLookAheadDistance))};
+  }
+
   std::array<int32_t, 3> owned_angles{};
   bool look_at_valid = false;
   __try {
     // Unlike the hybrid correction, the full-owned camera intentionally owns
     // its focus/look target.  The detached audit therefore uses the current
     // owned focus rather than borrowing a resolver-authored retail target.
-    g_original_camera_look_at(target.data(), focus.data(),
+    g_original_camera_look_at(target.data(), publication_look_target.data(),
                               owned_angles.data());
     look_at_valid = true;
   } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -6700,11 +6750,46 @@ void __cdecl HookMode3Camera(void* controller) {
           owned_room_applied_sweep.blocked, owned_scene_sweep.blocked,
           owned_scene_sweep.blocked ? &owned_scene_sweep.diagnostic
                                     : nullptr);
+      const CameraNearPivotModeStep near_pivot_step =
+          StepCameraNearPivotMode(
+              g_third_person_orbit_state.owned_near_pivot_view_active,
+              combined_safe_distance,
+              g_third_person_orbit_state
+                  .owned_near_pivot_direct_clear_ticks,
+              kThirdPersonMinimumCameraDistance,
+              owned_minimum_transition_distance, 4u);
+      g_third_person_orbit_state.owned_near_pivot_view_active =
+          near_pivot_step.active;
+      g_third_person_orbit_state.owned_near_pivot_direct_clear_ticks =
+          near_pivot_step.direct_clear_ticks;
+      OwnedNearPivotCameraPose near_pivot_pose;
+      std::array<int32_t, 3> owned_look_target = camera_focus;
+      const std::array<double, 3>* owned_fixed_view_forward = nullptr;
       std::array<int32_t, 3> owned_spring_position{};
-      bool owned_spring_valid = ResolveOwnedCameraSpringArm(
-          camera_focus, owned_combined_position, desired_distance,
-          combined_obstructed, combined_blocker_key,
-          &owned_spring_position);
+      bool owned_spring_valid = false;
+      if (near_pivot_step.active) {
+        owned_spring_valid = BuildOwnedNearPivotCameraPose(
+            g_previous_snapshot, g_older_snapshot, camera_focus, orbit,
+            owned_room_start_index, &near_pivot_pose);
+        if (owned_spring_valid) {
+          owned_spring_position = near_pivot_pose.position;
+          owned_fixed_view_forward = &near_pivot_pose.view_forward;
+          g_third_person_orbit_state.owned_collision_radius =
+              near_pivot_pose.safe_distance;
+          g_third_person_orbit_state.owned_collision_clear_ticks = 0;
+          g_third_person_orbit_state
+              .owned_collision_blocked_release_ticks = 0;
+          g_third_person_orbit_state
+              .owned_collision_blocked_candidate_distance =
+              near_pivot_pose.safe_distance;
+          g_third_person_orbit_state.owned_collision_blocker_key = 0;
+        }
+      } else {
+        owned_spring_valid = ResolveOwnedCameraSpringArm(
+            camera_focus, owned_combined_position, desired_distance,
+            combined_obstructed, combined_blocker_key,
+            &owned_spring_position);
+      }
 
       // Radial recovery is another intermediate source pose. Re-run both
       // collision channels on that exact rounded point; a shorter radius is
@@ -6743,6 +6828,7 @@ void __cdecl HookMode3Camera(void* controller) {
       }
 
       bool owned_transition_cut = owned_room_applied_safe_cut ||
+          near_pivot_step.changed ||
           !g_third_person_orbit_state.owned_publication_active;
       const double revalidated_safe_distance = CameraPositionDistance(
           camera_focus, owned_publish_position);
@@ -6784,7 +6870,7 @@ void __cdecl HookMode3Camera(void* controller) {
               "direct=%.1f selected=%.1f combined=%.1f spring=%.1f "
               "revalidated=%.1f room=%u/%u scene=%u/%u overlap=%u "
               "resource=%llu tri=%llu motion=%.1f blocker=%llu cut=%u "
-              "direct_clear=%u",
+              "direct_clear=%u near=%u/%u",
               static_cast<unsigned long long>(
                   owned_combined_plan.selected_index),
               owned_combined_plan.retained_previous ? 1u : 0u,
@@ -6811,12 +6897,16 @@ void __cdecl HookMode3Camera(void* controller) {
                   : owned_scene_sweep.diagnostic.bounds_motion,
               static_cast<unsigned long long>(combined_blocker_key),
               owned_transition_cut ? 1u : 0u,
-              g_third_person_orbit_state.owned_room_direct_clear_ticks);
+              g_third_person_orbit_state.owned_room_direct_clear_ticks,
+              near_pivot_step.active ? 1u : 0u,
+              near_pivot_step.direct_clear_ticks);
         }
       }
 
       if (owned_spring_valid && PublishOwnedCameraEndpoint(
-              controller, camera_focus, owned_publish_position,
+              controller, camera_focus, owned_look_target,
+              owned_fixed_view_forward,
+              owned_publish_position,
               owned_room_start_index, owned_transition_cut)) {
         g_third_person_orbit_state.owned_publication_active = true;
         g_third_person_orbit_state.collision_constrained_this_tick =
@@ -6841,6 +6931,8 @@ void __cdecl HookMode3Camera(void* controller) {
     g_third_person_orbit_state.owned_room_shadow_candidate_index =
         std::numeric_limits<size_t>::max();
     g_third_person_orbit_state.owned_room_direct_clear_ticks = 0;
+    g_third_person_orbit_state.owned_near_pivot_view_active = false;
+    g_third_person_orbit_state.owned_near_pivot_direct_clear_ticks = 0;
     g_third_person_orbit_state.owned_room_shadow_offset_initialized = false;
   }
   // Reaching the hybrid path means the complete owned transaction was not
@@ -13242,11 +13334,11 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.184 publishes one fully-owned "
+      "Deathtrap native render overlay 0.0.185 publishes one fully-owned "
       "collision-safe room+scene gameplay-camera pose per source tick, with "
       "detached matrix construction, atomic verified live publication, "
-      "initial-overlap ray exit, near-pivot-only angular avoidance, "
-      "user-owned movement heading, immediate contraction, sustained-margin "
+      "initial-overlap ray exit, direction-preserving near-pivot view, "
+      "no automatic gameplay yaw, immediate contraction, sustained-margin "
       "radial release and presentation cuts "
       "across disconnected safe shots; scripted reveals remain native and a "
       "transaction failure explicitly falls back to the 0.0.172 hybrid; "
