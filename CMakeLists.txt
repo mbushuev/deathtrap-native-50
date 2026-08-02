@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(deathtrap_native50_overlay VERSION 0.0.189 LANGUAGES C CXX)
+project(deathtrap_native50_overlay VERSION 0.0.190 LANGUAGES C CXX)
 
 if(NOT WIN32 OR NOT MSVC)
   message(FATAL_ERROR "Deathtrap Native 50 requires 32-bit Windows and MSVC")
@@ -72,6 +72,13 @@ add_executable(camera_room_collision_test
 target_compile_features(camera_room_collision_test PRIVATE cxx_std_17)
 target_include_directories(camera_room_collision_test PRIVATE src)
 target_compile_options(camera_room_collision_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
+
+add_executable(immersive_first_person_test
+  tools/immersive_first_person_test.cc)
+target_compile_features(immersive_first_person_test PRIVATE cxx_std_17)
+target_include_directories(immersive_first_person_test PRIVATE src)
+target_compile_options(immersive_first_person_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
 
 add_executable(music_track_routing_test

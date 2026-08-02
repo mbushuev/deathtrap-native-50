@@ -143,6 +143,12 @@ process launch creates another file instead of appending to the old one.
 During gameplay, `F11` toggles only the native render-rate modification. This
 provides a direct visual A/B test without restarting the game.
 
+`F10` toggles the overlay-owned immersive first-person view. Gamepad SELECT
+performs the same toggle. This is independent of the original Tab/R3
+first-person camera: the custom view keeps ordinary walking, running, attacks,
+the character body and the equipped weapon visible. Its eye height and forward
+offset are configured by `HeadHeight` and `HeadForwardOffset` under `[Camera]`.
+
 The installer updates `ASYLUM/keys.cfg` before launch. Horizontal mouse motion
 uses the game's original normal turn actions. Holding Shift adds the retail
 fast-turn actions, so running with Shift+W no longer leaves mouse turning at
@@ -238,12 +244,13 @@ heading gateway. Position, forward motion, animation, wall collision and
 walk/run selection remain retail-owned. A is jump/climb, X operate, RT primary
 attack, LT parry/block, RB cast spell and Start menu. Hold LB to use the
 explicit retail side-step actions; first person uses the same W/S plus
-side-step scheme. Version `0.0.114` restores the game's native
-Tab-driven first-person view on both physical Tab and R3. R3 toggles the held
-Tab action; while native camera mode 4 is active, the right stick drives retail
-first-person mouse-look and the modern orbit is suspended. SELECT still does
-not switch to the retired custom head/retail camera policies, so one persistent
-modern rig owns third-person gameplay.
+side-step scheme. Version `0.0.114` restores the game's native Tab-driven
+first-person view on both physical Tab and R3. R3 toggles the held Tab action;
+while native camera mode 4 is active, the right stick drives retail
+first-person mouse-look and the modern orbit is suspended. Version `0.0.190`
+assigns SELECT to a separate overlay-owned immersive first-person view. It
+stays inside the persistent mode-3 rig and uses W/S plus the explicit
+side-step path on XInput, so it does not replace or mutate retail Tab/R3.
 Start is delivered to the retail menu action as Escape before frontend
 ownership changes. The camera watchdog then transfers the controller only
 after the game actually leaves its gameplay camera; this prevents Start from

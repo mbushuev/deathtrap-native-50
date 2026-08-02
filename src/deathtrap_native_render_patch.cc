@@ -28,6 +28,7 @@
 #include "camera_spring_arm.h"
 #include "camera_room_collision.h"
 #include "deathtrap_music_route.h"
+#include "immersive_first_person.h"
 
 namespace {
 
@@ -597,6 +598,7 @@ bool g_camera_probe_enabled = false;
 CameraProbeSnapshot g_camera_probe_previous;
 std::string g_camera_probe_log_buffer;
 bool g_third_person_orbit_enabled = false;
+bool g_immersive_first_person_enabled = true;
 bool g_third_person_orbit_invert_x = false;
 bool g_third_person_orbit_invert_y = false;
 double g_third_person_orbit_horizontal_radians = 0.0;
@@ -739,6 +741,8 @@ enum class CustomCameraViewMode : uint32_t {
 
 std::atomic<uint32_t> g_custom_camera_view_mode{
     static_cast<uint32_t>(CustomCameraViewMode::kModernThirdPerson)};
+std::atomic<bool> g_custom_head_publication_active{false};
+std::atomic<uint64_t> g_custom_head_last_publication_ms{0};
 std::atomic<bool> g_scripted_camera_override_active{false};
 // A full-owned source state may jump between disconnected safe shot regions.
 // The source hook sets this once; the presentation scheduler consumes it and
@@ -814,7 +818,7 @@ const char* CustomCameraViewModeName(CustomCameraViewMode mode) {
     case CustomCameraViewMode::kModernThirdPerson:
       return "MODERN_THIRD_PERSON";
     case CustomCameraViewMode::kHead:
-      return "HEAD";
+      return "IMMERSIVE_FIRST_PERSON";
     case CustomCameraViewMode::kRetail:
       return "RETAIL";
   }
@@ -822,9 +826,8 @@ const char* CustomCameraViewModeName(CustomCameraViewMode mode) {
 }
 
 bool CustomHeadViewSelected() {
-  // Temporarily disabled: the legacy renderer culls the player model and can
-  // publish a black camera matrix when the origin is moved into the head.
-  return false;
+  return g_immersive_first_person_enabled &&
+      CurrentCustomCameraViewMode() == CustomCameraViewMode::kHead;
 }
 
 bool CustomCameraOwnsMode3() {
@@ -2392,6 +2395,38 @@ double CurvedStick(double value, double exponent) {
   return std::copysign(std::pow(std::abs(value), exponent), value);
 }
 
+void SetCustomHeadViewSelected(bool enabled, const char* source) {
+  if (enabled && !g_immersive_first_person_enabled) {
+    return;
+  }
+  const CustomCameraViewMode previous = CurrentCustomCameraViewMode();
+  const CustomCameraViewMode next =
+      enabled ? CustomCameraViewMode::kHead
+              : CustomCameraViewMode::kModernThirdPerson;
+  if (previous == next) {
+    return;
+  }
+  g_custom_camera_view_mode.store(static_cast<uint32_t>(next),
+                                  std::memory_order_release);
+  if (enabled) {
+    // The overlay-owned view never borrows retail mode 4. Release a controller
+    // Tab request first so R3/Tab remains an independent native camera.
+    g_xinput_first_person_toggled.store(false, std::memory_order_release);
+  }
+  g_third_person_orbit_state.filtered_input_x = 0.0;
+  g_third_person_orbit_state.filtered_input_y = 0.0;
+  g_owned_camera_presentation_cut_pending.store(true,
+                                                 std::memory_order_release);
+  AppendNativeLog("camera_view select=%s source=%s previous=%s",
+                  CustomCameraViewModeName(next),
+                  source ? source : "UNKNOWN",
+                  CustomCameraViewModeName(previous));
+}
+
+void ToggleCustomHeadView(const char* source) {
+  SetCustomHeadViewSelected(!CustomHeadViewSelected(), source);
+}
+
 void PublishThirdPersonOrbitInput(double right_x, double right_y,
                                   bool active) {
   constexpr double kInputScale = 1000000.0;
@@ -3161,6 +3196,9 @@ void ResetThirdPersonOrbit(const char* reason) {
     g_owned_camera_presentation_cut_pending.store(
         true, std::memory_order_release);
   }
+  g_custom_head_publication_active.store(false,
+                                          std::memory_order_release);
+  g_custom_head_last_publication_ms.store(0, std::memory_order_release);
   if (g_third_person_orbit_state.engaged) {
     AppendNativeLog("camera_orbit disengage reason=%s applications=%llu",
                     reason,
@@ -3265,6 +3303,17 @@ bool BuildThirdPersonOrbitPosition(void* controller,
     g_third_person_orbit_state.filtered_input_y = 0.0;
   }
 
+  const bool custom_head_view = CustomHeadViewSelected();
+  const double active_minimum_pitch =
+      custom_head_view ? g_custom_head_min_pitch_radians
+                       : g_third_person_orbit_min_pitch_radians;
+  const double active_maximum_pitch =
+      custom_head_view ? g_custom_head_max_pitch_radians
+                       : g_third_person_orbit_max_pitch_radians;
+  g_third_person_orbit_state.pitch = std::clamp(
+      g_third_person_orbit_state.pitch, active_minimum_pitch,
+      active_maximum_pitch);
+
   if (input_sequence != g_third_person_orbit_state.last_input_sequence) {
     const uint64_t now_ms = GetTickCount64();
     const double elapsed_seconds = std::clamp(
@@ -3288,7 +3337,9 @@ bool BuildThirdPersonOrbitPosition(void* controller,
     // trailing spring arm: stick-up must look up, not move the arm upward
     // while continuing to look at the player. Preserve the approved trailing
     // camera direction and correct only the custom head mode.
-    const double vertical_sign = g_third_person_orbit_invert_y ? -1.0 : 1.0;
+    const double vertical_sign = custom_head_view
+        ? (g_third_person_orbit_invert_y ? 1.0 : -1.0)
+        : (g_third_person_orbit_invert_y ? -1.0 : 1.0);
     g_third_person_orbit_state.yaw +=
         g_third_person_orbit_state.filtered_input_x * horizontal_sign *
         g_third_person_orbit_horizontal_radians *
@@ -3300,8 +3351,7 @@ bool BuildThirdPersonOrbitPosition(void* controller,
                 g_third_person_orbit_vertical_radians *
                 (elapsed_seconds * 1000.0 /
                  static_cast<double>(kOriginalPeriodMilliseconds)),
-        g_third_person_orbit_min_pitch_radians,
-        g_third_person_orbit_max_pitch_radians);
+        active_minimum_pitch, active_maximum_pitch);
     if (g_third_person_orbit_state.yaw > kOrbitPi ||
         g_third_person_orbit_state.yaw < -kOrbitPi) {
       g_third_person_orbit_state.yaw = std::remainder(
@@ -3324,8 +3374,7 @@ bool BuildThirdPersonOrbitPosition(void* controller,
         g_third_person_orbit_state.pitch +
             static_cast<double>(mouse_delta_y) * vertical_sign *
                 g_third_person_mouse_vertical_radians,
-        g_third_person_orbit_min_pitch_radians,
-        g_third_person_orbit_max_pitch_radians);
+        active_minimum_pitch, active_maximum_pitch);
     if (g_third_person_orbit_state.yaw > kOrbitPi ||
         g_third_person_orbit_state.yaw < -kOrbitPi) {
       g_third_person_orbit_state.yaw = std::remainder(
@@ -5089,6 +5138,64 @@ bool PublishOwnedCameraEndpoint(
   return committed;
 }
 
+bool PublishImmersiveFirstPersonEndpoint(
+    void* controller, const std::array<int32_t, 3>& camera_focus,
+    uintptr_t room_or_sector, bool transition_cut) {
+  std::array<int32_t, 3> player{};
+  if (!controller || !ReadCameraPlayerPosition(controller, &player)) {
+    return false;
+  }
+
+  const double yaw = g_third_person_orbit_state.yaw;
+  const double pitch = g_third_person_orbit_state.pitch;
+  const ImmersiveFirstPersonPose pose = BuildImmersiveFirstPersonPose(
+      player, yaw, pitch, g_custom_head_height,
+      g_custom_head_forward_offset);
+  if (!pose.valid) {
+    return false;
+  }
+  const std::array<double, 3>& view_forward = pose.forward;
+  const std::array<int32_t, 3>& requested_eye = pose.eye;
+
+  deathtrap_camera::RoomSweepResult room_sweep;
+  std::array<int32_t, 3> safe_eye = requested_eye;
+  size_t start_sector_index = std::numeric_limits<size_t>::max();
+  if (!SweepOwnedCameraAgainstRooms(
+          camera_focus, requested_eye, room_or_sector, &room_sweep, &safe_eye,
+          nullptr, std::numeric_limits<size_t>::max(), &start_sector_index)) {
+    AppendNativeLog("camera_immersive_first_person valid=0 reason=ROOM");
+    return false;
+  }
+
+  OwnedCameraSceneSweepResult scene_sweep;
+  const bool scene_valid = SweepOwnedCameraAgainstSceneMeshesInSnapshots(
+      g_previous_snapshot, g_older_snapshot, camera_focus, safe_eye,
+      &scene_sweep);
+  if (scene_valid && scene_sweep.blocked) {
+    safe_eye = scene_sweep.position;
+  }
+
+  const bool committed = PublishOwnedCameraEndpoint(
+      controller, camera_focus, camera_focus, &view_forward, safe_eye,
+      start_sector_index, transition_cut);
+  static uint64_t head_sequence = 0;
+  ++head_sequence;
+  if (!committed || transition_cut || room_sweep.blocked ||
+      (scene_valid && scene_sweep.blocked) ||
+      (head_sequence % 30u) == 1u) {
+    AppendNativeLog(
+        "camera_immersive_first_person valid=%u eye=%d/%d/%d safe=%d/%d/%d "
+        "yaw=%.2f pitch=%.2f room=%u scene=%u/%u cut=%u",
+        committed ? 1u : 0u, requested_eye[0], requested_eye[1],
+        requested_eye[2], safe_eye[0], safe_eye[1], safe_eye[2],
+        yaw * 180.0 / kOrbitPi, pitch * 180.0 / kOrbitPi,
+        room_sweep.blocked ? 1u : 0u, scene_valid ? 1u : 0u,
+        scene_valid && scene_sweep.blocked ? 1u : 0u,
+        transition_cut ? 1u : 0u);
+  }
+  return committed;
+}
+
 // Source camera endpoints are collision-resolved independently, but the 50 Hz
 // presentation path used to connect them with a straight Cartesian chord. An
 // orbit turning around a prop corner can have two valid endpoints while that
@@ -6763,6 +6870,8 @@ bool ConfigureCameraWithSceneMeshPushout(
   return true;
 }
 
+void PublishImmersiveFirstPersonHeadingIntent();
+
 void __cdecl HookMode3Camera(void* controller) {
   if (!g_original_mode3_camera || !g_configure_camera ||
       !g_resolve_camera_sector ||
@@ -6805,6 +6914,10 @@ void __cdecl HookMode3Camera(void* controller) {
   g_scripted_camera_override_active.store(scripted,
                                            std::memory_order_release);
   if (scripted) {
+    g_custom_head_publication_active.store(false,
+                                            std::memory_order_release);
+    g_custom_head_last_publication_ms.store(0,
+                                             std::memory_order_release);
     if (g_third_person_orbit_state.owned_publication_active) {
       g_third_person_orbit_state.owned_publication_active = false;
       g_owned_camera_presentation_cut_pending.store(
@@ -6843,6 +6956,9 @@ void __cdecl HookMode3Camera(void* controller) {
   if (!BuildThirdPersonOrbitPosition(controller, native, &orbit)) {
     return;
   }
+  if (CustomHeadViewSelected()) {
+    PublishImmersiveFirstPersonHeadingIntent();
+  }
 
   std::array<int32_t, 3> camera_focus{};
   if (!ReadCameraFocusPosition(controller, &camera_focus)) {
@@ -6867,6 +6983,42 @@ void __cdecl HookMode3Camera(void* controller) {
   // each newly visited sector once and does not participate in the hybrid
   // 0.0.172 collision or publication path.
   LogCameraRoomSectorSnapshot(camera_focus, room_or_sector);
+  if (CustomHeadViewSelected()) {
+    const uint64_t head_now_ms = GetTickCount64();
+    const uint64_t previous_head_ms =
+        g_custom_head_last_publication_ms.load(std::memory_order_acquire);
+    const bool transition_cut =
+        !g_custom_head_publication_active.load(std::memory_order_acquire) ||
+        !previous_head_ms || head_now_ms - previous_head_ms > 200u;
+    if (PublishImmersiveFirstPersonEndpoint(
+            controller, camera_focus, room_or_sector, transition_cut)) {
+      g_custom_head_publication_active.store(true,
+                                              std::memory_order_release);
+      g_custom_head_last_publication_ms.store(head_now_ms,
+                                               std::memory_order_release);
+      g_third_person_orbit_state.owned_publication_active = true;
+      g_third_person_orbit_state.collision_constrained_this_tick = false;
+      return;
+    }
+    // Keep the normal fully-owned third-person transaction as a fail-closed
+    // fallback for a missing room graph/snapshot instead of exposing the
+    // untouched retail fixed camera for one frame.
+    if (g_custom_head_publication_active.exchange(
+            false, std::memory_order_acq_rel)) {
+      g_owned_camera_presentation_cut_pending.store(
+          true, std::memory_order_release);
+    }
+    g_custom_head_last_publication_ms.store(0,
+                                             std::memory_order_release);
+    AppendNativeLog(
+        "camera_immersive_first_person fallback=MODERN_THIRD_PERSON");
+  } else if (g_custom_head_publication_active.exchange(
+                 false, std::memory_order_acq_rel)) {
+    g_custom_head_last_publication_ms.store(0,
+                                             std::memory_order_release);
+    g_owned_camera_presentation_cut_pending.store(
+        true, std::memory_order_release);
+  }
   deathtrap_camera::RoomSweepResult owned_room_sweep;
   deathtrap_camera::RoomSweepResult owned_room_applied_sweep;
   deathtrap_camera::RoomOrbitPlan owned_room_plan;
@@ -8934,7 +9086,7 @@ bool CameraRelativeDesiredHeading(const NormalizedStick2& stick,
 }
 
 void PublishCameraRelativeMovementIntent(bool active, int32_t heading,
-                                         double magnitude) {
+                                          double magnitude) {
   if (active && !g_xinput_camera_relative_was_active) {
     g_xinput_camera_relative_started_ms.store(GetTickCount64(),
                                                std::memory_order_release);
@@ -8957,6 +9109,27 @@ void PublishCameraRelativeMovementIntent(bool active, int32_t heading,
                     magnitude);
   }
   g_xinput_camera_relative_was_active = active;
+}
+
+void PublishImmersiveFirstPersonHeadingIntent() {
+  int32_t current_heading = 0;
+  uintptr_t controller = 0;
+  if (!ReadLivePlayerHeading(&current_heading, &controller) || !controller) {
+    return;
+  }
+  const CameraRelativeHeadingTarget target = CameraRelativeHeadingFromOrbit(
+      g_third_person_orbit_state.yaw, 0.0, 1.0,
+      kPlayerHeadingUnitsPerTurn, false);
+  if (!target.valid) {
+    return;
+  }
+  g_xinput_movement_controller.store(controller,
+                                      std::memory_order_release);
+  // Keep the body and equipped weapon aligned with the eye yaw even while
+  // stationary. The existing dispatcher applies the bounded canonical heading
+  // writer on the next player tick; movement, animation and collision remain
+  // fully retail-owned.
+  PublishCameraRelativeMovementIntent(true, target.heading, 1.0);
 }
 
 void PublishNativeJoystickMovement(bool active, double x, double y) {
@@ -9293,9 +9466,10 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     }
     const bool strafe_modifier =
         (buttons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
+    const bool custom_head_movement = CustomHeadViewSelected();
     const bool first_person_movement =
         g_xinput_first_person_toggled.load(std::memory_order_acquire) ||
-        RetailFirstPersonActive();
+        RetailFirstPersonActive() || custom_head_movement;
     int32_t desired_heading = 0;
     int32_t current_heading = 0;
     uintptr_t current_controller = 0;
@@ -9303,17 +9477,32 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         g_native_joystick_hooks_installed.load(std::memory_order_acquire);
     const bool movement_requested =
         movement_stick.magnitude > g_xinput_movement_threshold;
+    bool desired_heading_valid = false;
+    if (custom_head_movement) {
+      const CameraRelativeHeadingTarget view_heading =
+          CameraRelativeHeadingFromOrbit(
+              g_third_person_orbit_state.yaw, 0.0, 1.0,
+              kPlayerHeadingUnitsPerTurn, false);
+      if (view_heading.valid) {
+        desired_heading = view_heading.heading;
+        desired_heading_valid = true;
+      }
+    } else {
+      desired_heading_valid =
+          CameraRelativeDesiredHeading(movement_stick, &desired_heading);
+    }
     const bool camera_relative_available =
         g_xinput_camera_relative_movement &&
         native_joystick_available &&
         g_player_state_dispatcher_hook_installed.load(
             std::memory_order_acquire) &&
         !selector_captures_controls && !strafe_modifier &&
-        !first_person_movement &&
+        (!first_person_movement || custom_head_movement) &&
         CustomCameraOwnsMode3() &&
-        CameraRelativeDesiredHeading(movement_stick, &desired_heading) &&
+        desired_heading_valid &&
         ReadLivePlayerHeading(&current_heading, &current_controller);
-    if (camera_relative_available && movement_requested) {
+    if (camera_relative_available &&
+        (movement_requested || custom_head_movement)) {
       if (g_debug_log && !g_xinput_camera_relative_was_active) {
         AppendNativeLog(
             "xinput movement stick raw=%d/%d normalized=%.3f/%.3f "
@@ -9326,20 +9515,25 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
       g_xinput_movement_controller.store(current_controller,
                                           std::memory_order_release);
       PublishCameraRelativeMovementIntent(
-          true, desired_heading, movement_stick.magnitude);
+          true, desired_heading,
+          custom_head_movement ? 1.0 : movement_stick.magnitude);
       // Native Y retains the game's action resolver, root motion, collision,
       // walk/run and animation ownership. Native X is deliberately neutral:
       // its meaning changes with the active turn state. The shared 0x82750
       // dispatcher applies the bounded camera-relative heading separately.
       PublishNativeJoystickMovement(
-          true, 0.0, movement_stick.magnitude);
+          true, 0.0, custom_head_movement
+                         ? movement_stick.y
+                         : movement_stick.magnitude);
       if (g_debug_log &&
           (!g_xinput_direct_heading_steering_was_active ||
            (g_source_ticks.load(std::memory_order_relaxed) % 60u) == 1u)) {
         AppendNativeLog(
             "xinput movement dispatcher_steering=1 target=%d "
             "current=%d native_axes=0.000/%.3f magnitude=%.3f",
-            desired_heading, current_heading, movement_stick.magnitude,
+            desired_heading, current_heading,
+            custom_head_movement ? movement_stick.y
+                                 : movement_stick.magnitude,
             movement_stick.magnitude);
       }
       g_xinput_direct_heading_steering_was_active = true;
@@ -9347,8 +9541,12 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
       InjectVirtualKey(InjectedKey::kS, false);
       InjectVirtualKey(InjectedKey::kA, false);
       InjectVirtualKey(InjectedKey::kD, false);
-      InjectVirtualKey(InjectedKey::kJ, false);
-      InjectVirtualKey(InjectedKey::kK, false);
+      InjectVirtualKey(InjectedKey::kJ,
+                       custom_head_movement &&
+                           left_x < -g_xinput_movement_threshold);
+      InjectVirtualKey(InjectedKey::kK,
+                       custom_head_movement &&
+                           left_x > g_xinput_movement_threshold);
     } else {
       if (g_debug_log && g_xinput_direct_heading_steering_was_active) {
         AppendNativeLog(
@@ -9391,9 +9589,10 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
                        side_step &&
                            left_x > g_xinput_movement_threshold);
     }
-    const double run_magnitude = camera_relative_available
-                                     ? movement_stick.magnitude
-                                     : std::abs(left_y);
+    const double run_magnitude =
+        camera_relative_available && !custom_head_movement
+            ? movement_stick.magnitude
+            : std::abs(left_y);
     if (run_magnitude >= g_xinput_run_threshold) {
       g_xinput_run_active = true;
     } else if (run_magnitude <= g_xinput_run_release_threshold) {
@@ -9409,16 +9608,23 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     // retail F2+8 routine. Never synthesize the unrelated C binding here.
     InjectVirtualKey(InjectedKey::kC, false);
     // R3 toggles the game's original Tab-driven first-person mode. Keep this
-    // separate from the retired custom head/retail camera policies: mode 4 is
+    // separate from the overlay-owned immersive view: retail mode 4 is
     // a complete native gameplay state with its own look and culling path.
     if (!selector_captures_controls &&
         (pressed & XINPUT_GAMEPAD_RIGHT_THUMB) != 0) {
       const bool enabled =
           !g_xinput_first_person_toggled.load(std::memory_order_acquire);
+      if (enabled && CustomHeadViewSelected()) {
+        SetCustomHeadViewSelected(false, "R3");
+      }
       g_xinput_first_person_toggled.store(enabled,
                                            std::memory_order_release);
       AppendNativeLog("xinput first_person=%u source=R3",
                       enabled ? 1u : 0u);
+    }
+    if (!selector_captures_controls &&
+        (pressed & XINPUT_GAMEPAD_BACK) != 0) {
+      ToggleCustomHeadView("SELECT");
     }
     const bool first_person_requested =
         g_xinput_first_person_toggled.load(std::memory_order_acquire);
@@ -11213,55 +11419,6 @@ SceneSnapshot CaptureScene(void* context) {
   return snapshot;
 }
 
-bool ApplyCustomHeadViewTarget(SceneSnapshot* current) {
-  if (!current || !current->camera || !current->player ||
-      !CustomHeadViewSelected() ||
-      !g_third_person_orbit_state.engaged ||
-      g_scripted_camera_override_active.load(std::memory_order_acquire) ||
-      !DeathtrapGameplayReady(false) || !g_dungeon_base) {
-    return false;
-  }
-  void* const controller = g_dungeon_base + kCameraControllerRva;
-  if (g_third_person_orbit_state.controller != controller) {
-    return false;
-  }
-  auto camera = current->nodes.find(current->camera);
-  const auto player = current->nodes.find(current->player);
-  if (camera == current->nodes.end() || player == current->nodes.end()) {
-    return false;
-  }
-
-  // Keep the complete rotation produced by the verified mode-3 native camera
-  // pipeline. Moving only its origin to the player's eye point gives the
-  // expected outward view while preserving the model, hands, weapon, shadow,
-  // culling mode and gameplay state. In particular this never calls the
-  // retail mode-4 callback, which also mutates persistent visibility flags.
-  const double forward_x =
-      -std::sin(g_third_person_orbit_state.yaw);
-  const double forward_z =
-      -std::cos(g_third_person_orbit_state.yaw);
-  const std::array<int32_t, 3> eye = {
-      player->second.world.values[9] + static_cast<int32_t>(std::lround(
-          forward_x * static_cast<double>(g_custom_head_forward_offset))),
-      player->second.world.values[10] + g_custom_head_height,
-      player->second.world.values[11] + static_cast<int32_t>(std::lround(
-          forward_z * static_cast<double>(g_custom_head_forward_offset)))};
-
-  std::array<int64_t, 3> world_delta{};
-  for (size_t axis = 0; axis < 3; ++axis) {
-    world_delta[axis] = static_cast<int64_t>(eye[axis]) -
-                        camera->second.world.values[9 + axis];
-    camera->second.world.values[9 + axis] = eye[axis];
-    camera->second.local.values[9 + axis] = static_cast<int32_t>(
-        std::clamp<int64_t>(
-            static_cast<int64_t>(camera->second.local.values[9 + axis]) +
-                world_delta[axis],
-            std::numeric_limits<int32_t>::min(),
-            std::numeric_limits<int32_t>::max()));
-  }
-  return true;
-}
-
 bool ApplyCustomCameraTransition(SceneSnapshot* current) {
   if (!current || !current->camera) {
     g_custom_camera_transition.initialized = false;
@@ -13013,6 +13170,10 @@ void CallOriginalRenderPresentWait(void* context, int wait) {
 }
 
 void __cdecl HookRenderPresentWait(void* context, int wait) {
+  if ((GetAsyncKeyState(VK_F10) & 1) != 0 && IsGameForeground() &&
+      DeathtrapGameplayReady(false)) {
+    ToggleCustomHeadView("F10");
+  }
   if ((GetAsyncKeyState(VK_F11) & 1) != 0) {
     const uint32_t previous =
         g_subframes.load(std::memory_order_relaxed);
@@ -13074,12 +13235,9 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   // a second render-only translation here would retain a different rotation,
   // recreating the invisible-centre/stuck-camera failure.
   const bool modern_follow_target = false;
-  const bool custom_head_target =
-      !scene_history_boundary && ApplyCustomHeadViewTarget(&current);
   const bool custom_camera_transition =
       !scene_history_boundary && ApplyCustomCameraTransition(&current);
-  if (modern_follow_target || custom_head_target ||
-      custom_camera_transition) {
+  if (modern_follow_target || custom_camera_transition) {
     // The transition is render-only. Native controller state remains mode 3;
     // only the captured camera transform and its published mirror are moved.
     RestoreScene(current);
@@ -13425,6 +13583,8 @@ void InitializePatchState() {
       ConfiguredInteger(L"XInput", L"InvertRightY", 0) != 0;
   g_third_person_orbit_enabled =
       ConfiguredInteger(L"Camera", L"ThirdPersonOrbit", 1) != 0;
+  g_immersive_first_person_enabled =
+      ConfiguredInteger(L"Camera", L"ImmersiveFirstPerson", 1) != 0;
   g_third_person_orbit_invert_x =
       ConfiguredInteger(L"Camera", L"InvertX", 0) != 0;
   g_third_person_orbit_invert_y =
@@ -13602,8 +13762,9 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.189 fixes Steam Redbook-to-MP3 "
-      "track routing and publishes one fully-owned "
+      "Deathtrap native render overlay 0.0.190 adds an independent "
+      "body-visible immersive first-person camera and keeps the Steam "
+      "Redbook-to-MP3 routing fix; it publishes one fully-owned "
       "collision-safe room+scene gameplay-camera pose per source tick, with "
       "detached matrix construction, atomic verified live publication, "
       "initial-overlap ray exit, radial near-pivot collapse, bounded scripted "
@@ -13631,7 +13792,8 @@ void InitializePatchState() {
       "camera_relative_movement=%u invert_y=%u turn=%.0fdeg "
       "vibration=%u/%u%% action=%u/%u/%u/%ums event=%u/%u/%u/%u/%u/"
       "%u/%ums heavy=%uhp/%ums "
-      "available=%u camera_probe=%u orbit=%u sensitivity=%d/%ddeg "
+      "available=%u camera_probe=%u orbit=%u immersive_first_person=%u "
+      "sensitivity=%d/%ddeg "
       "pitch=%d..%d head_pitch=%d..%d head=%d/%d radius=%d..%d invert=%u/%u "
       "message_lifetime=%u%% ui=%u_ticks/%u pst=%u_ticks/%u",
       g_weapon_wheel_enabled ? 1u : 0u,
@@ -13666,6 +13828,7 @@ void InitializePatchState() {
       g_xinput_set_state ? 1u : 0u,
       g_camera_probe_enabled ? 1u : 0u,
       g_third_person_orbit_enabled ? 1u : 0u,
+      g_immersive_first_person_enabled ? 1u : 0u,
       static_cast<int>(std::lround(
           g_third_person_orbit_horizontal_radians * 180.0 / kOrbitPi)),
       static_cast<int>(std::lround(
@@ -13718,6 +13881,11 @@ const wchar_t* GetDeathtrapSessionLogPath() {
     path = directory + L"\\" + name;
   });
   return path.c_str();
+}
+
+bool DeathtrapImmersiveFirstPersonActive() {
+  return CustomHeadViewSelected() && DeathtrapGameplayReady(false) &&
+      !RetailFirstPersonActive();
 }
 
 void QueueDeathtrapWeaponWheelDelta(int32_t delta) {

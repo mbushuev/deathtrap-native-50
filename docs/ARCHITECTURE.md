@@ -52,8 +52,11 @@ orientation behavior remain native.
 
 Synthetic render phases interpolate that accepted rigid transform only. They
 do not carry an older camera point, latch a mesh face or run another follow
-filter. Explicit authored reveals and first person remain separate owners. The
-Arkham Asylum evidence and the exact Deathtrap transfer boundary are documented
+filter. Explicit authored reveals and retail first person remain separate
+owners. The optional immersive first-person view stays inside the fully owned
+mode-3 transaction: it publishes a short room/scene-validated eye endpoint and
+a yaw/pitch look vector without invoking retail mode 4 or changing player
+visibility. The Arkham Asylum evidence and exact transfer boundary are documented
 in [`ARKHAM-ASYLUM-CAMERA-TRANSFER.md`](ARKHAM-ASYLUM-CAMERA-TRANSFER.md).
 
 ## DirectDraw page restoration
@@ -94,7 +97,8 @@ The installer adds those sources to the retail actions in `ASYLUM/keys.cfg`
 before launch. In untouched retail camera mode, normal horizontal motion maps
 to `ACTION_TURN_LEFT/RIGHT`; Shift plus horizontal motion maps to
 `ACTION_TURN_FAST_LEFT/RIGHT`. In modern third-person mode the DirectInput
-proxy instead consumes only the physical X/Y deltas for camera orbit, while
+proxy instead consumes only the physical X/Y deltas for camera orbit or the
+immersive first-person view, while
 buttons and wheel remain on their native paths. Menus, the selector and retail
 first person always retain the original mouse stream. Left and right buttons
 map to `ACTION_ATTACK_1` and `ACTION_PARRY`.

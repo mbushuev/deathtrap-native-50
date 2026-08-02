@@ -170,12 +170,24 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
           ? g_direct_input_device_get_state(device, data_size, data)
           : DIERR_GENERIC;
   if (SUCCEEDED(result) && data && data_size == 256u) {
-    const auto* keyboard = static_cast<const uint8_t*>(data);
+    auto* keyboard = static_cast<uint8_t*>(data);
     const bool operate_down = (keyboard[DIK_E] & 0x80u) != 0u;
     const bool was_down = g_physical_operate_key_down.exchange(
         operate_down, std::memory_order_acq_rel);
     if (operate_down && !was_down) {
       NotifyDeathtrapOperateInput();
+    }
+    if (DeathtrapImmersiveFirstPersonActive()) {
+      const bool left = (keyboard[DIK_A] & 0x80u) != 0u;
+      const bool right = (keyboard[DIK_D] & 0x80u) != 0u;
+      keyboard[DIK_A] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_D] &= static_cast<uint8_t>(~0x80u);
+      if (left) {
+        keyboard[DIK_J] |= 0x80u;
+      }
+      if (right) {
+        keyboard[DIK_K] |= 0x80u;
+      }
     }
   }
   // Deathtrap uses the standard relative mouse state. Preserve the physical

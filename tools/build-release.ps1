@@ -31,6 +31,16 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& (Join-Path $releaseDirectory 'immersive_first_person_test.exe')
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+& (Join-Path $releaseDirectory 'music_track_routing_test.exe')
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 & (Join-Path $releaseDirectory 'dinput_proxy_smoke_test.exe') `
     (Join-Path $releaseDirectory 'dinput.dll')
 if ($LASTEXITCODE -ne 0) {

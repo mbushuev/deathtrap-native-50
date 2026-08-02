@@ -1,8 +1,8 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.189` (the stable v0.0.188 fully owned camera
-plus a signature-gated fix for the Steam release playing the same MP3 music
-track on every level).
+Current development version: `0.0.190` (the stable fully owned camera and
+Steam music-routing fix plus an independent body-visible immersive
+first-person view).
 
 The `modern-third-person-camera` branch contains the native modern-camera
 implementation. It takes ownership at the mode-3 dispatcher, composes the
@@ -128,9 +128,12 @@ D3D11 settings, first-run verification and troubleshooting.
   path. Hold LB to use the native side-step actions. A jumps/climbs, X
   operates, RT attacks, LT blocks, RB casts, and Start opens the menu. Gameplay
   uses one persistent modern third-person camera. Tab enters the game's native
-  first-person view, and R3 toggles that same Tab-driven mode; the right stick
-  becomes native first-person look until R3 returns to third person. SELECT no
-  longer switches to the retired custom head/retail camera policies.
+  first-person view, and R3 toggles that same Tab-driven mode. The separate
+  overlay-owned immersive first-person view is toggled by F10 or gamepad
+  SELECT. It remains in mode 3, keeps walking, running, attacks and the full
+  character/weapon render, and uses the modern mouse/right-stick look path.
+  Press F10/SELECT again to return to the preserved third-person orbit; R3
+  still enters the untouched retail first-person mode independently.
   `Camera/InvertX=1` and `Camera/InvertY=1` reverse the conventional default
   camera axes. `Camera/PreferredRadius=1400` controls the unobstructed camera
   distance; the native collision resolver may pull it closer near geometry.

@@ -71,6 +71,11 @@ void SubmitDeathtrapXInputMouseState(int32_t delta_x, int32_t delta_y,
 void SubmitDeathtrapPhysicalMouseDelta(int32_t delta_x, int32_t delta_y);
 bool DeathtrapModernCameraConsumesMouse();
 
+// True only while the overlay-owned body-visible first-person camera is the
+// active gameplay view. The DirectInput proxy uses this to reinterpret A/D as
+// the already-installed J/K side-step actions without changing keys.cfg.
+bool DeathtrapImmersiveFirstPersonActive();
+
 // Marks an explicit operate/use input from either the controller bridge or
 // the physical DirectInput keyboard. The camera uses this narrow signal to
 // allow only authored lever/switch reveal shots through the retail rig.
