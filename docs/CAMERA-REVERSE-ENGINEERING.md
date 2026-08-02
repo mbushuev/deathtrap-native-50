@@ -2316,3 +2316,19 @@ resource-free parent and three-child grandparent. v0.0.196 retains all those
 checks and permits the parent to animate. No latch or last-known node is
 needed, and no failure-driven camera-mode cut should remain in these movement
 states.
+
+## v0.0.196 live pitch cutoff and v0.0.197 correction
+
+The live log is
+`<game-directory>\logs\deathtrap-native-20260802-144838-924-pid36792.log`.
+It contains zero `HEAD_JOINT` failures, confirming continuous skeletal
+resolution during locomotion. At the end, however, custom first person emits
+repeated unexplained fallbacks above roughly +60 degrees, returns successfully
+at pitch `59.86`, then repeats below -60 and returns at `-59.76`.
+
+The source is `BuildImmersiveHeadMountedPose`, not collision or camera-mode
+arbitration. It rejected `hypot(camera_forward.x, camera_forward.z) < 0.5`.
+That value is `abs(cos(pitch))`, so a normalization guard intended for a zero
+vector rejected the complete 60..75-degree portion at both ends. v0.0.197 uses
+an epsilon (`1e-6`) appropriate to true degeneracy. The configured limits are
+only +/-75, so runtime horizontal length never falls below about 0.259.

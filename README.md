@@ -1,11 +1,12 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.196` (the stable fully owned camera and
+Current development version: `0.0.197` (the stable fully owned camera and
 Steam music-routing fix plus an independent body-visible immersive
 first-person view with corrected look-at orientation and rigid player-focus
 attachment, now replaced by a structurally resolved animated head mount whose
 eye sits just in front of the face while rotation remains user-controlled;
-animated neck translation no longer drops the view to third person).
+animated neck translation and the full ±75-degree pitch range no longer drop
+the view to third person).
 
 The `modern-third-person-camera` branch contains the native modern-camera
 implementation. It takes ownership at the mode-3 dispatcher, composes the

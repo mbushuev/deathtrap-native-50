@@ -361,6 +361,12 @@ those animations. The right stick now uses the same vertical convention in
 custom head and modern third person. With the default `InvertY=0`, physical
 stick-up looks up in both; setting `InvertY=1` reverses both.
 
+Version 0.0.197 keeps the custom head view active through the complete
+`HeadMinimumPitchDegrees=-75` to `HeadMaximumPitchDegrees=75` range. Looking
+past +/-60 degrees must no longer expose third person. The eye's 55-unit
+forward placement remains horizontal; only the user-owned view direction
+pitches up/down.
+
 The layout follows two established conventions: the right stick acts as a
 pointer in menus and as camera look in gameplay, while hold, select and release
 matches the standard radial-menu interaction.

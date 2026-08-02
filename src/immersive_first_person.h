@@ -61,7 +61,11 @@ inline ImmersiveFirstPersonPose BuildImmersiveHeadMountedPose(
       ImmersiveFirstPersonLookAtVector(pose.forward);
   const double horizontal_length =
       std::hypot(camera_forward[0], camera_forward[2]);
-  if (!std::isfinite(horizontal_length) || horizontal_length < 0.5) {
+  // Configured pitch is bounded to +/-75 degrees, so its horizontal
+  // projection remains non-zero. Reject only a genuinely degenerate vector;
+  // the former 0.5 threshold incorrectly disabled the head view beyond
+  // roughly +/-60 degrees.
+  if (!std::isfinite(horizontal_length) || horizontal_length < 1.0e-6) {
     pose.valid = false;
     return pose;
   }

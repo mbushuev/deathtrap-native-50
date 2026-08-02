@@ -2084,7 +2084,8 @@ allowed to own the camera.
 ## 0.0.195: animated, translation-only head mount
 
 The v0.0.194 capture identifies one stable central branch in every sampled
-state: chest node with three children, a zero-transform neck anchor, a
+state: chest node with three children, a resource-free neck anchor (identity
+only in the neutral pose), a
 resource-bearing head node at local translation `0/71/34`, then five small
 single-child braid segments. The head node retains a 76-unit bound and the
 same topology while its resource handle changes across streamed areas. Hands,
@@ -2125,3 +2126,20 @@ changed the effective vertical convention: the custom-mode-only right-stick
 reversal now makes physical up look down. Custom head and approved third-
 person modes therefore share the `InvertY` sign in v0.0.196; third-person
 behaviour is unchanged.
+
+## 0.0.197: pitch projection is valid beyond 60 degrees
+
+The v0.0.196 final test isolates the remaining camera switch. There are zero
+`HEAD_JOINT` failures, but head publication stops whenever pitch crosses about
+`+/-60` degrees and resumes near `+59.86` or `-59.76` with a safe cut. The
+head-mounted pose normalized the horizontal direction used for its fixed
+55-unit facial offset, but incorrectly rejected any horizontal length below
+`0.5`. Since that length is `cos(pitch)`, the check manufactured a mode
+failure at 60 degrees despite the configured valid range being +/-75.
+
+Version 0.0.197 rejects only a genuinely degenerate horizontal vector. At the
+configured +/-75-degree limits the projection is still about 0.259 and can be
+normalized safely; the eye offset remains horizontal while look pitch reaches
+the requested limit. Deterministic tests now cover both extrema. An unexpected
+pose rejection also logs `reason=POSE` with yaw/pitch instead of producing an
+unexplained third-person fallback.

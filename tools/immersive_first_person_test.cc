@@ -78,6 +78,19 @@ int main() {
   Require(mounted_right.eye == std::array<int32_t, 3>{45, 210, 300},
           "head-mounted eye must track the published horizontal heading");
 
+  const ImmersiveFirstPersonPose mounted_up_limit =
+      BuildImmersiveHeadMountedPose(root, 0.0, -75.0 * kPi / 180.0, 10, 55);
+  Require(mounted_up_limit.valid &&
+              mounted_up_limit.eye ==
+                  std::array<int32_t, 3>{100, 210, 355},
+          "head mount must remain valid at the upward pitch limit");
+  const ImmersiveFirstPersonPose mounted_down_limit =
+      BuildImmersiveHeadMountedPose(root, 0.0, 75.0 * kPi / 180.0, 10, 55);
+  Require(mounted_down_limit.valid &&
+              mounted_down_limit.eye ==
+                  std::array<int32_t, 3>{100, 210, 355},
+          "head mount must remain valid at the downward pitch limit");
+
   std::cout << "immersive first-person pose tests passed\n";
   return 0;
 }

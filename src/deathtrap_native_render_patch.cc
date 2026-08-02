@@ -5397,6 +5397,10 @@ bool PublishImmersiveFirstPersonEndpoint(
       head_center, yaw, pitch, g_custom_head_height,
       g_custom_head_forward_offset);
   if (!pose.valid) {
+    AppendNativeLog(
+        "camera_immersive_first_person valid=0 reason=POSE yaw=%.2f "
+        "pitch=%.2f",
+        yaw * 180.0 / kOrbitPi, pitch * 180.0 / kOrbitPi);
     return false;
   }
   const std::array<double, 3> look_at_forward =
@@ -14015,7 +14019,9 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.196 keeps the animated head mount "
+      "Deathtrap native render overlay 0.0.197 keeps the animated head mount "
+      "through the complete configured pitch range; "
+      "0.0.196 keeps the animated head mount "
       "through neck translation and aligns its right-stick vertical axis; "
       "0.0.195 mounts the immersive eye on "
       "the structurally resolved animated head joint and advances it in "
