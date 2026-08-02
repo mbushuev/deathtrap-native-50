@@ -174,3 +174,29 @@ only while competing avoidance shots remain necessary; a useful direct shot
 always becomes the recovery target. No camera endpoint or invisible orbit
 centre is retained. The runtime remains shadow-only and logs the selected
 offset and safe radius as `camera_owned_shot_shadow`.
+
+## 0.0.175 shot-planner result
+
+The completed run is
+`<game-directory>\logs\deathtrap-native-20260802-092039-780-pid24148.log`.
+The hybrid trace missed a room obstruction on 536 of 843 logged collision
+samples. In the final stationary sequence it reported a nearly full 1400-unit
+arm while the complete graph limited the direct ray to 32 units. The planner
+found a portal-valid side shot of about 1400 units in the same samples. Across
+the run it recovered at least 650 units in 110 samples where the direct room
+sweep had already collapsed to zero. This validates both the retail
+same-sector hole and the need for angular shot selection.
+
+The run also exposed two planner limitations before publication. Candidate
+yaw ended at plus or minus 90 degrees, which is insufficient when the focus is
+inside the camera margin of two corner planes. Side hysteresis could also keep
+an already collapsing candidate because its improvement deficit remained
+inside the 96-unit switch margin.
+
+Version 0.0.176 extends candidate yaw through plus/minus 120 and 150 degrees
+to the 180-degree front shot, adds higher pitch alternatives and refuses to
+retain a prior candidate below three camera radii when another shot improves
+it. A deterministic test covers the two-plane corner where only the opposite
+orbit direction escapes. It also simulates a bounded 30-degree-per-source-tick
+angular response and re-sweeps every applied intermediate angle. The applied
+offset, safe distance and collision state are logged but remain shadow-only.

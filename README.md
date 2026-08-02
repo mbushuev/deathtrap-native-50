@@ -1,8 +1,8 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.175` (diagnostic collision-safe shot
-planning over the normalized runtime room graph for the new fully owned
-gameplay camera; visible camera behaviour remains the `0.0.172` hybrid).
+Current development version: `0.0.176` (diagnostic full-orbit collision-safe
+shot planning and bounded angular response over the normalized runtime room
+graph; visible camera behaviour remains the `0.0.172` hybrid).
 
 The `modern-third-person-camera` branch contains the first opt-in native orbit
 prototype. It takes ownership at the mode-3 dispatcher before the retail

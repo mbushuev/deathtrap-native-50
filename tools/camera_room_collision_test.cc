@@ -160,6 +160,27 @@ int main() {
     }
   }
 
+  {
+    // A focus inside two camera-radius margins has no escape in the requested
+    // direction or either 90-degree side. The opposite orbit direction is the
+    // only useful shot and must remain discoverable instead of collapsing the
+    // camera into the player.
+    const std::vector<RoomSector> corner = {
+        Box(0, 10, -10, 10, 0, 10, 30)};
+    constexpr double kHalfPi = 1.5707963267948966;
+    constexpr double kPi = 3.1415926535897932;
+    const std::vector<RoomOrbitCandidateOffset> offsets = {
+        {0.0, 0.0}, {kHalfPi, 0.0}, {-kHalfPi, 0.0}, {kPi, 0.0}};
+    const auto plan = SelectRoomOrbitPlan(
+        corner, 0, {0.4, 0, 0.4}, {-5, 0, -5}, 0.5, 5.0, offsets,
+        std::numeric_limits<size_t>::max(), 0.5, 0.0);
+    if (!plan.valid || plan.selected_index != 3u ||
+        plan.candidates[3].safe_distance < 5.0) {
+      std::cerr << "full-orbit corner escape was not selected\n";
+      return 1;
+    }
+  }
+
   std::cout << "camera room collision tests passed\n";
   return 0;
 }

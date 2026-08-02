@@ -402,7 +402,8 @@ inline RoomOrbitPlan SelectRoomOrbitPlan(
     const double previous_quality =
         std::min(previous.safe_distance, preferred_useful_distance);
     const bool escaping_collapsed_shot =
-        previous.safe_distance + detail::kRoomSweepEpsilon < sphere_radius &&
+        previous.safe_distance + detail::kRoomSweepEpsilon <
+            sphere_radius * 3.0 &&
         best_quality > previous_quality + detail::kRoomSweepEpsilon;
     if (!escaping_collapsed_shot &&
         previous_quality + switch_hysteresis_distance >= best_quality) {
