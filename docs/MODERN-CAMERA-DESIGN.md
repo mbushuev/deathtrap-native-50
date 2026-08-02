@@ -2341,3 +2341,19 @@ watch between `cache_1CCC0` and the next movement stage. It records the exact
 instruction and module of the first hidden player-root write, then removes
 itself. The result decides whether the final solution belongs at a host-side
 animation publication, collision endpoint, or presentation boundary.
+
+## 0.0.210: prove the discarded direction at scheduler boundaries
+
+The v0.0.209 page watch emitted no writer address. This is an inconclusive
+diagnostic result, not evidence that the endpoint changes without a root
+write: that version did not distinguish an armed watch with no hit from a
+failed VEH or `VirtualProtect` setup.
+
+The next diagnostic observes the stable scheduler and movement boundaries
+instead of widening the behavioral hook. For every sampled active movement
+frame, the root delta is partitioned into pre-stage, complete `+0x810A0`, and
+post-stage components. The intervals are captured around the same original
+render/present call, so they cannot mix input periods or different source
+ticks. Version 0.0.210 also reports page-watch setup exactly once. It retains
+the v0.0.208 locomotion implementation and makes no speed, heading, camera,
+collision, animation or rendering change.

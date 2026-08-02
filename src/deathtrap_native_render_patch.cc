@@ -10448,6 +10448,7 @@ struct HiddenPlayerRootWriteWatch {
 HiddenPlayerRootWriteWatch g_hidden_root_write_watch{};
 PVOID g_hidden_root_write_veh = nullptr;
 std::atomic<bool> g_hidden_root_writer_identified{false};
+std::atomic<bool> g_hidden_root_watch_status_logged{false};
 
 LONG CALLBACK HiddenPlayerRootWriteVectoredHandler(
     EXCEPTION_POINTERS* exception) {
@@ -10577,6 +10578,11 @@ void ArmHiddenPlayerRootWriteWatch() {
         1u, HiddenPlayerRootWriteVectoredHandler);
   }
   if (!g_hidden_root_write_veh) {
+    if (!g_hidden_root_watch_status_logged.exchange(
+            true, std::memory_order_acq_rel)) {
+      AppendNativeLog("immersive hidden_root_watch status=VEH_FAILED error=%lu",
+                      static_cast<unsigned long>(GetLastError()));
+    }
     return;
   }
 
@@ -10584,6 +10590,12 @@ void ArmHiddenPlayerRootWriteWatch() {
   GetSystemInfo(&system_info);
   const uintptr_t page_size = system_info.dwPageSize;
   if (page_size != 4096u) {
+    if (!g_hidden_root_watch_status_logged.exchange(
+            true, std::memory_order_acq_rel)) {
+      AppendNativeLog(
+          "immersive hidden_root_watch status=PAGE_SIZE_UNSUPPORTED size=%llu",
+          static_cast<unsigned long long>(page_size));
+    }
     return;
   }
   HiddenPlayerRootWriteWatch& watch = g_hidden_root_write_watch;
@@ -10593,11 +10605,28 @@ void ArmHiddenPlayerRootWriteWatch() {
   DWORD old_protection = 0;
   if (!VirtualProtect(reinterpret_cast<void*>(watch.page), page_size,
                       PAGE_READONLY, &old_protection)) {
+    if (!g_hidden_root_watch_status_logged.exchange(
+            true, std::memory_order_acq_rel)) {
+      AppendNativeLog(
+          "immersive hidden_root_watch status=PROTECT_FAILED page=%p "
+          "error=%lu",
+          reinterpret_cast<void*>(watch.page),
+          static_cast<unsigned long>(GetLastError()));
+    }
     watch = {};
     return;
   }
   watch.original_protection = old_protection;
   watch.armed = true;
+  if (!g_hidden_root_watch_status_logged.exchange(
+          true, std::memory_order_acq_rel)) {
+    AppendNativeLog(
+        "immersive hidden_root_watch status=ARMED page=%p root=%p "
+        "protection=%08lX",
+        reinterpret_cast<void*>(watch.page),
+        reinterpret_cast<void*>(watch.player_root),
+        static_cast<unsigned long>(watch.original_protection));
+  }
 }
 
 struct MovementStageProbeStats {
@@ -10660,6 +10689,132 @@ bool CaptureMovementStageSample(MovementStageSample* sample) {
       sizeof(sample->bounds_b));
   return sample->root_valid || sample->cache_valid ||
          sample->bounds_a_valid || sample->bounds_b_valid;
+}
+
+struct ImmersiveMovementPhaseTrace {
+  MovementStageSample original_before{};
+  MovementStageSample stage_before{};
+  MovementStageSample stage_after{};
+  bool active = false;
+  bool stage_seen = false;
+};
+
+thread_local ImmersiveMovementPhaseTrace g_immersive_movement_phase_trace{};
+
+void BeginImmersiveMovementPhaseTrace() {
+  ImmersiveMovementPhaseTrace& trace = g_immersive_movement_phase_trace;
+  trace = {};
+  if (!g_debug_log || !CustomHeadViewSelected() ||
+      !g_xinput_camera_relative_intent.load(std::memory_order_acquire)) {
+    return;
+  }
+  ImmersiveLocomotionPlan plan;
+  if (!ResolveImmersiveLocomotionPlan(&plan) ||
+      !CaptureMovementStageSample(&trace.original_before) ||
+      !trace.original_before.root_valid) {
+    return;
+  }
+  trace.active = true;
+}
+
+void RecordImmersiveMovementStagePhase(
+    const MovementStageSample& before,
+    const MovementStageSample& after) {
+  ImmersiveMovementPhaseTrace& trace = g_immersive_movement_phase_trace;
+  if (!trace.active) {
+    return;
+  }
+  trace.stage_before = before;
+  trace.stage_after = after;
+  trace.stage_seen = before.root_valid && after.root_valid;
+}
+
+void EndImmersiveMovementPhaseTrace() {
+  ImmersiveMovementPhaseTrace& trace = g_immersive_movement_phase_trace;
+  if (!trace.active) {
+    trace = {};
+    return;
+  }
+
+  MovementStageSample original_after;
+  const bool after_valid =
+      CaptureMovementStageSample(&original_after) && original_after.root_valid;
+  ImmersiveLocomotionPlan plan;
+  const bool plan_valid = ResolveImmersiveLocomotionPlan(&plan);
+  const int32_t keyboard_x = g_immersive_keyboard_movement_x.load(
+      std::memory_order_acquire);
+  const int32_t keyboard_y = g_immersive_keyboard_movement_y.load(
+      std::memory_order_acquire);
+  const int32_t stick_x = g_immersive_xinput_movement_x_milli.load(
+      std::memory_order_acquire);
+  const int32_t stick_y = g_immersive_xinput_movement_y_milli.load(
+      std::memory_order_acquire);
+
+  static thread_local int32_t previous_keyboard_x = 0;
+  static thread_local int32_t previous_keyboard_y = 0;
+  static thread_local int32_t previous_stick_x = 0;
+  static thread_local int32_t previous_stick_y = 0;
+  static thread_local uint64_t active_samples = 0;
+  ++active_samples;
+  const bool input_changed =
+      keyboard_x != previous_keyboard_x ||
+      keyboard_y != previous_keyboard_y || stick_x != previous_stick_x ||
+      stick_y != previous_stick_y;
+  previous_keyboard_x = keyboard_x;
+  previous_keyboard_y = keyboard_y;
+  previous_stick_x = stick_x;
+  previous_stick_y = stick_y;
+
+  if (after_valid && plan_valid &&
+      (input_changed || (active_samples % 15u) == 1u)) {
+    auto delta = [](const MovementStageSample& from,
+                    const MovementStageSample& to,
+                    size_t axis) -> long long {
+      return from.root_valid && to.root_valid
+                 ? static_cast<long long>(to.root[axis]) - from.root[axis]
+                 : 0;
+    };
+    AppendNativeLog(
+        "immersive phase_truth tick=%llu keyboard=%d/%d stick=%d/%d "
+        "course=%d stage_seen=%u total=%lld/%lld/%lld "
+        "pre_stage=%lld/%lld/%lld stage=%lld/%lld/%lld "
+        "post_stage=%lld/%lld/%lld root=%d/%d/%d->%d/%d/%d",
+        static_cast<unsigned long long>(
+            g_source_ticks.load(std::memory_order_relaxed)),
+        keyboard_x, keyboard_y, stick_x, stick_y, plan.motion_heading,
+        trace.stage_seen ? 1u : 0u,
+        delta(trace.original_before, original_after, 0u),
+        delta(trace.original_before, original_after, 1u),
+        delta(trace.original_before, original_after, 2u),
+        trace.stage_seen
+            ? delta(trace.original_before, trace.stage_before, 0u)
+            : 0,
+        trace.stage_seen
+            ? delta(trace.original_before, trace.stage_before, 1u)
+            : 0,
+        trace.stage_seen
+            ? delta(trace.original_before, trace.stage_before, 2u)
+            : 0,
+        trace.stage_seen ? delta(trace.stage_before, trace.stage_after, 0u)
+                         : 0,
+        trace.stage_seen ? delta(trace.stage_before, trace.stage_after, 1u)
+                         : 0,
+        trace.stage_seen ? delta(trace.stage_before, trace.stage_after, 2u)
+                         : 0,
+        trace.stage_seen
+            ? delta(trace.stage_after, original_after, 0u)
+            : delta(trace.original_before, original_after, 0u),
+        trace.stage_seen
+            ? delta(trace.stage_after, original_after, 1u)
+            : delta(trace.original_before, original_after, 1u),
+        trace.stage_seen
+            ? delta(trace.stage_after, original_after, 2u)
+            : delta(trace.original_before, original_after, 2u),
+        trace.original_before.root[0], trace.original_before.root[1],
+        trace.original_before.root[2], original_after.root[0],
+        original_after.root[1], original_after.root[2]);
+  }
+  trace = {};
 }
 
 void RecordMovementProbeStats(MovementStageProbeStats& stats,
@@ -11008,6 +11163,7 @@ uintptr_t __cdecl HookMovementStageNoArg() {
   CaptureMovementStageSample(&after);
   RecordMovementStageProbe(Index, before, after);
   if constexpr (Index == 2u) {
+    RecordImmersiveMovementStagePhase(before, after);
     LogImmersiveMovementTruth(before, after);
   }
   return result;
@@ -14136,7 +14292,9 @@ InterpolatedPassResult RenderInterpolatedPass(
 }
 
 void CallOriginalRenderPresentWait(void* context, int wait) {
+  BeginImmersiveMovementPhaseTrace();
   g_original_render_present_wait(context, wait);
+  EndImmersiveMovementPhaseTrace();
 }
 
 void __cdecl HookRenderPresentWait(void* context, int wait) {

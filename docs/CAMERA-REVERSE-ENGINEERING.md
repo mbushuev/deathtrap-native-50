@@ -2574,3 +2574,23 @@ and permanently disables the probe for the process. Non-root writes on the
 same page are single-stepped and re-armed without being logged. This yields
 the actual hidden writer address instead of expanding movement ownership into
 unrelated host/render code.
+
+## Original-frame movement phase probe (v0.0.210)
+
+The v0.0.209 run is conclusive about the symptom but not the writer. During
+pure A/D, `+0x810A0` still contributes only 4--5 units almost exactly along
+the requested lateral course, while successive stage-entry roots advance
+about 570 units over fifteen samples along the old forward course. No
+`immersive hidden_root_writer` record appears. Because v0.0.209 did not log
+whether the vectored handler and page protection were successfully armed,
+absence of a hit cannot identify an instruction or ownership boundary.
+
+Version 0.0.210 changes no input or locomotion behavior. It records one
+same-frame `immersive phase_truth` transaction around the original
+render/present scheduler call and divides its total player-root delta into
+three disjoint intervals: scheduler entry to `+0x810A0`, the complete
+`+0x810A0` stage itself, and stage exit to scheduler return. Records occur on
+input changes and every fifteen active samples. The protected-page diagnostic
+also emits one `hidden_root_watch status` record for armed or failed setup.
+Together these records establish the real phase boundary before any further
+movement ownership is changed.
