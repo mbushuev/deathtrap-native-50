@@ -311,3 +311,16 @@ Version 0.0.180 remains visually shadow-only and audits a safer construction:
 The evidence channel is `camera_owned_publish_shadow`. No owned position,
 angle, sector or matrix is written to live game state in 0.0.180. Visible
 behaviour remains the 0.0.172 hybrid until this byte audit passes in runtime.
+
+Implementation commit is `47c4ac2`. Installed/build/dist x86 SHA-256 is
+`E14A9590FA1E08F0F4CE3A77465427244591E8BA58FA3F8146D34C13EAAD7C9E`.
+Rollback v0.0.179 is
+`<game-directory>\back\deathtrap-native50-overlay-20260802-101622`.
+
+The next run needs only enough variety to validate publication structure:
+stand and rotate once in an open room, walk through one doorway or corner,
+then pass one moving block. Acceptance requires every periodic or exceptional
+`camera_owned_publish_shadow` record to report `valid=1`, exact detached
+local/world rebuild, exact published matrix, exact owned translation and
+`untouched=1/1/1`. Parent/child topology and graph/retail sector differences
+must be reviewed before any live owned-camera write is enabled.
