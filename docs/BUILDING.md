@@ -44,9 +44,10 @@ deathtrap_native.ini
 ```
 
 dgVoodoo is installed separately by the user. The verified configuration uses
-the x86 `DDraw.dll`, `D3DImm.dll`, `D3D9.dll` and `dgVoodoo.conf`. Version 2.86
-is the runtime compatibility baseline; 2.86.2 is the validated reference, not
-a hard-coded binary dependency.
+the x86 `DDraw.dll`, `D3DImm.dll` and `dgVoodoo.conf`; `D3D9.dll` is optional
+and is not loaded by Deathtrap's DirectDraw path. Version 2.86 is the runtime
+compatibility baseline; 2.86.2 is the validated reference, not a hard-coded
+binary dependency.
 
 ## Verification
 

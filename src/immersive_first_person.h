@@ -10,6 +10,28 @@ struct ImmersiveFirstPersonPose {
   bool valid = false;
 };
 
+// Both playable characters share the central chest/neck/head structure, but
+// only Red Lotus has a braid descending from the head node.  Consequently the
+// head is allowed to be either a leaf (Chaindog) or to have the one verified
+// braid child.  The remaining geometry and ancestry checks keep hands,
+// weapons and decorative meshes out of the candidate set.
+inline bool MatchesImmersiveHeadJoint(
+    uint32_t child_count, uintptr_t parent_resource_handle,
+    uint32_t grandparent_child_count, const std::array<int32_t, 3>& local,
+    int32_t bounds_radius, uint32_t depth) {
+  return child_count <= 1u && parent_resource_handle == 0u &&
+      grandparent_child_count >= 3u && std::abs(local[0]) <= 8 &&
+      local[1] >= 55 && local[1] <= 90 && local[2] >= 15 &&
+      local[2] <= 55 && bounds_radius >= 45 && bounds_radius <= 115 &&
+      depth >= 4u && depth <= 7u;
+}
+
+// Physical DirectInput mouse Y needs the opposite sign at Dungeon's
+// head-mounted look-at boundary. InvertY deliberately reverses that default.
+inline double ImmersivePhysicalMouseVerticalSign(bool invert_y) {
+  return invert_y ? 1.0 : -1.0;
+}
+
 // Dungeon's camera angle builder consumes the opposite of the visible view
 // direction. Keep that engine convention at the publication boundary instead
 // of rotating the persistent orbit/body course.

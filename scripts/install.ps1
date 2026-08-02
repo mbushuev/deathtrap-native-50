@@ -50,7 +50,7 @@ if (-not $SkipGameHashCheck) {
     }
 }
 
-foreach ($wrapper in @('DDraw.dll', 'D3DImm.dll', 'D3D9.dll')) {
+foreach ($wrapper in @('DDraw.dll', 'D3DImm.dll')) {
     if (-not (Test-Path -LiteralPath (Join-Path $game $wrapper))) {
         throw "External dgVoodoo wrapper is missing: $wrapper"
     }

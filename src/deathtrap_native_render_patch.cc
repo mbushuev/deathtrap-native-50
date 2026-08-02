@@ -2409,6 +2409,21 @@ void SetCustomHeadViewSelected(bool enabled, const char* source) {
   }
   g_custom_camera_view_mode.store(static_cast<uint32_t>(next),
                                   std::memory_order_release);
+  if (!enabled) {
+    // Immersive view aligns the rendered body with the eye yaw through the
+    // shared camera-relative heading writer, including during mouse/keyboard
+    // play.  That ownership is independent of DirectInput's fresh key state,
+    // so it must be released explicitly when F10/SELECT/R3 leaves the view.
+    // Otherwise the stale target continues fighting native A/D steering and
+    // makes keyboard movement appear locked to one direction.
+    g_xinput_camera_relative_intent.store(false,
+                                           std::memory_order_release);
+    g_xinput_movement_magnitude_milli.store(0,
+                                             std::memory_order_release);
+    g_xinput_movement_controller.store(0, std::memory_order_release);
+    g_xinput_camera_relative_started_ms.store(0,
+                                               std::memory_order_release);
+  }
   if (enabled) {
     // The overlay-owned view never borrows retail mode 4. Release a controller
     // Tab request first so R3/Tab remains an independent native camera.
@@ -3366,7 +3381,17 @@ bool BuildThirdPersonOrbitPosition(void* controller,
   // the native 50 Hz snapshot interpolation provides the visible smoothness.
   if (mouse_moved) {
     const double horizontal_sign = g_third_person_orbit_invert_x ? -1.0 : 1.0;
-    const double vertical_sign = g_third_person_orbit_invert_y ? -1.0 : 1.0;
+    const double configured_vertical_sign =
+        g_third_person_orbit_invert_y ? -1.0 : 1.0;
+    // DirectInput's physical mouse Y convention and Dungeon's head-mounted
+    // look-at pitch convention face opposite directions at the publication
+    // boundary.  Keep the accepted third-person mouse orbit untouched and
+    // reverse only the physical-mouse contribution to immersive pitch.  The
+    // right-stick path above already has its independently accepted sign.
+    const double vertical_sign = custom_head_view
+        ? ImmersivePhysicalMouseVerticalSign(
+              g_third_person_orbit_invert_y)
+        : configured_vertical_sign;
     g_third_person_orbit_state.yaw +=
         static_cast<double>(mouse_delta_x) * horizontal_sign *
         g_third_person_mouse_horizontal_radians;
@@ -3527,21 +3552,14 @@ uintptr_t ResolvePlayerHeadJoint(const SceneSnapshot& scene) {
   for (const auto& [node, transform] : scene.nodes) {
     if (node == scene.player ||
         !SceneNodeDescendsFrom(scene, node, scene.player) ||
-        !transform.bounds_valid || transform.bounds_radius < 45 ||
-        transform.bounds_radius > 115 || child_counts[node] != 1u) {
+        !transform.bounds_valid) {
       continue;
     }
     const auto parent = scene.nodes.find(transform.parent);
-    if (parent == scene.nodes.end() ||
-        parent->second.render_resource_handle != 0 ||
-        child_counts[parent->second.parent] < 3u) {
+    if (parent == scene.nodes.end()) {
       continue;
     }
     const auto& local = transform.local.values;
-    if (std::abs(local[9]) > 8 || local[10] < 55 || local[10] > 90 ||
-        local[11] < 15 || local[11] > 55) {
-      continue;
-    }
 
     uint32_t depth = 0;
     uintptr_t ancestor = node;
@@ -3555,7 +3573,13 @@ uintptr_t ResolvePlayerHeadJoint(const SceneSnapshot& scene) {
       }
       ancestor = entry->second.parent;
     }
-    if (ancestor != scene.player || depth < 4u || depth > 7u) {
+    const std::array<int32_t, 3> local_translation = {
+        local[9], local[10], local[11]};
+    if (ancestor != scene.player ||
+        !MatchesImmersiveHeadJoint(
+            child_counts[node], parent->second.render_resource_handle,
+            child_counts[parent->second.parent], local_translation,
+            transform.bounds_radius, depth)) {
       continue;
     }
 
@@ -3619,10 +3643,14 @@ bool ResolveLivePlayerHeadMount(
   return true;
 }
 
-void ProbePlayerHeadJoints(const SceneSnapshot& scene, uint64_t source_tick) {
-  if (!g_head_joint_probe_enabled || !g_debug_log ||
-      !CustomHeadViewSelected() || !scene.player ||
-      (source_tick % 10u) != 0u) {
+void ProbePlayerHeadJoints(const SceneSnapshot& scene, uint64_t source_tick,
+                           bool force_on_resolution_failure = false) {
+  static uintptr_t last_forced_player = 0;
+  const bool scheduled_probe =
+      g_head_joint_probe_enabled && (source_tick % 10u) == 0u;
+  if (!g_debug_log || !CustomHeadViewSelected() || !scene.player ||
+      (!scheduled_probe && !force_on_resolution_failure) ||
+      (force_on_resolution_failure && last_forced_player == scene.player)) {
     return;
   }
 
@@ -3631,6 +3659,12 @@ void ProbePlayerHeadJoints(const SceneSnapshot& scene, uint64_t source_tick) {
     AppendNativeLog("head_joint_probe tick=%llu valid=0 reason=PLAYER_NODE",
                     static_cast<unsigned long long>(source_tick));
     return;
+  }
+  if (force_on_resolution_failure) {
+    // Production keeps the heavy periodic probe disabled, but one compact
+    // candidate set for each player object makes an unsupported skeleton
+    // diagnosable from the ordinary per-launch log.
+    last_forced_player = scene.player;
   }
 
   std::unordered_map<uintptr_t, uint32_t> child_counts;
@@ -5389,6 +5423,9 @@ bool PublishImmersiveFirstPersonEndpoint(
   uintptr_t head_node = 0;
   if (!ResolveLivePlayerHeadMount(g_previous_snapshot, camera_focus,
                                   &head_center, &head_node)) {
+    ProbePlayerHeadJoints(
+        g_previous_snapshot,
+        g_source_ticks.load(std::memory_order_relaxed), true);
     AppendNativeLog(
         "camera_immersive_first_person valid=0 reason=HEAD_JOINT");
     return false;
@@ -7209,10 +7246,6 @@ void __cdecl HookMode3Camera(void* controller) {
   if (!BuildThirdPersonOrbitPosition(controller, native, &orbit)) {
     return;
   }
-  if (CustomHeadViewSelected()) {
-    PublishImmersiveFirstPersonHeadingIntent();
-  }
-
   std::array<int32_t, 3> camera_focus{};
   if (!ReadCameraFocusPosition(controller, &camera_focus)) {
     ResetThirdPersonOrbit("camera_focus_after_retail");
@@ -7245,6 +7278,11 @@ void __cdecl HookMode3Camera(void* controller) {
         !previous_head_ms || head_now_ms - previous_head_ms > 200u;
     if (PublishImmersiveFirstPersonEndpoint(
             controller, camera_focus, room_or_sector, transition_cut)) {
+      // The body-course writer belongs to a successfully published head view,
+      // not merely to the requested mode.  This prevents a missing skeleton
+      // joint from locking keyboard steering while the fail-closed third-
+      // person endpoint is visible.
+      PublishImmersiveFirstPersonHeadingIntent();
       g_custom_head_publication_active.store(true,
                                               std::memory_order_release);
       g_custom_head_last_publication_ms.store(head_now_ms,
@@ -7263,6 +7301,13 @@ void __cdecl HookMode3Camera(void* controller) {
     }
     g_custom_head_last_publication_ms.store(0,
                                              std::memory_order_release);
+    g_xinput_camera_relative_intent.store(false,
+                                           std::memory_order_release);
+    g_xinput_movement_magnitude_milli.store(0,
+                                             std::memory_order_release);
+    g_xinput_movement_controller.store(0, std::memory_order_release);
+    g_xinput_camera_relative_started_ms.store(0,
+                                               std::memory_order_release);
     AppendNativeLog(
         "camera_immersive_first_person fallback=MODERN_THIRD_PERSON");
   } else if (g_custom_head_publication_active.exchange(

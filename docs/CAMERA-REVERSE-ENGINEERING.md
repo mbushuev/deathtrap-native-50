@@ -2332,3 +2332,34 @@ That value is `abs(cos(pitch))`, so a normalization guard intended for a zero
 vector rejected the complete 60..75-degree portion at both ends. v0.0.197 uses
 an epsilon (`1e-6`) appropriate to true degeneracy. The configured limits are
 only +/-75, so runtime horizontal length never falls below about 0.259.
+
+## v0.0.198 second-character and input-ownership defects (v0.0.199)
+
+The mixed-character run is
+`<game-directory>\logs\deathtrap-native-20260802-190049-288-pid34584.log`.
+Red Lotus publishes continuously from head node `05DED688`. After the player
+object changes from `05DEDA18` to `05DAE8B8` (Chaindog), selecting F10 emits
+`valid=0 reason=HEAD_JOINT` followed by the modern-third-person fallback.
+
+The resolver incorrectly treated Red Lotus's one-child head as a universal
+skeleton invariant. That child is the first of five braid segments; Chaindog
+has no braid and his head is a leaf. Version 0.0.199 accepts zero or one child
+while retaining the verified local translation, bounds, depth, resource-free
+neck parent and three-child chest grandparent. A resolution failure in the
+normal compact preset now records one candidate set per player object rather
+than requiring the heavy periodic probe.
+
+The same run proves an independent ownership leak. After F10 selects
+`MODERN_THIRD_PERSON`, `dispatcher_heading` continues to drive the old target
+with magnitude 1.0. DirectInput keyboard samples are fresh, but the shared
+camera-relative heading intent is persistent atomic state. Version 0.0.199
+releases that intent, magnitude, controller and start timestamp on every
+immersive exit. Heading alignment is also published only after a valid head
+endpoint commits, so a fail-closed third-person fallback cannot lock native
+keyboard steering.
+
+Finally, physical DirectInput mouse Y and the head-mounted look-at publication
+have opposite effective pitch signs in the live view. Version 0.0.199 reverses
+only the mouse contribution while custom head view is selected. Accepted
+third-person mouse orbit, right-stick pitch and the `InvertY` option remain
+otherwise unchanged.

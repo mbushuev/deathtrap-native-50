@@ -2170,3 +2170,24 @@ timestamped support log. The production INI sets `CameraProbe=0` and
 while retaining operational state changes, errors, fallbacks, collision/input
 events and periodic summaries. Either deep probe remains runtime-selectable
 for a targeted investigation without rebuilding the DLL.
+
+## 0.0.199: two playable skeletons and explicit heading ownership
+
+The animated head resolver must identify anatomy, not hairstyle. Red Lotus's
+head has one braid child; Chaindog's corresponding head is a leaf. The common
+contract is therefore zero-or-one child plus the already verified head-local
+geometry, bound, ancestry depth, resource-free neck parent and three-way chest
+branch. No pointer, resource handle or character-specific fixed world offset
+is introduced.
+
+Immersive body alignment is now a transaction owned by a successfully
+published head endpoint. Selecting the mode alone is insufficient. Leaving the
+mode or failing its endpoint clears the shared desired-heading intent before
+native movement runs again. This prevents mouse/keyboard steering from being
+constrained by a stale view yaw and keeps fallback third person genuinely
+fail-closed.
+
+Mouse and right stick retain separate device conventions. The accepted stick
+path is unchanged. Physical mouse Y receives the head-mode boundary reversal
+only while building immersive pitch; ordinary third-person mouse orbit keeps
+its accepted sign and sensitivity.

@@ -23,6 +23,20 @@ int main() {
   constexpr double kPi = 3.14159265358979323846;
   const std::array<int32_t, 3> root = {100, 200, 300};
 
+  const std::array<int32_t, 3> verified_head_local = {0, 71, 34};
+  Require(MatchesImmersiveHeadJoint(1, 0, 3, verified_head_local, 76, 5),
+          "female head with one braid child must resolve");
+  Require(MatchesImmersiveHeadJoint(0, 0, 3, verified_head_local, 76, 5),
+          "male leaf head must resolve without a braid child");
+  Require(!MatchesImmersiveHeadJoint(2, 0, 3, verified_head_local, 76, 5),
+          "branching hand or equipment node must not resolve as a head");
+  Require(!MatchesImmersiveHeadJoint(0, 1, 3, verified_head_local, 76, 5),
+          "render-bearing parent must not resolve as a neck anchor");
+  Require(ImmersivePhysicalMouseVerticalSign(false) == -1.0,
+          "default immersive physical mouse Y must reverse at look-at");
+  Require(ImmersivePhysicalMouseVerticalSign(true) == 1.0,
+          "InvertY must reverse the immersive physical mouse default");
+
   const ImmersiveFirstPersonPose forward =
       BuildImmersiveFirstPersonPose(root, 0.0, 0.0, 60, 120);
   Require(forward.valid, "forward pose must be valid");

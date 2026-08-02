@@ -1,12 +1,14 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.198` (the accepted fully owned camera and
+Current development version: `0.0.199` (the accepted fully owned camera and
 Steam music-routing fix plus an independent body-visible immersive
 first-person view with corrected look-at orientation and rigid player-focus
 attachment, now replaced by a structurally resolved animated head mount whose
 eye sits just in front of the face while rotation remains user-controlled;
 animated neck translation and the full ±75-degree pitch range no longer drop
-the view to third person; normal per-launch logs now omit the two heavy
+the view to third person; both playable skeletons are supported, immersive
+heading ownership is released on exit, and physical-mouse vertical look uses
+the conventional direction; normal per-launch logs omit the two heavy
 reverse-engineering probe streams).
 
 See the [user-facing changelog](CHANGELOG.md) for the consolidated differences
@@ -57,9 +59,11 @@ components and are not redistributed by this repository.
 
 dgVoodoo is an independent rendering backend and is not included here. The mod
 does not patch, rename or redistribute it. Obtain dgVoodoo separately and place
-its x86 `DDraw.dll`, `D3DImm.dll` and `D3D9.dll` beside `DD_CD.EXE`. The wrappers
-do not need to match a single binary hash: 2.86 is the compatibility baseline,
-2.86.2 is the currently validated build, and newer builds may be used.
+its x86 `DDraw.dll` and `D3DImm.dll` beside `DD_CD.EXE`. `D3D9.dll` may be
+present as part of a complete dgVoodoo installation, but Deathtrap's verified
+DirectDraw path does not require it. The wrappers do not need to match a
+single binary hash: 2.86 is the compatibility baseline, 2.86.2 is the
+currently validated build, and newer builds may be used.
 
 Configure dgVoodoo itself for `D3D11 feature level 11.0`. In the text config
 this is `OutputAPI = d3d11_fl11_0`. This is mandatory: the native surface guard
@@ -78,8 +82,8 @@ The patch refuses to activate on an unsupported `Dungeon.dll` image.
 ## Quick installation
 
 1. Close the game and back up existing wrapper DLLs from its directory.
-2. Copy the x86 `DDraw.dll`, `D3DImm.dll` and `D3D9.dll` from a clean dgVoodoo
-   2.86+ package beside `DD_CD.EXE`.
+2. Copy the x86 `DDraw.dll` and `D3DImm.dll` from a clean dgVoodoo 2.86+
+   package beside `DD_CD.EXE`. `D3D9.dll` is optional for this game.
 3. Configure dgVoodoo to use `D3D11 feature level 11.0` and save its generated
    `dgVoodoo.conf` beside `DD_CD.EXE`.
 4. Run `scripts/install.ps1` as shown below. It installs `DINPUT.dll` and
