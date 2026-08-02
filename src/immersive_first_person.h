@@ -10,28 +10,39 @@ struct ImmersiveFirstPersonPose {
   bool valid = false;
 };
 
-struct ImmersiveStrafeMotion {
-  int32_t primary = 0;
-  int32_t secondary = 0;
+struct ImmersiveLocomotionPlan {
+  int32_t root_heading = 0;
+  int32_t native_axis_milli = 0;
   bool active = false;
 };
 
-// Dungeon.dll+0x5F650 feeds the retail side-step state into the same two
-// motion/collision channels used by ordinary locomotion. The original values
-// are 150/50 for a direction of -1 or +1. Scaling those inputs preserves the
-// native state, animation and collision path instead of moving the actor by
-// an overlay-owned transform.
-inline ImmersiveStrafeMotion BuildImmersiveStrafeMotion(
-    int32_t direction, int32_t scale_percent) {
-  ImmersiveStrafeMotion motion;
-  if ((direction != -1 && direction != 1) || scale_percent < 100 ||
-      scale_percent > 400) {
-    return motion;
+// Dungeon's J/K side-step states exclude forward/back locomotion and therefore
+// cannot express diagonals. Immersive view instead keeps the retail W/S
+// animation and root-motion transaction, temporarily giving that transaction
+// the requested world heading. Backward root motion travels opposite the actor
+// course, so its temporary course is half a turn beyond the requested motion.
+inline ImmersiveLocomotionPlan BuildImmersiveLocomotionPlan(
+    int32_t desired_motion_heading, bool native_backward, double magnitude,
+    int32_t heading_units_per_turn) {
+  ImmersiveLocomotionPlan plan;
+  if (heading_units_per_turn <= 0 ||
+      !std::isfinite(magnitude) ||
+      magnitude <= 0.000001 || magnitude > 1.000001) {
+    return plan;
   }
-  motion.primary = direction * 150 * scale_percent / 100;
-  motion.secondary = direction * 50 * scale_percent / 100;
-  motion.active = true;
-  return motion;
+  int32_t heading = desired_motion_heading % heading_units_per_turn;
+  if (heading < 0) {
+    heading += heading_units_per_turn;
+  }
+  if (native_backward) {
+    heading = (heading + heading_units_per_turn / 2) %
+        heading_units_per_turn;
+  }
+  plan.root_heading = heading;
+  plan.native_axis_milli = static_cast<int32_t>(std::lround(
+      (native_backward ? -magnitude : magnitude) * 1000.0));
+  plan.active = plan.native_axis_milli != 0;
+  return plan;
 }
 
 // Both playable characters share the central chest/neck/head structure, but

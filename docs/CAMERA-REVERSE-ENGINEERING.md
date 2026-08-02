@@ -2409,7 +2409,7 @@ contain exactly one structural match, so attacks, jumps and other animation
 poses cannot change the selected node while a genuinely ambiguous future
 skeleton still fails closed.
 
-## Native side-step motion path (v0.0.202)
+## Native side-step experiment (v0.0.202, invalidated)
 
 Static disassembly closes the lateral-speed path without guessing at actor
 coordinates. The input resolver at `Dungeon.dll+0x871B0` maps action 7/8 to
@@ -2417,18 +2417,45 @@ controller flags `0x100/0x200`. The shared ground dispatcher reaches
 `+0x5F4F0/+0x5F520`, which install the left/right side-step state with a
 direction value of `-1/+1` at controller offset `+0x19C`.
 
-Both states schedule `+0x5F650` every two source ticks. That callback sets the
-native response fields at `+0x244/+0x248` to `100/50`, derives signed
-velocities `150/50` from `+0x19C`, and calls the engine motion channels at
-`+0x442F0/+0x443B0`. Those functions feed the existing locomotion/collision
-publication; no separate run-left/run-right action flag exists in the action
-table.
+Both states schedule `+0x5F650` every two source ticks. The initial v0.0.202
+interpretation treated its signed `150/50` arguments to
+`+0x442F0/+0x443B0` as translation velocities. Complete callee disassembly
+invalidates that interpretation: both functions converge on `+0x44280`, whose
+tail adds the resulting values to render-node fields `+0x1C/+0x18`.
+`+0x1C` is the already verified Q10 actor heading. These are angular response
+channels, not the root-position/collision writer. Scaling them cannot make
+side movement materially faster.
 
-Version 0.0.202 therefore changes neither action flags nor player transforms.
-An exact-prologue MinHook on `+0x5F650` calls the same two channel functions
-with configured scaled values only when the callback belongs to the live
-player and overlay-owned immersive first person is selected. It falls back to
-the original callback on any signature, controller, direction or write
-failure. Pure horizontal XInput now participates in the circular-magnitude run
-latch; physical Shift+A/D selects the same faster scale after A/D is mapped to
-J/K.
+Runtime also exposes the independent design failure: J/K enters a dedicated
+side-step state and excludes the W/S locomotion state. Mapping A/D to J/K can
+therefore express either lateral movement or forward/back movement, never a
+combined vector. Version 0.0.202 is retained only as historical evidence and
+is replaced completely in 0.0.203.
+
+## Immersive vector locomotion through native root motion (v0.0.203)
+
+The common `Dungeon.dll+0x82750` ground-state dispatcher already encloses the
+retail action resolver, active locomotion callback, animation root motion and
+collision publication. Sustained forward/back callbacks observed underneath
+that dispatcher mutate the live render root during the `+0x810A0` dynamic
+update stage. This is the native movement transaction; no overlay transform
+write is required.
+
+Version 0.0.203 leaves A/D neutral in immersive view and keeps W or S as the
+native locomotion driver. A purely lateral request supplies W. Immediately
+before the original dispatcher runs, the patch saves the visible body heading
+and uses the canonical `+0x44DD0` dual render/collision writer to give the
+native transaction the requested camera-relative movement heading. For S,
+the temporary actor heading is rotated by half a Q10 turn because backward
+root motion travels opposite the actor course. After the original dispatcher
+has completed action resolution, animation, movement and collision, the same
+canonical writer restores the saved eye-facing body heading before the tick is
+published.
+
+Keyboard publishes the complete digital W/S+A/D vector. XInput publishes the
+complete circular left-stick vector but drives the retail joystick's vertical
+axis with its magnitude and the appropriate forward/back sign. Pure lateral
+input therefore receives ordinary forward walking/running speed, diagonals
+remain simultaneous, Shift and the existing stick run hysteresis retain their
+normal meaning, and no player coordinate or action-table field is authored by
+the overlay.

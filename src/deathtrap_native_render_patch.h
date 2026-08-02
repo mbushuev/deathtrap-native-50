@@ -72,14 +72,14 @@ void SubmitDeathtrapPhysicalMouseDelta(int32_t delta_x, int32_t delta_y);
 bool DeathtrapModernCameraConsumesMouse();
 
 // True only while the overlay-owned body-visible first-person camera is the
-// active gameplay view. The DirectInput proxy uses this to reinterpret A/D as
-// the already-installed J/K side-step actions without changing keys.cfg.
+// active gameplay view.
 bool DeathtrapImmersiveFirstPersonActive();
 
-// Publishes physical-keyboard lateral intent independently from XInput. The
-// render patch combines both sources only while its immersive first-person
-// view is active; retail and third-person side-step speeds are untouched.
-void SubmitDeathtrapImmersiveKeyboardStrafe(bool active, bool run);
+// Publishes the complete physical-keyboard movement vector independently
+// from XInput. In immersive view the render patch routes this vector through
+// native forward/back root motion while preserving the eye-facing body course.
+void SubmitDeathtrapImmersiveKeyboardMovement(int32_t lateral,
+                                              int32_t longitudinal);
 
 // Marks an explicit operate/use input from either the controller bridge or
 // the physical DirectInput keyboard. The camera uses this narrow signal to

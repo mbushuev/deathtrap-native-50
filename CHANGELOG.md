@@ -1,6 +1,6 @@
 # User-facing changelog
 
-## 0.0.202 — changes from the original Steam release
+## 0.0.203 — changes from the original Steam release
 
 This is a consolidated list of the changes players can see or use. Reverted
 experiments and internal development changes are intentionally omitted.
@@ -48,9 +48,10 @@ experiments and internal development changes are intentionally omitted.
   animations instead of treating the animated head translation as identity.
 - Restores native keyboard steering immediately after leaving immersive first
   person and uses a conventional physical-mouse vertical look direction.
-- Makes immersive first-person side movement practical at both walking and
-  running speeds. Pure lateral gamepad input can now engage running; the
-  change does not affect third person, the original Tab/R3 view or LB strafe.
+- Allows simultaneous forward/back and lateral movement in immersive first
+  person on keyboard and gamepad. Pure side movement now uses the normal
+  walking/running pace instead of the deliberately slow retail side-step;
+  third person, the original Tab/R3 view and LB strafe remain unchanged.
 
 ### Mouse and keyboard controls
 

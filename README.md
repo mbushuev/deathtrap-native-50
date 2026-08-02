@@ -1,6 +1,6 @@
 # Deathtrap Native 50 Overlay
 
-Current development version: `0.0.202` (the accepted fully owned camera and
+Current development version: `0.0.203` (the accepted fully owned camera and
 Steam music-routing fix plus an independent body-visible immersive
 first-person view with corrected look-at orientation and rigid player-focus
 attachment, now replaced by a structurally resolved animated head mount whose
@@ -9,12 +9,16 @@ animated neck translation and the full ±75-degree pitch range no longer drop
 the view to third person; both playable skeletons are supported, immersive
 heading ownership is released on exit, and physical-mouse vertical look uses
 the conventional direction; normal per-launch logs omit the two heavy
-reverse-engineering probe streams).
+reverse-engineering probe streams; immersive keyboard and gamepad movement
+now accepts a complete forward/back plus lateral vector).
 
-Immersive first person now accelerates the retail side-step state through its
-native motion/collision channels: lateral walking defaults to 150% and lateral
-running to 200% of the original side-step speed. This is scoped to F10/SELECT;
-third person, retail Tab/R3 and LB side-step retain their original speed.
+Immersive first person no longer enters the mutually exclusive retail J/K
+side-step state. Keyboard W/S+A/D and the complete left-stick vector instead
+drive the ordinary native walking/running root-motion and collision
+transaction. Pure lateral movement therefore has the normal locomotion pace,
+diagonals work, and the eye-facing visible body course is restored before each
+source tick is published. This is scoped to F10/SELECT; third person, retail
+Tab/R3 and LB side-step remain unchanged.
 
 See the [user-facing changelog](CHANGELOG.md) for the consolidated differences
 from the original Steam release.
@@ -161,17 +165,17 @@ D3D11 settings, first-run verification and troubleshooting.
   overlay-owned immersive first-person view is toggled by F10 or gamepad
   SELECT. It remains in mode 3, keeps walking, running, attacks and the full
   character/weapon render, and uses the modern mouse/right-stick look path.
-  Its eye stays rigidly attached to the player-focus anchor so looking down
+  Its eye follows the structurally resolved animated head so looking down
   retains the hands, sword and body in frame without locomotion drift.
   Press F10/SELECT again to return to the preserved third-person orbit; R3
   still enters the untouched retail first-person mode independently.
   `Camera/InvertX=1` and `Camera/InvertY=1` reverse the conventional default
   camera axes. `Camera/PreferredRadius=1400` controls the unobstructed camera
   distance; the native collision resolver may pull it closer near geometry.
-  `Camera/HeadStrafeWalkPercent=150` and
-  `Camera/HeadStrafeRunPercent=200` control only immersive-view lateral
-  movement. Full lateral stick deflection participates in the same run
-  threshold and hysteresis as forward movement.
+  Immersive movement accepts simultaneous forward/back and lateral keyboard
+  input and the complete left-stick vector. Pure lateral movement uses the
+  same native walking/running pace, run threshold and hysteresis as forward
+  movement.
 - The native orbit camera engages as soon as gameplay becomes valid, whether
   input comes from a mouse, controller, or no controller at all. Inventory
   selection suppresses look input without replacing or resetting the rig.

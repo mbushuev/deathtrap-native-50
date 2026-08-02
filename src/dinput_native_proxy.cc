@@ -178,20 +178,29 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
       NotifyDeathtrapOperateInput();
     }
     if (DeathtrapImmersiveFirstPersonActive()) {
+      const bool forward = (keyboard[DIK_W] & 0x80u) != 0u;
+      const bool backward = (keyboard[DIK_S] & 0x80u) != 0u;
       const bool left = (keyboard[DIK_A] & 0x80u) != 0u;
       const bool right = (keyboard[DIK_D] & 0x80u) != 0u;
-      const bool run = (keyboard[DIK_LSHIFT] & 0x80u) != 0u;
-      SubmitDeathtrapImmersiveKeyboardStrafe(left || right, run);
+      const int32_t lateral = static_cast<int32_t>(right) -
+          static_cast<int32_t>(left);
+      const int32_t longitudinal = static_cast<int32_t>(forward) -
+          static_cast<int32_t>(backward);
+      SubmitDeathtrapImmersiveKeyboardMovement(lateral, longitudinal);
       keyboard[DIK_A] &= static_cast<uint8_t>(~0x80u);
       keyboard[DIK_D] &= static_cast<uint8_t>(~0x80u);
-      if (left) {
-        keyboard[DIK_J] |= 0x80u;
+      // Dungeon's retail side-step states are mutually exclusive with W/S,
+      // so they cannot represent a diagonal. Any purely lateral request uses
+      // the ordinary forward state as its native root-motion driver; the
+      // player dispatcher rotates only that transaction into the requested
+      // world direction and restores the visible body heading afterwards.
+      if (lateral != 0 && longitudinal == 0) {
+        keyboard[DIK_W] |= 0x80u;
       }
-      if (right) {
-        keyboard[DIK_K] |= 0x80u;
-      }
+      keyboard[DIK_J] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_K] &= static_cast<uint8_t>(~0x80u);
     } else {
-      SubmitDeathtrapImmersiveKeyboardStrafe(false, false);
+      SubmitDeathtrapImmersiveKeyboardMovement(0, 0);
     }
   }
   // Deathtrap uses the standard relative mouse state. Preserve the physical

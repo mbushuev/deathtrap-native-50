@@ -189,13 +189,6 @@ constexpr uintptr_t kNativeJoystickEnabledRva = 0x00032CD0u;
 // tick with root motion. It selects controller+0x130 or +0x138 as the turn
 // source before calling the canonical 0x44EA0 -> 0x44DD0 writer.
 constexpr uintptr_t kPlayerLocomotionRva = 0x0007E530u;
-// The retail left/right side-step state schedules this callback every two
-// source ticks. It sends signed 150/50 values through the engine's two
-// locomotion/collision channels. Our immersive-only hook changes those two
-// values while retaining the native state, animation and collision writers.
-constexpr uintptr_t kPlayerSideStepMotionRva = 0x0005F650u;
-constexpr uintptr_t kPlayerPrimaryMotionRva = 0x000442F0u;
-constexpr uintptr_t kPlayerSecondaryMotionRva = 0x000443B0u;
 constexpr size_t kPlayerMovementControllerOffset = 0x114u;
 constexpr size_t kPlayerRenderLinkOffset = 0x10u;
 constexpr size_t kPlayerTurnSourcePointerOffset = 0x154u;
@@ -203,9 +196,6 @@ constexpr size_t kPlayerWalkTurnSourceOffset = 0x130u;
 constexpr size_t kPlayerRunTurnSourceOffset = 0x138u;
 constexpr size_t kPlayerTurnLimitOffset = 0x148u;
 constexpr size_t kPlayerIdleTurnOffset = 0x14Cu;
-constexpr size_t kPlayerSideStepDirectionOffset = 0x19Cu;
-constexpr size_t kPlayerPrimaryMotionResponseOffset = 0x244u;
-constexpr size_t kPlayerSecondaryMotionResponseOffset = 0x248u;
 constexpr size_t kPlayerHeadingOffset = 0x1Cu;
 constexpr int32_t kPlayerHeadingUnitsPerTurn = 1024;
 constexpr uintptr_t kDamageHandlerRva = 0x0001C130u;
@@ -583,7 +573,6 @@ std::atomic<bool> g_ranged_weapon_hook_installed{false};
 std::atomic<bool> g_consumable_hook_installed{false};
 std::atomic<bool> g_camera_orbit_hook_installed{false};
 std::atomic<bool> g_music_track_fix_installed{false};
-std::atomic<bool> g_player_side_step_motion_hook_installed{false};
 std::atomic<bool> g_movement_stage_probes_installed{false};
 std::atomic<bool> g_movement_callback_probe_installed{false};
 std::atomic<int32_t> g_pending_weapon_wheel_detents{0};
@@ -611,10 +600,10 @@ CameraProbeSnapshot g_camera_probe_previous;
 std::string g_camera_probe_log_buffer;
 bool g_third_person_orbit_enabled = false;
 bool g_immersive_first_person_enabled = true;
-int32_t g_immersive_strafe_walk_scale_percent = 150;
-int32_t g_immersive_strafe_run_scale_percent = 200;
-std::atomic<int32_t> g_immersive_keyboard_strafe_scale_percent{0};
-std::atomic<int32_t> g_immersive_xinput_strafe_scale_percent{0};
+std::atomic<int32_t> g_immersive_keyboard_movement_x{0};
+std::atomic<int32_t> g_immersive_keyboard_movement_y{0};
+std::atomic<int32_t> g_immersive_xinput_movement_x_milli{0};
+std::atomic<int32_t> g_immersive_xinput_movement_y_milli{0};
 bool g_third_person_orbit_invert_x = false;
 bool g_third_person_orbit_invert_y = false;
 double g_third_person_orbit_horizontal_radians = 0.0;
@@ -958,9 +947,6 @@ using UseConsumableFn = void(__cdecl*)(int32_t item_id);
 using PlayerTurnFn = void(__cdecl*)(void* player);
 using PlayerLocomotionFn = void(__cdecl*)(void* controller);
 using PlayerStateDispatcherFn = void(__cdecl*)(void* outer_player);
-using PlayerSideStepMotionFn = void(__cdecl*)(void* controller);
-using PlayerMotionChannelFn = void(__cdecl*)(void* controller,
-                                              int32_t velocity);
 using NativeJoystickPollFn = int(__cdecl*)(int32_t* x, int32_t* y,
                                             uint32_t* buttons);
 using NativeJoystickEnabledFn = int(__cdecl*)();
@@ -1004,9 +990,6 @@ PlayerTurnFn g_original_player_turn = nullptr;
 PlayerLocomotionFn g_original_player_locomotion = nullptr;
 PlayerTurnFn g_player_turn_writer = nullptr;
 PlayerStateDispatcherFn g_original_player_state_dispatcher = nullptr;
-PlayerSideStepMotionFn g_original_player_side_step_motion = nullptr;
-PlayerMotionChannelFn g_player_primary_motion = nullptr;
-PlayerMotionChannelFn g_player_secondary_motion = nullptr;
 NativeJoystickPollFn g_original_native_joystick_poll = nullptr;
 NativeJoystickEnabledFn g_original_native_joystick_enabled = nullptr;
 Mode3CameraFn g_original_mode3_camera = nullptr;
@@ -2444,9 +2427,11 @@ void SetCustomHeadViewSelected(bool enabled, const char* source) {
     g_xinput_movement_controller.store(0, std::memory_order_release);
     g_xinput_camera_relative_started_ms.store(0,
                                                std::memory_order_release);
-    g_immersive_keyboard_strafe_scale_percent.store(
+    g_immersive_keyboard_movement_x.store(0, std::memory_order_release);
+    g_immersive_keyboard_movement_y.store(0, std::memory_order_release);
+    g_immersive_xinput_movement_x_milli.store(
         0, std::memory_order_release);
-    g_immersive_xinput_strafe_scale_percent.store(
+    g_immersive_xinput_movement_y_milli.store(
         0, std::memory_order_release);
   }
   if (enabled) {
@@ -8880,7 +8865,9 @@ void ReleaseInjectedControllerInput() {
   g_xinput_camera_relative_was_active = false;
   g_xinput_camera_relative_runtime_failed = false;
   g_xinput_movement_controller.store(0, std::memory_order_release);
-  g_immersive_xinput_strafe_scale_percent.store(
+  g_immersive_xinput_movement_x_milli.store(
+      0, std::memory_order_release);
+  g_immersive_xinput_movement_y_milli.store(
       0, std::memory_order_release);
   for (size_t i = 0; i < g_injected_keys.size(); ++i) {
     InjectVirtualKey(static_cast<InjectedKey>(i), false);
@@ -9503,10 +9490,111 @@ int __cdecl HookNativeJoystickEnabled() {
              : 0;
 }
 
+bool ApplyCanonicalPlayerHeadingDelta(uintptr_t controller,
+                                      int32_t heading_delta) {
+  if (!controller || !g_player_turn_writer || heading_delta == 0) {
+    return heading_delta == 0;
+  }
+  uintptr_t original_source = 0;
+  int32_t original_limit = 0;
+  int32_t original_idle_turn = 0;
+  const uintptr_t temporary_source = controller + kPlayerIdleTurnOffset;
+  const int32_t no_limit = 0;
+  if (!SafeReadValue(reinterpret_cast<const void*>(
+                         controller + kPlayerTurnSourcePointerOffset),
+                     &original_source) ||
+      !original_source ||
+      !SafeReadValue(reinterpret_cast<const void*>(
+                         controller + kPlayerTurnLimitOffset),
+                     &original_limit) ||
+      !SafeReadValue(reinterpret_cast<const void*>(temporary_source),
+                     &original_idle_turn)) {
+    return false;
+  }
+  const bool source_written = SafeWrite(
+      reinterpret_cast<void*>(controller + kPlayerTurnSourcePointerOffset),
+      &temporary_source, sizeof(temporary_source));
+  const bool limit_written = source_written && SafeWrite(
+      reinterpret_cast<void*>(controller + kPlayerTurnLimitOffset),
+      &no_limit, sizeof(no_limit));
+  const bool delta_written = limit_written && SafeWrite(
+      reinterpret_cast<void*>(temporary_source), &heading_delta,
+      sizeof(heading_delta));
+  if (delta_written) {
+    // 0x44DD0 publishes the same heading to the render node and the native
+    // actor/collision orientation. Never move or rotate only one copy.
+    g_player_turn_writer(reinterpret_cast<void*>(controller));
+  }
+  SafeWrite(reinterpret_cast<void*>(temporary_source), &original_idle_turn,
+            sizeof(original_idle_turn));
+  SafeWrite(reinterpret_cast<void*>(controller + kPlayerTurnLimitOffset),
+            &original_limit, sizeof(original_limit));
+  SafeWrite(reinterpret_cast<void*>(controller +
+                                    kPlayerTurnSourcePointerOffset),
+            &original_source, sizeof(original_source));
+  return delta_written;
+}
+
+bool ApplyCanonicalPlayerHeading(uintptr_t controller, int32_t target) {
+  int32_t current = 0;
+  uintptr_t live_controller = 0;
+  if (!ReadLivePlayerHeading(&current, &live_controller) ||
+      live_controller != controller) {
+    return false;
+  }
+  return ApplyCanonicalPlayerHeadingDelta(
+      controller, PlayerHeadingDelta(target, current));
+}
+
+bool ResolveImmersiveLocomotionPlan(ImmersiveLocomotionPlan* plan) {
+  if (!plan || !CustomHeadViewSelected()) {
+    return false;
+  }
+  double lateral = 0.0;
+  double longitudinal = 0.0;
+  bool native_backward = false;
+  const int32_t keyboard_x = g_immersive_keyboard_movement_x.load(
+      std::memory_order_acquire);
+  const int32_t keyboard_y = g_immersive_keyboard_movement_y.load(
+      std::memory_order_acquire);
+  if (keyboard_x != 0 || keyboard_y != 0) {
+    lateral = static_cast<double>(std::clamp(keyboard_x, -1, 1));
+    longitudinal = static_cast<double>(std::clamp(keyboard_y, -1, 1));
+    native_backward = keyboard_y < 0;
+  } else {
+    lateral = static_cast<double>(
+        g_immersive_xinput_movement_x_milli.load(
+            std::memory_order_acquire)) / 1000.0;
+    longitudinal = static_cast<double>(
+        g_immersive_xinput_movement_y_milli.load(
+            std::memory_order_acquire)) / 1000.0;
+    native_backward =
+        longitudinal < -g_xinput_movement_threshold;
+  }
+  const double magnitude = std::min(1.0, std::hypot(lateral, longitudinal));
+  if (magnitude <= 0.000001) {
+    return false;
+  }
+  lateral /= magnitude;
+  longitudinal /= magnitude;
+  const CameraRelativeHeadingTarget motion_target =
+      CameraRelativeHeadingFromOrbit(
+          g_third_person_orbit_state.yaw, lateral, longitudinal,
+          kPlayerHeadingUnitsPerTurn, false);
+  if (!motion_target.valid) {
+    return false;
+  }
+  *plan = BuildImmersiveLocomotionPlan(
+      motion_target.heading, native_backward, magnitude,
+      kPlayerHeadingUnitsPerTurn);
+  return plan->active;
+}
+
 void __cdecl HookPlayerStateDispatcher(void* outer_player) {
   if (!g_original_player_state_dispatcher) {
     return;
   }
+  uintptr_t validated_controller = 0;
   if (outer_player && g_player_turn_writer &&
       g_xinput_camera_relative_intent.load(std::memory_order_acquire)) {
     uintptr_t expected_outer = 0;
@@ -9523,6 +9611,7 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
                           std::memory_order_acquire) &&
         ReadLivePlayerHeading(&current_heading, &live_controller) &&
         live_controller == controller) {
+      validated_controller = controller;
       const int32_t target = g_xinput_desired_heading.load(
           std::memory_order_acquire);
       const double magnitude = static_cast<double>(
@@ -9539,43 +9628,8 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
                                     kPlayerHeadingUnitsPerTurn,
                                     maximum_step);
       if (steering.heading_delta != 0) {
-        uintptr_t selected_turn_source = 0;
-        int32_t selected_turn_value = 0;
-        int32_t original_limit = 0;
-        int32_t original_idle_turn = 0;
-        const int32_t no_limit = 0;
-        if (SafeReadValue(reinterpret_cast<const void*>(
-                              controller + kPlayerTurnSourcePointerOffset),
-                          &selected_turn_source) &&
-            selected_turn_source != 0 &&
-            SafeReadValue(reinterpret_cast<const void*>(selected_turn_source),
-                          &selected_turn_value) &&
-            SafeReadValue(reinterpret_cast<const void*>(
-                              controller + kPlayerTurnLimitOffset),
-                          &original_limit) &&
-            SafeReadValue(reinterpret_cast<const void*>(
-                              controller + kPlayerIdleTurnOffset),
-                          &original_idle_turn) &&
-            SafeWrite(reinterpret_cast<void*>(
-                          controller + kPlayerTurnLimitOffset),
-                      &no_limit, sizeof(no_limit))) {
-          if (SafeWrite(reinterpret_cast<void*>(
-                            controller + kPlayerIdleTurnOffset),
-                        &steering.heading_delta,
-                        sizeof(steering.heading_delta))) {
-            // 0x44DD0 is the engine's canonical dual writer: it advances the
-            // render-node heading and mirrors heading+native accumulator to
-            // the collision/actor publication. Calling it from 0x82750's
-            // shared pre-state boundary avoids every state-specific writer.
-            g_player_turn_writer(reinterpret_cast<void*>(controller));
-            SafeWrite(reinterpret_cast<void*>(
-                          controller + kPlayerIdleTurnOffset),
-                      &original_idle_turn, sizeof(original_idle_turn));
-          }
-          SafeWrite(reinterpret_cast<void*>(
-                        controller + kPlayerTurnLimitOffset),
-                    &original_limit, sizeof(original_limit));
-        }
+        ApplyCanonicalPlayerHeadingDelta(controller,
+                                         steering.heading_delta);
       }
       ++g_xinput_camera_relative_turn_calls;
       if (g_debug_log &&
@@ -9589,50 +9643,36 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
       }
     }
   }
+
+  // Retail J/K enters a separate state and cannot coexist with W/S. Instead,
+  // preserve the visible eye-facing body course, rotate only the forthcoming
+  // native root-motion/collision transaction into the requested vector, and
+  // restore the body course before this source tick is published. The original
+  // dispatcher still owns action resolution, animation, speed and collision.
+  ImmersiveLocomotionPlan locomotion_plan;
+  int32_t preserved_body_heading = 0;
+  uintptr_t heading_controller = 0;
+  const bool route_immersive_motion =
+      validated_controller &&
+      ResolveImmersiveLocomotionPlan(&locomotion_plan) &&
+      ReadLivePlayerHeading(&preserved_body_heading, &heading_controller) &&
+      heading_controller == validated_controller &&
+      ApplyCanonicalPlayerHeading(validated_controller,
+                                  locomotion_plan.root_heading);
   g_original_player_state_dispatcher(outer_player);
-}
-
-void __cdecl HookPlayerSideStepMotion(void* controller) {
-  if (!g_original_player_side_step_motion) {
-    return;
+  if (route_immersive_motion) {
+    ApplyCanonicalPlayerHeading(validated_controller,
+                                preserved_body_heading);
+    if (g_debug_log &&
+        (g_source_ticks.load(std::memory_order_relaxed) % 60u) == 1u) {
+      AppendNativeLog(
+          "immersive locomotion routed root_heading=%d restored_heading=%d "
+          "native_axis=%d controller=%p",
+          locomotion_plan.root_heading, preserved_body_heading,
+          locomotion_plan.native_axis_milli,
+          reinterpret_cast<void*>(validated_controller));
+    }
   }
-  const int32_t scale_percent = std::max(
-      g_immersive_keyboard_strafe_scale_percent.load(
-          std::memory_order_acquire),
-      g_immersive_xinput_strafe_scale_percent.load(
-          std::memory_order_acquire));
-  uintptr_t live_controller = 0;
-  int32_t direction = 0;
-  if (!controller || !CustomHeadViewSelected() || scale_percent <= 100 ||
-      !g_player_primary_motion || !g_player_secondary_motion ||
-      !ResolveLivePlayerMovementController(nullptr, &live_controller) ||
-      live_controller != reinterpret_cast<uintptr_t>(controller) ||
-      !SafeReadValue(reinterpret_cast<const void*>(
-                         live_controller + kPlayerSideStepDirectionOffset),
-                     &direction)) {
-    g_original_player_side_step_motion(controller);
-    return;
-  }
-  const ImmersiveStrafeMotion motion =
-      BuildImmersiveStrafeMotion(direction, scale_percent);
-  const int32_t primary_response = 100;
-  const int32_t secondary_response = 50;
-  if (!motion.active ||
-      !SafeWrite(reinterpret_cast<void*>(
-                     live_controller + kPlayerPrimaryMotionResponseOffset),
-                 &primary_response, sizeof(primary_response)) ||
-      !SafeWrite(reinterpret_cast<void*>(
-                     live_controller + kPlayerSecondaryMotionResponseOffset),
-                 &secondary_response, sizeof(secondary_response))) {
-    g_original_player_side_step_motion(controller);
-    return;
-  }
-
-  // These are the exact two retail 0x5F650 destinations. Only their signed
-  // velocity arguments change; native collision, state lifetime, animation
-  // and render/collision publication remain untouched.
-  g_player_primary_motion(controller, motion.primary);
-  g_player_secondary_motion(controller, motion.secondary);
 }
 
 void __cdecl HookPlayerLocomotion(void* controller) {
@@ -9839,6 +9879,18 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         g_native_joystick_hooks_installed.load(std::memory_order_acquire);
     const bool movement_requested =
         movement_stick.magnitude > g_xinput_movement_threshold;
+    g_immersive_xinput_movement_x_milli.store(
+        custom_head_movement && !selector_captures_controls &&
+                movement_requested
+            ? static_cast<int32_t>(std::lround(movement_stick.x * 1000.0))
+            : 0,
+        std::memory_order_release);
+    g_immersive_xinput_movement_y_milli.store(
+        custom_head_movement && !selector_captures_controls &&
+                movement_requested
+            ? static_cast<int32_t>(std::lround(movement_stick.y * 1000.0))
+            : 0,
+        std::memory_order_release);
     bool desired_heading_valid = false;
     if (custom_head_movement) {
       const CameraRelativeHeadingTarget view_heading =
@@ -9880,13 +9932,19 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
           true, desired_heading,
           custom_head_movement ? 1.0 : movement_stick.magnitude);
       // Native Y retains the game's action resolver, root motion, collision,
-      // walk/run and animation ownership. Native X is deliberately neutral:
-      // its meaning changes with the active turn state. The shared 0x82750
-      // dispatcher applies the bounded camera-relative heading separately.
+      // walk/run and animation ownership. In immersive view every lateral or
+      // diagonal request supplies a forward/back driver; the dispatcher
+      // rotates only that native transaction into the complete stick vector.
+      const bool immersive_backward =
+          custom_head_movement &&
+          movement_stick.y < -g_xinput_movement_threshold;
+      const double native_longitudinal =
+          custom_head_movement && movement_requested
+              ? (immersive_backward ? -movement_stick.magnitude
+                                    : movement_stick.magnitude)
+              : (custom_head_movement ? 0.0 : movement_stick.magnitude);
       PublishNativeJoystickMovement(
-          true, 0.0, custom_head_movement
-                         ? movement_stick.y
-                         : movement_stick.magnitude);
+          true, 0.0, native_longitudinal);
       if (g_debug_log &&
           (!g_xinput_direct_heading_steering_was_active ||
            (g_source_ticks.load(std::memory_order_relaxed) % 60u) == 1u)) {
@@ -9894,8 +9952,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
             "xinput movement dispatcher_steering=1 target=%d "
             "current=%d native_axes=0.000/%.3f magnitude=%.3f",
             desired_heading, current_heading,
-            custom_head_movement ? movement_stick.y
-                                 : movement_stick.magnitude,
+            native_longitudinal,
             movement_stick.magnitude);
       }
       g_xinput_direct_heading_steering_was_active = true;
@@ -9903,12 +9960,8 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
       InjectVirtualKey(InjectedKey::kS, false);
       InjectVirtualKey(InjectedKey::kA, false);
       InjectVirtualKey(InjectedKey::kD, false);
-      InjectVirtualKey(InjectedKey::kJ,
-                       custom_head_movement &&
-                           left_x < -g_xinput_movement_threshold);
-      InjectVirtualKey(InjectedKey::kK,
-                       custom_head_movement &&
-                           left_x > g_xinput_movement_threshold);
+      InjectVirtualKey(InjectedKey::kJ, false);
+      InjectVirtualKey(InjectedKey::kK, false);
     } else {
       if (g_debug_log && g_xinput_direct_heading_steering_was_active) {
         AppendNativeLog(
@@ -9962,16 +10015,6 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     } else if (run_magnitude <= g_xinput_run_release_threshold) {
       g_xinput_run_active = false;
     }
-    const bool immersive_strafe_requested =
-        custom_head_movement && !selector_captures_controls &&
-        std::abs(left_x) > g_xinput_movement_threshold;
-    g_immersive_xinput_strafe_scale_percent.store(
-        immersive_strafe_requested
-            ? (g_xinput_run_active
-                   ? g_immersive_strafe_run_scale_percent
-                   : g_immersive_strafe_walk_scale_percent)
-            : 0,
-        std::memory_order_release);
     InjectVirtualKey(InjectedKey::kShift, g_xinput_run_active);
     InjectVirtualKey(InjectedKey::kSpace,
                      !selector_captures_controls &&
@@ -10034,7 +10077,9 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
     g_xinput_first_person_toggled = false;
     g_xinput_run_active = false;
-    g_immersive_xinput_strafe_scale_percent.store(
+    g_immersive_xinput_movement_x_milli.store(
+        0, std::memory_order_release);
+    g_immersive_xinput_movement_y_milli.store(
         0, std::memory_order_release);
     InjectVirtualKey(InjectedKey::kW, false);
     InjectVirtualKey(InjectedKey::kS, false);
@@ -13965,12 +14010,6 @@ void InitializePatchState() {
       ConfiguredInteger(L"Camera", L"ThirdPersonOrbit", 1) != 0;
   g_immersive_first_person_enabled =
       ConfiguredInteger(L"Camera", L"ImmersiveFirstPerson", 1) != 0;
-  g_immersive_strafe_walk_scale_percent = std::clamp(
-      ConfiguredInteger(L"Camera", L"HeadStrafeWalkPercent", 150),
-      100, 250);
-  g_immersive_strafe_run_scale_percent = std::clamp(
-      ConfiguredInteger(L"Camera", L"HeadStrafeRunPercent", 200),
-      g_immersive_strafe_walk_scale_percent, 400);
   g_third_person_orbit_invert_x =
       ConfiguredInteger(L"Camera", L"InvertX", 0) != 0;
   g_third_person_orbit_invert_y =
@@ -14287,12 +14326,14 @@ bool DeathtrapImmersiveFirstPersonActive() {
       !RetailFirstPersonActive();
 }
 
-void SubmitDeathtrapImmersiveKeyboardStrafe(bool active, bool run) {
-  g_immersive_keyboard_strafe_scale_percent.store(
-      active && DeathtrapImmersiveFirstPersonActive()
-          ? (run ? g_immersive_strafe_run_scale_percent
-                 : g_immersive_strafe_walk_scale_percent)
-          : 0,
+void SubmitDeathtrapImmersiveKeyboardMovement(int32_t lateral,
+                                              int32_t longitudinal) {
+  const bool active = DeathtrapImmersiveFirstPersonActive();
+  g_immersive_keyboard_movement_x.store(
+      active ? std::clamp(lateral, -1, 1) : 0,
+      std::memory_order_release);
+  g_immersive_keyboard_movement_y.store(
+      active ? std::clamp(longitudinal, -1, 1) : 0,
       std::memory_order_release);
 }
 
@@ -14582,73 +14623,14 @@ bool InstallDeathtrapNativeRenderHooks() {
     }
   }
 
-  // The dedicated side-step callback is shared by physical J/K and the
-  // XInput bridge. Hook it independently from camera-relative steering so
-  // keyboard and gamepad receive the same immersive-only walk/run speeds.
-  if (g_immersive_first_person_enabled) {
-    void* const side_step_target =
-        g_dungeon_base + kPlayerSideStepMotionRva;
-    constexpr std::array<uint8_t, 12> kExpectedSideStepPrologue = {
-        0x56, 0x8B, 0x74, 0x24, 0x08, 0x8B,
-        0x86, 0x9C, 0x01, 0x00, 0x00, 0xC7};
-    std::array<uint8_t, kExpectedSideStepPrologue.size()>
-        side_step_prologue{};
-    const bool signature_matches =
-        SafeRead(side_step_target, side_step_prologue.data(),
-                 side_step_prologue.size()) &&
-        side_step_prologue == kExpectedSideStepPrologue;
-    if (signature_matches) {
-      g_player_primary_motion = reinterpret_cast<PlayerMotionChannelFn>(
-          g_dungeon_base + kPlayerPrimaryMotionRva);
-      g_player_secondary_motion = reinterpret_cast<PlayerMotionChannelFn>(
-          g_dungeon_base + kPlayerSecondaryMotionRva);
-      const MH_STATUS create_side_step = MH_CreateHook(
-          side_step_target,
-          reinterpret_cast<void*>(&HookPlayerSideStepMotion),
-          reinterpret_cast<void**>(&g_original_player_side_step_motion));
-      const bool side_step_created =
-          create_side_step == MH_OK ||
-          create_side_step == MH_ERROR_ALREADY_CREATED;
-      const MH_STATUS enable_side_step =
-          side_step_created ? MH_EnableHook(side_step_target)
-                            : create_side_step;
-      const bool side_step_enabled =
-          enable_side_step == MH_OK ||
-          enable_side_step == MH_ERROR_ENABLED;
-      if (side_step_created && side_step_enabled) {
-        g_player_side_step_motion_hook_installed.store(
-            true, std::memory_order_release);
-        AppendNativeLog(
-            "immersive strafe=active callback_rva=%08llX "
-            "motion_rva=%08llX/%08llX walk=%d%% run=%d%% "
-            "scope=IMMERSIVE_FIRST_PERSON",
-            static_cast<unsigned long long>(kPlayerSideStepMotionRva),
-            static_cast<unsigned long long>(kPlayerPrimaryMotionRva),
-            static_cast<unsigned long long>(kPlayerSecondaryMotionRva),
-            g_immersive_strafe_walk_scale_percent,
-            g_immersive_strafe_run_scale_percent);
-      } else {
-        AppendNativeLog(
-            "immersive strafe=hook_failed create=%d enable=%d "
-            "fallback=retail_speed",
-            static_cast<int>(create_side_step),
-            static_cast<int>(enable_side_step));
-      }
-    } else {
-      AppendNativeLog(
-          "immersive strafe=signature_mismatch rva=%08llX "
-          "fallback=retail_speed",
-          static_cast<unsigned long long>(kPlayerSideStepMotionRva));
-    }
-  }
-
   // 0x82750 is the common pre-state boundary installed by ordinary ground
-  // movement, forward locomotion and both direct turn states. The hook calls
-  // the canonical 0x44DD0 dual heading writer before the active state callback
-  // while native joystick Y remains the sole forward/root-motion authority.
+  // movement, forward locomotion and both direct turn states. It is also the
+  // immersive keyboard vector boundary, so installation must not depend on a
+  // connected or enabled XInput device. The canonical 0x44DD0 writer keeps
+  // render and collision headings in one transaction.
   if (g_third_person_orbit_enabled &&
-      g_xinput_camera_relative_movement &&
-      g_native_joystick_hooks_installed.load(std::memory_order_acquire)) {
+      (g_xinput_camera_relative_movement ||
+       g_immersive_first_person_enabled)) {
     void* const dispatcher_target =
         g_dungeon_base + kPlayerStateDispatcherRva;
     constexpr std::array<uint8_t, 12> kExpectedDispatcherPrologue = {

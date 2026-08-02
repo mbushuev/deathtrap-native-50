@@ -44,19 +44,24 @@ int main() {
   Require(ImmersivePhysicalMouseVerticalSign(true) == 1.0,
           "InvertY must reverse the immersive physical mouse default");
 
-  const ImmersiveStrafeMotion walk_left =
-      BuildImmersiveStrafeMotion(-1, 150);
-  Require(walk_left.active && walk_left.primary == -225 &&
-              walk_left.secondary == -75,
-          "immersive walking strafe must scale both native motion channels");
-  const ImmersiveStrafeMotion run_right =
-      BuildImmersiveStrafeMotion(1, 200);
-  Require(run_right.active && run_right.primary == 300 &&
-              run_right.secondary == 100,
-          "immersive running strafe must preserve direction and run faster");
-  Require(!BuildImmersiveStrafeMotion(0, 200).active &&
-              !BuildImmersiveStrafeMotion(1, 99).active,
-          "invalid side-step direction or scale must fail closed");
+  const ImmersiveLocomotionPlan forward_motion =
+      BuildImmersiveLocomotionPlan(512, false, 0.75, 1024);
+  Require(forward_motion.active && forward_motion.root_heading == 512 &&
+              forward_motion.native_axis_milli == 750,
+          "forward and diagonal motion must retain forward root motion");
+  const ImmersiveLocomotionPlan backward_motion =
+      BuildImmersiveLocomotionPlan(0, true, 1.0, 1024);
+  Require(backward_motion.active && backward_motion.root_heading == 512 &&
+              backward_motion.native_axis_milli == -1000,
+          "backward root course must oppose the desired movement heading");
+  const ImmersiveLocomotionPlan pure_lateral =
+      BuildImmersiveLocomotionPlan(256, false, 1.0, 1024);
+  Require(pure_lateral.active && pure_lateral.root_heading == 256 &&
+              pure_lateral.native_axis_milli == 1000,
+          "pure lateral input must use full-speed forward root motion");
+  Require(!BuildImmersiveLocomotionPlan(0, false, 0.0, 1024).active &&
+              !BuildImmersiveLocomotionPlan(0, false, 1.0, 0).active,
+          "zero motion or invalid heading units must fail closed");
 
   const ImmersiveFirstPersonPose forward =
       BuildImmersiveFirstPersonPose(root, 0.0, 0.0, 60, 120);
