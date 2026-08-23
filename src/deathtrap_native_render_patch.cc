@@ -1,5 +1,9 @@
 #include "deathtrap_native_render_patch.h"
 
+#ifndef DEATHTRAP_NATIVE_VERSION
+#define DEATHTRAP_NATIVE_VERSION "development"
+#endif
+
 #include <windows.h>
 
 #include <Xinput.h>
@@ -15004,7 +15008,8 @@ void InitializePatchState() {
   g_camera_node_world_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kCameraNodeWorldUpdateRva);
   AppendNativeLog(
-      "Deathtrap native render overlay 0.0.215 uses compact per-launch "
+      "Deathtrap native render overlay " DEATHTRAP_NATIVE_VERSION
+      " uses compact per-launch "
       "support logging and preserves the accepted v0.0.214 immersive camera "
       "and camera-relative locomotion; "
       "0.0.197 keeps the animated head mount "

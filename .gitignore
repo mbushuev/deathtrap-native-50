@@ -1,8 +1,11 @@
 /build/
+/build-*/
 /build-camera*/
 /build-movement*/
 /.vs/
 /out/
+/artifacts*/
+/media/
 *.obj
 *.pdb
 *.ilk

@@ -1,0 +1,77 @@
+name: Build release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Validate tag
+        shell: pwsh
+        run: |
+          $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
+          $expectedTag = "v$version"
+          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+            throw "Tag $env:GITHUB_REF_NAME does not match VERSION $version."
+          }
+
+      - name: Build, test and package
+        shell: pwsh
+        run: >-
+          powershell.exe -NoProfile -ExecutionPolicy Bypass
+          -File .\scripts\package-release.ps1
+          -OutputDirectory artifacts
+          -BuildDirectory build-release
+
+      - name: Preserve build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deathtrap-native-50-${{ github.ref_name }}
+          path: |
+            artifacts/*.zip
+            artifacts/*-SHA256.txt
+          if-no-files-found: error
+
+      - name: Create draft GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
+          $changelog = Get-Content -LiteralPath CHANGELOG.md -Raw
+          $escapedVersion = [regex]::Escape($version)
+          $match = [regex]::Match(
+            $changelog,
+            "(?ms)^##\s+$escapedVersion\b.*?(?=^##\s+|\z)")
+          if (-not $match.Success) {
+            throw "Could not extract release notes for $version from CHANGELOG.md."
+          }
+          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          [System.IO.File]::WriteAllText(
+            $notesPath,
+            $match.Value.Trim() + "`n",
+            [System.Text.UTF8Encoding]::new($false))
+
+          $assets = @(Get-ChildItem -LiteralPath artifacts -File |
+            Where-Object { $_.Extension -eq '.zip' -or $_.Name.EndsWith('-SHA256.txt') } |
+            ForEach-Object { $_.FullName })
+          if ($assets.Count -ne 2) {
+            throw "Expected ZIP and checksum assets; found $($assets.Count)."
+          }
+          & gh release create $env:GITHUB_REF_NAME @assets `
+            --draft --verify-tag `
+            --title "Deathtrap Native 50 $env:GITHUB_REF_NAME" `
+            --notes-file $notesPath
+          if ($LASTEXITCODE -ne 0) {
+            throw 'GitHub release creation failed.'
+          }

@@ -36,7 +36,7 @@ DLL is required.
 
 ## Result
 
-The runtime package consists of only:
+The two runtime files are:
 
 ```text
 DINPUT.dll
@@ -49,6 +49,17 @@ and is not loaded by Deathtrap's DirectDraw path. Version 2.86 is the runtime
 compatibility baseline; 2.86.2 is the validated reference, not a hard-coded
 binary dependency.
 
+Copying these two files manually is incomplete unless the required bindings
+are also merged into `ASYLUM/keys.cfg`. Build the complete distributable ZIP,
+including the installer and documentation, with:
+
+```powershell
+.\scripts\package-release.ps1 -OutputDirectory artifacts
+```
+
+The package name and DLL metadata are derived from the repository `VERSION`
+file. See [Publishing GitHub releases](RELEASING.md).
+
 ## Verification
 
 The build script performs these checks:
@@ -60,7 +71,10 @@ The build script performs these checks:
 5. the immersive first-person eye/orientation pose tests pass;
 6. all CD tracks `2..16` map to the fifteen Steam MP3 indices `0..14`;
 7. the control-binding installer preserves CRLF without producing `CR-CR-LF`;
-8. the verified binary is copied to `dist/DINPUT.dll`.
+8. unknown game hashes produce warnings without blocking installation;
+9. a packaged payload upgrades an existing installation only after preserving
+   its DLL, configuration and control file in the rollback directory;
+10. the verified binary is copied to `dist/DINPUT.dll`.
 
 For a diagnostic game run, set `DebugLog=1`. Return it to `0` after validation
 because synchronous file logging is intentionally excluded from normal play.

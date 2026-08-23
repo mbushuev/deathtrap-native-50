@@ -1,5 +1,14 @@
 cmake_minimum_required(VERSION 3.21)
-project(deathtrap_native50_overlay VERSION 0.0.216 LANGUAGES C CXX)
+
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" DEATHTRAP_NATIVE_VERSION
+  LIMIT_COUNT 1)
+string(STRIP "${DEATHTRAP_NATIVE_VERSION}" DEATHTRAP_NATIVE_VERSION)
+if(NOT DEATHTRAP_NATIVE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  message(FATAL_ERROR "VERSION must contain a semantic version such as 0.0.0")
+endif()
+
+project(deathtrap_native50_overlay VERSION ${DEATHTRAP_NATIVE_VERSION}
+  LANGUAGES C CXX)
 
 if(NOT WIN32 OR NOT MSVC)
   message(FATAL_ERROR "Deathtrap Native 50 requires 32-bit Windows and MSVC")
@@ -20,11 +29,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(minhook)
 
+configure_file(
+  src/deathtrap_native_version.rc.in
+  "${CMAKE_CURRENT_BINARY_DIR}/deathtrap_native_version.rc"
+  @ONLY
+)
+
 add_library(deathtrap_native_dinput SHARED
   src/deathtrap_native_render_patch.cc
   src/dinput_native_proxy.cc
   src/dinput_native_proxy.def
-  src/deathtrap_native_version.rc
+  "${CMAKE_CURRENT_BINARY_DIR}/deathtrap_native_version.rc"
   src/native_d3d11_present_guard.cc
 )
 target_compile_features(deathtrap_native_dinput PRIVATE cxx_std_17)
@@ -34,6 +49,7 @@ target_compile_definitions(deathtrap_native_dinput PRIVATE
   UNICODE
   _UNICODE
   DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}"
 )
 target_compile_options(deathtrap_native_dinput PRIVATE
   /W4 /permissive- /EHsc /utf-8)

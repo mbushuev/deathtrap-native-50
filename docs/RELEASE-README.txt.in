@@ -1,0 +1,136 @@
+Deathtrap Native 50 @VERSION@
+================================
+
+Free unofficial modernization patch for the 32-bit Steam release of
+Ian Livingstone's Deathtrap Dungeon (1998).
+
+Developed using OpenAI Codex under human direction and validated through
+extensive manual playtesting and automated tests.
+
+Tested game:
+https://store.steampowered.com/app/245010/Deathtrap_Dungeon/
+
+Gameplay demo:
+https://youtu.be/U1RjdVP49TQ
+
+The complete user-facing list of changes is included in CHANGELOG.txt.
+
+QUICK INSTALL
+
+1. Close the game.
+2. Download dgVoodoo2 2.86 or newer from:
+   https://github.com/dege-diosg/dgVoodoo2/releases
+3. Copy dgVoodooCpl.exe plus the x86 DDraw.dll and D3DImm.dll wrappers from
+   the dgVoodoo2 package directly beside DD_CD.EXE. Do not use x64 wrappers.
+   D3D9.dll is not required by Deathtrap Dungeon.
+4. Run dgVoodooCpl.exe for the game directory. Set Output API to Direct3D 11
+   feature level 11.0, apply it, and confirm that dgVoodoo.conf beside
+   DD_CD.EXE contains:
+
+       [General]
+       OutputAPI = d3d11_fl11_0
+
+5. Only after dgVoodoo2 is configured, extract every file from this patch ZIP
+   directly beside DD_CD.EXE. Preserve the included payload directory.
+6. Double-click INSTALL.cmd once. It validates dgVoodoo2 and the game, then
+   backs up a previous patch installation, installs the new payload and merges
+   the required controls into ASYLUM\keys.cfg without replacing the complete
+   file.
+7. Start Deathtrap Dungeon normally.
+
+dgVoodoo2 is required for the supported patch. DINPUT.dll may load without it,
+but the complete higher-rate rendering path is not expected to work correctly.
+
+The tested Steam Dungeon.dll SHA-256 is:
+95FE9CE0FFF387F00704548F152E4340815213FCB3833DBE1B5C42871E7D2E56
+
+The tested Steam DD_CD.EXE SHA-256 is:
+0C644A00E62652E046C5DAD2960F0F6C8C1998F4CA065780FBD7811D9908BF1F
+
+The installer warns but continues if the game hashes differ. Untested game
+files may be partially or completely incompatible.
+
+MOUSE AND KEYBOARD
+
+Mouse movement     Rotate modern camera / first-person look
+Left mouse         Primary attack
+Right mouse        Block or parry
+Mouse wheel        Previous/next available melee weapon
+W / S              Walk forward/backward
+Shift + W / S      Run forward/backward
+A / D              Turn left/right
+Shift + A / D      Fast turn left/right
+J / K              Side-step left/right
+Ctrl + W / S       Step forward/backward
+Ctrl + A / D       Original side-step left/right
+Space              Jump or climb
+Space + direction  Directional jump
+F                  Ranged attack / original combat modifier
+F + W/A/D          Original directional melee attacks
+F + S              Original parry
+Q                  Cast/use selected spell
+E                  Operate or interact
+F1 / F2 / F3 / F4 Melee / ranged / spell-shield / consumable selector
+1-8                Choose slot in an opened retail item selector
+Tab                Original retail first-person view
+F10                Body-visible immersive first-person view
+F11                Toggle approximately 50 FPS native presentation
+I                  Inventory
+Esc                Open or leave menu
+O / P              Save/load game
+
+Immersive first person uses A/D for pure full-speed side movement. Combine
+W/S with A/D for diagonals and hold Shift to run.
+
+XBOX-COMPATIBLE CONTROLLER
+
+Left stick         Camera-relative movement; full tilt runs / menu navigation
+Right stick        Camera or first-person look / menu pointer / radial choice
+A                  Jump or climb / confirm / skip supported screens
+B                  Back in menus
+X                  Operate or interact / alternate screen skip
+Y                  Unassigned
+RT                 Primary attack
+LT                 Block or parry
+RB                 Cast/use contextual spell action
+LB + left stick    Original side-step movement
+Start/Menu         Open pause menu / leave menu
+R3                 Original retail first-person view
+View/Back          Body-visible immersive first-person view
+D-pad tap          Cycle next item in the selected category
+D-pad hold         Open radial selector; choose with right stick
+
+D-pad categories: up melee, right ranged, down spells/shields, left
+potions/charms.
+
+PROJECTS AND REPOSITORIES USED
+
+MinHook 1.3.4 - statically linked API-hooking dependency:
+https://github.com/TsudaKageyu/minhook
+
+dgVoodoo2 - required external DirectDraw/D3DImm runtime:
+https://github.com/dege-diosg/dgVoodoo2
+
+Unity Cinemachine - camera design reference; no code included:
+https://github.com/Unity-Technologies/com.unity.cinemachine
+
+UE Explorer - Arkham Asylum camera research tool; no code included:
+https://github.com/UE-Explorer/UE-Explorer
+
+ogg-winmm - Steam music-routing research reference; not included or required:
+https://github.com/bangstk/ogg-winmm
+
+The installer creates a timestamped backup of ASYLUM\keys.cfg under the
+game's back directory. Do not copy a complete keys.cfg from another install.
+
+This patch contains no game assets and no dgVoodoo files. THIRD_PARTY_NOTICES
+must remain with redistributed copies of the patch.
+
+Deathtrap Native 50 is licensed under the MIT License. See LICENSE.txt.
+
+OPTIONAL SUPPORT
+
+Deathtrap Native 50 is completely free, with no features or downloads locked
+behind donations. Voluntary support for continued fixes, development-tool and
+AI-subscription costs, or future game-modernization projects:
+https://ko-fi.com/utkiduck

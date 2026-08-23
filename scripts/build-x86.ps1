@@ -7,21 +7,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $buildPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $BuildDirectory))
-
-$cmakeCommand = Get-Command cmake.exe -ErrorAction SilentlyContinue
-$cmake = if ($cmakeCommand) { $cmakeCommand.Source } else { $null }
-if (-not $cmake) {
-    $candidates = @(
-        '<visual-studio-build-tools>\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe',
-        '<visual-studio-community>\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe',
-        '<visual-studio-professional>\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
-    )
-    $cmake = $candidates | Where-Object { Test-Path -LiteralPath $_ } |
-        Select-Object -First 1
-}
-if (-not $cmake) {
-    throw 'CMake was not found. Install Visual Studio 2022 C++ Build Tools or add cmake.exe to PATH.'
-}
+. (Join-Path $PSScriptRoot 'resolve-cmake.ps1')
+$cmake = Resolve-CMakeExecutable
 
 & $cmake -S $repoRoot -B $buildPath -G 'Visual Studio 17 2022' -A Win32
 if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed.' }
@@ -59,6 +46,12 @@ if ($LASTEXITCODE -ne 0) { throw 'Music track routing test failed.' }
 
 & (Join-Path $PSScriptRoot 'test-install-crlf.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Installer CRLF binding test failed.' }
+
+& (Join-Path $PSScriptRoot 'test-install-hash-warning.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Installer hash warning test failed.' }
+
+& (Join-Path $PSScriptRoot 'test-install-payload-upgrade.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Installer payload upgrade test failed.' }
 
 $dist = Join-Path $repoRoot 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null

@@ -1,16 +1,25 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$GameDirectory,
+    [string]$GameDirectory = '',
     [string]$DllPath = '',
+    [string]$IniPath = '',
     [switch]$SkipGameHashCheck
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
+if (-not $GameDirectory) {
+    $localExecutable = Join-Path $PSScriptRoot 'DD_CD.EXE'
+    if (-not (Test-Path -LiteralPath $localExecutable -PathType Leaf)) {
+        throw 'GameDirectory is required unless install.ps1 is beside DD_CD.EXE.'
+    }
+    $GameDirectory = $PSScriptRoot
+}
 $game = (Resolve-Path -LiteralPath $GameDirectory).Path
 $dungeon = Join-Path $game 'Dungeon.dll'
+$executable = Join-Path $game 'DD_CD.EXE'
 $expectedDungeon = '95FE9CE0FFF387F00704548F152E4340815213FCB3833DBE1B5C42871E7D2E56'
+$expectedExecutable = '0C644A00E62652E046C5DAD2960F0F6C8C1998F4CA065780FBD7811D9908BF1F'
 $commonDirectory = Split-Path -Parent $game
 $steamAppsDirectory = Split-Path -Parent $commonDirectory
 $manifest = Join-Path $steamAppsDirectory 'appmanifest_245010.acf'
@@ -28,14 +37,20 @@ if ($manifestText -notmatch '"appid"\s+"245010"') {
 if (-not (Test-Path -LiteralPath $dungeon)) {
     throw "Dungeon.dll was not found in $game"
 }
-if (-not $SkipGameHashCheck) {
+if (-not (Test-Path -LiteralPath $executable)) {
+    throw "DD_CD.EXE was not found in $game"
+}
+
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
     # Use the .NET stream directly so the installer's -WhatIf preference can't
     # suppress read-only hashing through the FileSystem provider.
-    $stream = [System.IO.File]::OpenRead($dungeon)
+    $stream = [System.IO.File]::OpenRead($Path)
     try {
         $hasher = [System.Security.Cryptography.SHA256]::Create()
         try {
-            $actual = ([System.BitConverter]::ToString(
+            return ([System.BitConverter]::ToString(
                 $hasher.ComputeHash($stream))).Replace('-', '')
         }
         finally {
@@ -45,8 +60,21 @@ if (-not $SkipGameHashCheck) {
     finally {
         $stream.Dispose()
     }
-    if ($actual -ne $expectedDungeon) {
-        throw "Unsupported Dungeon.dll SHA-256: $actual"
+}
+
+if (-not $SkipGameHashCheck) {
+    foreach ($binary in @(
+        @{ Name = 'Dungeon.dll'; Path = $dungeon; Expected = $expectedDungeon },
+        @{ Name = 'DD_CD.EXE'; Path = $executable; Expected = $expectedExecutable }
+    )) {
+        $actual = Get-FileSha256 -Path $binary.Path
+        if ($actual -ne $binary.Expected) {
+            Write-Warning (
+                "$($binary.Name) does not match the version tested by the " +
+                "project. Expected SHA-256: $($binary.Expected); actual: " +
+                "$actual. Installation will continue, but the patch may be " +
+                'partially or completely incompatible with these game files.')
+        }
     }
 }
 
@@ -79,10 +107,29 @@ if (-not (Select-String -LiteralPath $dgConfig -Pattern '^OutputAPI\s*=\s*d3d11_
 }
 
 if (-not $DllPath) {
-    $DllPath = Join-Path $repoRoot 'dist\DINPUT.dll'
+    $payloadDll = Join-Path $PSScriptRoot 'payload\DINPUT.dll'
+    $flatDll = Join-Path $PSScriptRoot 'DINPUT.dll'
+    $DllPath = if (Test-Path -LiteralPath $payloadDll -PathType Leaf) {
+        $payloadDll
+    } elseif (Test-Path -LiteralPath $flatDll -PathType Leaf) {
+        $flatDll
+    } else {
+        Join-Path $repoRoot 'dist\DINPUT.dll'
+    }
 }
 $dll = (Resolve-Path -LiteralPath $DllPath).Path
-$ini = Join-Path $repoRoot 'config\deathtrap_native.ini'
+if (-not $IniPath) {
+    $payloadIni = Join-Path $PSScriptRoot 'payload\deathtrap_native.ini'
+    $flatIni = Join-Path $PSScriptRoot 'deathtrap_native.ini'
+    $IniPath = if (Test-Path -LiteralPath $payloadIni -PathType Leaf) {
+        $payloadIni
+    } elseif (Test-Path -LiteralPath $flatIni -PathType Leaf) {
+        $flatIni
+    } else {
+        Join-Path $repoRoot 'config\deathtrap_native.ini'
+    }
+}
+$ini = (Resolve-Path -LiteralPath $IniPath).Path
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $backup = Join-Path $game "back\deathtrap-native50-overlay-$stamp"
 $keys = Join-Path $game 'ASYLUM\keys.cfg'
@@ -135,8 +182,16 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
             Move-Item -LiteralPath $legacyPath -Destination $legacyDestination
         }
     }
-    Copy-Item -LiteralPath $dll -Destination (Join-Path $game 'DINPUT.dll') -Force
-    Copy-Item -LiteralPath $ini -Destination (Join-Path $game 'deathtrap_native.ini') -Force
+    $dllDestination = Join-Path $game 'DINPUT.dll'
+    $iniDestination = Join-Path $game 'deathtrap_native.ini'
+    if (-not $dll.Equals($dllDestination,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        Copy-Item -LiteralPath $dll -Destination $dllDestination -Force
+    }
+    if (-not $ini.Equals($iniDestination,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        Copy-Item -LiteralPath $ini -Destination $iniDestination -Force
+    }
     if (-not (Test-Path -LiteralPath $keys)) {
         throw "Retail control file was not found: $keys"
     }

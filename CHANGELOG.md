@@ -1,9 +1,19 @@
 # User-facing changelog
 
-## 0.0.206 — changes from the original Steam release
+## 0.0.217 — changes from the original Steam release
 
 This is a consolidated list of the changes players can see or use. Reverted
 experiments and internal development changes are intentionally omitted.
+
+### Distribution and compatibility
+
+- Adds the MIT licence and complete public attribution for the projects used as
+  dependencies or engineering references.
+- Documents the complete default mouse, keyboard and Xbox-compatible
+  controller layout.
+- Treats unknown `Dungeon.dll` and `DD_CD.EXE` hashes as compatibility
+  warnings rather than refusing installation. The known Steam hashes remain
+  documented so untested game builds can be identified in support reports.
 
 ### Smoother rendering
 

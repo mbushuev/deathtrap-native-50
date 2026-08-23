@@ -2,9 +2,11 @@
 
 ## 1. Requirements
 
-- Steam release of *Deathtrap Dungeon*, App ID `245010`;
-- the supported 32-bit `Dungeon.dll` hash documented in the README;
-- dgVoodoo 2.86 or newer, using its **x86** DirectX wrappers;
+- [Steam release of *Deathtrap Dungeon*, App ID `245010`](https://store.steampowered.com/app/245010/Deathtrap_Dungeon/);
+- the tested 32-bit game hashes documented in the README, or an untested build
+  with a compatible internal layout;
+- [dgVoodoo2](https://github.com/dege-diosg/dgVoodoo2/releases) 2.86 or newer,
+  using its **x86** DirectX wrappers;
 - Windows 10 or 11 and a D3D11-capable GPU driver.
 
 `<SteamLibrary>` below means the root of any Steam library. No drive letter or
@@ -60,32 +62,37 @@ complete `dgVoodoo.conf` that could overwrite them.
 
 ## 4. Install the overlay
 
-Keep these three project files in their repository/package layout:
+The public release archive has a flat layout:
 
 ```text
-deathtrap-native50-overlay\
-|-- dist\DINPUT.dll
-|-- config\deathtrap_native.ini
-`-- scripts\install.ps1
+DINPUT.dll
+deathtrap_native.ini
+INSTALL.cmd
+install.ps1
+README.txt
+SHA256SUMS.txt
+THIRD_PARTY_NOTICES.txt
+LICENSE.txt
 ```
 
-After installing and configuring dgVoodoo, run:
+After installing and configuring dgVoodoo, extract every file directly beside
+`DD_CD.EXE`, then double-click `INSTALL.cmd` once. Advanced users may instead
+run:
 
 ```powershell
-.\scripts\install.ps1 `
-  -GameDirectory "<SteamLibrary>\steamapps\common\Deathtrap Dungeon"
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\install.ps1
 ```
 
 The script:
 
-1. verifies the Steam App ID and supported `Dungeon.dll`;
-2. checks that all three external x86 dgVoodoo wrappers exist;
+1. verifies the Steam App ID, compares `Dungeon.dll` and `DD_CD.EXE` with the
+   tested hashes, and continues with a warning if they differ;
+2. checks that both required external x86 dgVoodoo wrappers exist;
 3. requires `OutputAPI = d3d11_fl11_0`;
-4. backs up an existing `DINPUT.dll`, `deathtrap_native.ini` and
-   `ASYLUM\keys.cfg` under
+4. backs up `ASYLUM\keys.cfg` under
    `back\deathtrap-native50-overlay-<timestamp>`;
-5. installs this project's `DINPUT.dll` and `deathtrap_native.ini`;
-6. idempotently merges the required mouse, keyboard and native joystick
+5. idempotently merges the required mouse, keyboard and native joystick
    action bindings into the existing `ASYLUM\keys.cfg` in ASCII without
    replacing the whole retail control file.
 
@@ -93,7 +100,7 @@ Use `-WhatIf` to validate the directory without modifying it.
 
 Copying only `DINPUT.dll` is not a complete installation. A fully manual
 installation must copy both runtime files and reproduce the binding merge from
-`scripts/install.ps1`. Never distribute or blindly overwrite a complete
+`install.ps1`. Never distribute or blindly overwrite a complete
 `keys.cfg`: it is a game/user control file and may already contain customized
 bindings.
 
@@ -131,7 +138,7 @@ Enabled=1
 Subframes=3
 
 [Diagnostics]
-DebugLog=1
+DebugLog=0
 CameraProbe=0
 HeadJointProbe=0
 ```
@@ -145,7 +152,7 @@ separate 50-tick and 27-tick lifetimes to 150 and 81 ticks. Set it to `100` for
 the original durations. It does not affect menus, inventory selectors,
 animation, simulation, input or audio timing.
 
-For one diagnostic run, set `DebugLog=1`, enter actual gameplay and then close
+For a requested diagnostic run, set `DebugLog=1`, enter actual gameplay and then close
 the game normally. The game's `logs` directory should contain one new file:
 
 ```text
@@ -410,8 +417,10 @@ matches the standard radial-menu interaction.
 
 ## 7. Common failures
 
-- **No change after pressing F11:** verify the supported `Dungeon.dll` hash and
-  that `DINPUT.dll` is beside the original `DD_CD.EXE`.
+- **No change after pressing F11:** compare the `Dungeon.dll` hash with the
+  tested value and confirm that `DINPUT.dll` is beside the original
+  `DD_CD.EXE`. Unknown builds are allowed by the installer but may fail the
+  DLL's structural compatibility check.
 - **Black flashes or stale pages:** verify `OutputAPI = d3d11_fl11_0`; D3D12 and
   `bestavailable` are not supported by this build.
 - **The game does not start:** verify that all injected and dgVoodoo DLLs are
