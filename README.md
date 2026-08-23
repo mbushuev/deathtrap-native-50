@@ -66,7 +66,7 @@ game-modernization projects, you can donate through
 
 <p align="center">
   <a href="https://ko-fi.com/utkiduck">
-    <img src="assets/ko-fi-support.png" alt="Support Deathtrap Native 50 on Ko-fi" width="320">
+    <img src="assets/ko-fi-support.png" alt="Support Deathtrap Native 50 on Ko-fi" width="220">
   </a>
 </p>
 
