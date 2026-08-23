@@ -2,6 +2,16 @@
 
 Current development version: **0.0.217**
 
+<p align="center">
+  <a href="https://youtu.be/U1RjdVP49TQ">
+    <img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube">
+  </a>
+</p>
+
+<p align="center">
+  <img src="assets/deathtrap-native50-banner.jpg" alt="Deathtrap Native 50 v0.0.217" width="960">
+</p>
+
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
 32-bit Windows release of *Ian Livingstone's Deathtrap Dungeon* (1998). It
 raises the unique rendered output from roughly 16.7 FPS to approximately 50
@@ -43,8 +53,6 @@ binaries.
 - Longer gameplay prompts and safe per-launch diagnostic logs when explicitly
   enabled.
 
-[Watch the gameplay demo on YouTube](https://youtu.be/U1RjdVP49TQ).
-
 See the [user-facing changelog](CHANGELOG.md) for the complete consolidated
 list of changes from the original Steam release.
 
@@ -55,6 +63,12 @@ locked behind donations. If you enjoy the patch and voluntarily want to help
 support continued fixes, development-tool and AI-subscription costs, or future
 game-modernization projects, you can donate through
 [Ko-fi](https://ko-fi.com/utkiduck).
+
+<p align="center">
+  <a href="https://ko-fi.com/utkiduck">
+    <img src="assets/ko-fi-support.png" alt="Support Deathtrap Native 50 on Ko-fi" width="320">
+  </a>
+</p>
 
 ## Compatibility
 
