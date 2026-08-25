@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current development version: **0.0.217**
+Current development version: **0.0.218**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -8,7 +8,7 @@ Current development version: **0.0.217**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-selected.jpg" alt="Deathtrap Native 50 v0.0.217" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.218.jpg" alt="Deathtrap Native 50 v0.0.218" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -87,7 +87,8 @@ partially, fail to activate, crash or corrupt game state. The DLL retains a
 structural safety check before applying fixed-address hooks.
 
 [dgVoodoo2](https://github.com/dege-diosg/dgVoodoo2) is an independent external
-dependency and is not redistributed here. Configure it for
+dependency. Its binaries are not redistributed here; the release contains only
+an optional tested user configuration. Configure dgVoodoo2 for
 `D3D11 feature level 11.0` (`OutputAPI = d3d11_fl11_0`). The game uses the x86
 `DDraw.dll` and `D3DImm.dll` wrappers; `D3D9.dll` is optional and is not
 required by the verified DirectDraw path.
@@ -113,6 +114,10 @@ LICENSE.txt
 payload/
   DINPUT.dll
   deathtrap_native.ini
+optional/
+  dgVoodoo.conf              tested high-quality preset; applied manually
+  dgVoodoo-General.png       visual reference for the General tab
+  dgVoodoo-DirectX.png       visual reference for the DirectX tab
 ```
 
 `THIRD_PARTY_NOTICES.txt` is required by the licences of code statically linked
@@ -148,21 +153,42 @@ swapchain.
 
 5. Extract every file from the Deathtrap Native 50 release ZIP directly beside
    `DD_CD.EXE`, preserving the included `payload` directory.
-6. Double-click `INSTALL.cmd` once. It validates the required dgVoodoo2 setup,
+6. For the tested high-quality graphics profile, first back up the active
+   `dgVoodoo.conf`, then copy `optional\dgVoodoo.conf` from the extracted
+   patch over the active file beside `DD_CD.EXE`. This step is recommended but
+   manual: the installer never modifies dgVoodoo configuration.
+7. Double-click `INSTALL.cmd` once. It validates the required dgVoodoo2 setup,
    checks the game version, backs up any previous patch installation, installs
-   the payload and merges the required controls without replacing the complete
-   `ASYLUM\keys.cfg`.
-7. Start Deathtrap Dungeon normally.
+   the payload, applies the verified control profile and normalizes the
+   required game rendering settings.
+8. Start Deathtrap Dungeon normally.
+
+The optional tested preset uses `3x` internal DirectX resolution, `8x` MSAA,
+`16x` anisotropic filtering, automatic mipmaps and forced VSync. These values
+make a large visual difference compared with unscaled dgVoodoo defaults. If
+performance is insufficient, use `2x` resolution and `4x` MSAA instead; keep
+the D3D11 FL11 output API unchanged.
+
+**General tab**
+
+![Recommended dgVoodoo General settings](docs/images/dgvoodoo-general.png)
+
+**DirectX tab**
+
+![Recommended dgVoodoo DirectX settings](docs/images/dgvoodoo-directx.png)
 
 `<SteamLibrary>` is a placeholder for any Steam library. The installer:
 
 - identifies the Steam installation and warns if its game hashes differ from
   the tested build without blocking installation;
 - verifies the external dgVoodoo files and required D3D11 setting;
-- backs up the installed DLL, configuration and `ASYLUM/keys.cfg` before
-  changing them;
-- merges the required bindings without replacing the user's complete control
-  file.
+- backs up the installed DLL, patch configuration, `ASYLUM/keys.cfg` and
+  `ASYLUM/config.dat` before changing them;
+- applies the verified keyboard profile while preserving mouse, joystick and
+  unrelated retail bindings;
+- normalizes the required game rendering values, including hardware D3D,
+  mipmapping and subtractive shadows;
+- reads but never modifies `dgVoodoo.conf`.
 
 Advanced users can run `install.ps1 -WhatIf` to validate the installation
 without modifying the control file.
@@ -262,7 +288,7 @@ separate MinHook runtime DLL is needed. See [Building](docs/BUILDING.md) and
 ## Release process
 
 `VERSION` is the single source of truth for CMake, DLL metadata, package names
-and Git tags. Pushing a matching tag such as `v0.0.217` runs the Windows build,
+and Git tags. Pushing a matching tag such as `v0.0.218` runs the Windows build,
 all deterministic tests, creates a versioned ZIP and checksum, and opens a
 draft GitHub Release for final human review.
 
@@ -274,8 +300,8 @@ See [Publishing releases](docs/RELEASING.md) for the exact procedure.
   repository whose code is compiled into `DINPUT.dll`; linked statically under
   its BSD-2-Clause licence.
 - [dgVoodoo2](https://github.com/dege-diosg/dgVoodoo2) — required external x86
-  DirectDraw/D3DImm-to-D3D11 runtime; downloaded separately and not included in
-  this project.
+  DirectDraw/D3DImm-to-D3D11 runtime; its binaries are downloaded separately.
+  This project includes only an optional tested `dgVoodoo.conf`.
 - [Unity Cinemachine](https://github.com/Unity-Technologies/com.unity.cinemachine)
   — engineering reference for orbit, follow, obstruction and de-occlusion
   camera behavior; no Cinemachine code is included.
@@ -285,6 +311,12 @@ See [Publishing releases](docs/RELEASING.md) for the exact procedure.
 - [ogg-winmm](https://github.com/bangstk/ogg-winmm) — community reference used
   to investigate the Steam music-routing problem; the project does not ship or
   require this wrapper.
+
+## Acknowledgements
+
+Thanks to the community members who helped test public builds:
+
+- `dbdk422a`
 
 ## Licence
 

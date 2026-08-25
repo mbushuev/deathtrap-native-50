@@ -32,11 +32,19 @@ QUICK INSTALL
 
 5. Only after dgVoodoo2 is configured, extract every file from this patch ZIP
    directly beside DD_CD.EXE. Preserve the included payload directory.
-6. Double-click INSTALL.cmd once. It validates dgVoodoo2 and the game, then
-   backs up a previous patch installation, installs the new payload and merges
-   the required controls into ASYLUM\keys.cfg without replacing the complete
-   file.
-7. Start Deathtrap Dungeon normally.
+6. Recommended for the best tested image: back up the active dgVoodoo.conf,
+   then copy optional\dgVoodoo.conf over it. The preset uses 3x internal
+   resolution, 8x antialiasing, 16x anisotropic filtering, automatic mipmaps
+   and VSync. For lower-end systems, use 2x resolution and 4x antialiasing.
+   Screenshots of both required tabs are included as
+   optional\dgVoodoo-General.png and optional\dgVoodoo-DirectX.png.
+7. Double-click INSTALL.cmd once. It validates dgVoodoo2 and the game, backs
+   up the game control and rendering files, installs the payload, applies the
+   verified controls and normalizes the required game rendering settings.
+8. Start Deathtrap Dungeon normally.
+
+INSTALL.cmd reads dgVoodoo.conf for validation but never modifies it. Applying
+the optional preset is always an explicit manual action.
 
 dgVoodoo2 is required for the supported patch. DINPUT.dll may load without it,
 but the complete higher-rate rendering path is not expected to work correctly.
@@ -120,11 +128,19 @@ https://github.com/UE-Explorer/UE-Explorer
 ogg-winmm - Steam music-routing research reference; not included or required:
 https://github.com/bangstk/ogg-winmm
 
-The installer creates a timestamped backup of ASYLUM\keys.cfg under the
-game's back directory. Do not copy a complete keys.cfg from another install.
+ACKNOWLEDGEMENTS
 
-This patch contains no game assets and no dgVoodoo files. THIRD_PARTY_NOTICES
-must remain with redistributed copies of the patch.
+Thanks to the community members who helped test public builds:
+
+- dbdk422a
+
+The installer creates timestamped backups of ASYLUM\keys.cfg and
+ASYLUM\config.dat under the game's back directory before applying the verified
+profiles. Do not copy a complete keys.cfg from another installation.
+
+This patch contains no game assets or dgVoodoo binaries. Its optional
+dgVoodoo.conf is only a tested user configuration. THIRD_PARTY_NOTICES must
+remain with redistributed copies of the patch.
 
 Deathtrap Native 50 is licensed under the MIT License. See LICENSE.txt.
 

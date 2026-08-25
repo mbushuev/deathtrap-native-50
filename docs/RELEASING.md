@@ -24,13 +24,14 @@ artifacts/Deathtrap-Native-50-<version>-SHA256.txt
 Inspect the archive and verify its checksum before creating a tag. The release
 configuration must keep `Diagnostics/DebugLog=0`.
 
-The ZIP must contain only the runtime DLL and INI in a `payload` directory plus
-the top-level one-click launcher, PowerShell installer, short user README,
-user-facing changelog, per-file checksum manifest, required third-party notices
-and the MIT licence. Keeping the payload separate prevents archive extraction
-from overwriting an installed DLL before the installer creates its rollback
-copy. The ZIP must not contain the repository directory tree or internal
-development documentation.
+The ZIP must contain only the runtime DLL and INI in a `payload` directory, the
+reviewed optional dgVoodoo user preset and its two setup screenshots in an
+`optional` directory, plus the top-level one-click launcher, PowerShell
+installer, short user README, user-facing changelog, per-file checksum
+manifest, required third-party notices and the MIT licence. Keeping the
+payload separate prevents archive extraction from overwriting an installed DLL
+before the installer creates its rollback copy. The ZIP must not contain the
+repository directory tree or internal development documentation.
 
 ## Tagging
 
@@ -71,9 +72,13 @@ documentation. Never add:
 
 - `Dungeon.dll`, `DD_CD.EXE` or other files from the game;
 - music, textures, models, levels or other game assets;
-- dgVoodoo binaries or configuration copied from a local installation;
+- dgVoodoo binaries or any unreviewed/machine-specific configuration; the
+  repository's reviewed optional preset is the only permitted exception;
 - save files, logs, crash dumps, backups or local filesystem paths;
 - a complete user `ASYLUM/keys.cfg`.
 
 dgVoodoo remains a separately downloaded external dependency. The installer
-merges only the required bindings into the user's existing control file.
+backs up the retail control and rendering files, applies the verified keyboard
+profile, preserves mouse/joystick and unrelated bindings, and normalizes only
+the required game rendering values. It never modifies the active
+`dgVoodoo.conf`.

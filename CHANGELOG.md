@@ -1,5 +1,57 @@
 # User-facing changelog
 
+## Acknowledgements
+
+Thanks to the community members who helped test public builds:
+
+- `dbdk422a`
+
+## 0.0.218 — installation and Steam launch fixes
+
+This update focuses on making the public package reproduce the tested local
+installation. It does not intentionally change camera or gameplay behavior.
+
+### Steam launch compatibility
+
+- Fixes an immediate black flash and process exit when starting the patched
+  game through Steam on systems where Steam Overlay is injected.
+- Prevents the patch and Steam Overlay from recursively treating each other's
+  DirectX presentation hook as the original function.
+- Keeps both normal Steam launch and direct `DD_CD.EXE` launch supported. A
+  connected gamepad is not required.
+
+### Reliable clean installation
+
+- Applies the verified keyboard, mouse and native joystick control profile on
+  a fresh Steam installation instead of assuming that the controls were
+  configured during development.
+- Backs up both `ASYLUM/keys.cfg` and `ASYLUM/config.dat` before changing them.
+- Preserves mouse, joystick and unrelated retail bindings while replacing the
+  keyboard actions required by the documented modern layout.
+- Applies the verified game-side hardware Direct3D profile: primary D3D
+  renderer, mipmapping, 16-bit texture conversion and subtractive shadows.
+- Replaces old values, removes duplicate values and adds missing values rather
+  than blindly appending another setting.
+- Repairs the malformed `RESOLUTION 5RENDERING_PLATFORM ...` line that the
+  retail configuration utility can produce.
+
+### Recommended dgVoodoo graphics
+
+- Includes the exact high-quality `dgVoodoo.conf` used for project testing as
+  an optional preset. It uses D3D11 FL11, 3x internal resolution, 8x MSAA, 16x
+  anisotropic filtering, automatic mipmaps and VSync.
+- Includes clear screenshots of the required `General` and `DirectX` tabs.
+- Keeps preset application manual. `INSTALL.cmd` validates but never modifies
+  the active `dgVoodoo.conf`.
+- Documents lighter 2x resolution and 4x MSAA alternatives for systems that
+  cannot maintain full performance with the tested preset.
+
+### Release diagnostics
+
+- Ships with `DebugLog=0`. Normal play does not create the large per-session
+  development logs; diagnostics remain available when explicitly enabled for
+  a requested support run.
+
 ## 0.0.217 — changes from the original Steam release
 
 This is a consolidated list of the changes players can see or use. Reverted

@@ -57,22 +57,50 @@ D3D12, WARP or another backend. Do not use `OutputAPI = bestavailable` for this
 build because it may select D3D12.
 
 Resolution, filtering, antialiasing, fullscreen mode and other dgVoodoo
-settings remain user-controlled. The repository deliberately does not ship a
-complete `dgVoodoo.conf` that could overwrite them.
+settings remain user-controlled. The release includes the accepted
+high-quality configuration as `optional\dgVoodoo.conf`, but neither extraction
+nor `INSTALL.cmd` overwrites the active file. To apply it, first back up the
+active `dgVoodoo.conf`, then manually copy the optional preset beside
+`DD_CD.EXE`.
+
+The tested preset uses:
+
+- `Resolution = 3x`;
+- `Antialiasing = 8x`;
+- `Filtering = 16` (16x anisotropic);
+- `Mipmapping = autogen_point`;
+- `ForceVerticalSync = true`;
+- `OutputAPI = d3d11_fl11_0`.
+
+These multipliers materially improve the image over unscaled defaults. On a
+slower GPU, lower only resolution to `2x` and antialiasing to `4x` first.
+
+### General tab
+
+![Recommended dgVoodoo General settings](images/dgvoodoo-general.png)
+
+### DirectX tab
+
+![Recommended dgVoodoo DirectX settings](images/dgvoodoo-directx.png)
 
 ## 4. Install the overlay
 
-The public release archive has a flat layout:
+The public release archive has this layout:
 
 ```text
-DINPUT.dll
-deathtrap_native.ini
 INSTALL.cmd
 install.ps1
 README.txt
 SHA256SUMS.txt
 THIRD_PARTY_NOTICES.txt
 LICENSE.txt
+payload/
+  DINPUT.dll
+  deathtrap_native.ini
+optional/
+  dgVoodoo.conf
+  dgVoodoo-General.png
+  dgVoodoo-DirectX.png
 ```
 
 After installing and configuring dgVoodoo, extract every file directly beside
@@ -90,11 +118,13 @@ The script:
    tested hashes, and continues with a warning if they differ;
 2. checks that both required external x86 dgVoodoo wrappers exist;
 3. requires `OutputAPI = d3d11_fl11_0`;
-4. backs up `ASYLUM\keys.cfg` under
+4. backs up `ASYLUM\keys.cfg` and `ASYLUM\config.dat` under
    `back\deathtrap-native50-overlay-<timestamp>`;
-5. idempotently merges the required mouse, keyboard and native joystick
-   action bindings into the existing `ASYLUM\keys.cfg` in ASCII without
-   replacing the whole retail control file.
+5. applies the verified keyboard profile while preserving mouse, joystick and
+   unrelated retail bindings;
+6. replaces, de-duplicates or adds the required game rendering values without
+   changing progress, volume or other unrelated settings;
+7. never writes to `dgVoodoo.conf`.
 
 Use `-WhatIf` to validate the directory without modifying it.
 

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <unordered_map>
 
 #include "deathtrap_native_render_patch.h"
 #include "native_d3d11_present_guard.h"
@@ -53,11 +54,12 @@ FactoryCreateSwapChainForCoreWindowFn
     g_factory_create_swap_chain_for_core_window = nullptr;
 FactoryCreateSwapChainForCompositionFn
     g_factory_create_swap_chain_for_composition = nullptr;
-SwapChainPresentFn g_present = nullptr;
-SwapChainPresent1Fn g_present1 = nullptr;
 DirectInputCreateDeviceAFn g_direct_input_create_device = nullptr;
 DirectInputDeviceGetStateFn g_direct_input_device_get_state = nullptr;
 DirectInputDeviceGetDataFn g_direct_input_device_get_data = nullptr;
+std::mutex g_swap_chain_hooks_mutex;
+std::unordered_map<void*, SwapChainPresentFn> g_swap_chain_present;
+std::unordered_map<void*, SwapChainPresent1Fn> g_swap_chain_present1;
 thread_local bool g_inside_present = false;
 thread_local bool g_suppress_page_restore = false;
 std::atomic<uint64_t> g_suppressed_page_restores{0};
@@ -428,6 +430,18 @@ void AttachDirectInput(IDirectInputA* direct_input) {
 
 void AttachSwapChain(IDXGISwapChain* swap_chain, IUnknown* creation_device);
 
+SwapChainPresentFn OriginalPresent(IDXGISwapChain* swap_chain) {
+  std::lock_guard<std::mutex> lock(g_swap_chain_hooks_mutex);
+  const auto found = g_swap_chain_present.find(swap_chain);
+  return found != g_swap_chain_present.end() ? found->second : nullptr;
+}
+
+SwapChainPresent1Fn OriginalPresent1(IDXGISwapChain1* swap_chain) {
+  std::lock_guard<std::mutex> lock(g_swap_chain_hooks_mutex);
+  const auto found = g_swap_chain_present1.find(swap_chain);
+  return found != g_swap_chain_present1.end() ? found->second : nullptr;
+}
+
 HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* swap_chain,
                                       UINT sync_interval, UINT flags) {
   if (g_suppress_page_restore) {
@@ -440,10 +454,11 @@ HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* swap_chain,
     g_inside_present = true;
     allowed = AllowNativeD3D11Present(swap_chain);
   }
+  const SwapChainPresentFn original = OriginalPresent(swap_chain);
   const HRESULT result =
       !allowed ? S_OK
-               : (g_present ? g_present(swap_chain, sync_interval, flags)
-                            : E_FAIL);
+               : (original ? original(swap_chain, sync_interval, flags)
+                           : E_FAIL);
   if (outer) {
     g_inside_present = false;
   }
@@ -463,29 +478,119 @@ HRESULT STDMETHODCALLTYPE HookPresent1(
     g_inside_present = true;
     allowed = AllowNativeD3D11Present(swap_chain);
   }
+  const SwapChainPresent1Fn original = OriginalPresent1(swap_chain);
   const HRESULT result =
       !allowed ? S_OK
-               : (g_present1 ? g_present1(swap_chain, sync_interval, flags,
-                                          parameters)
-                             : E_FAIL);
+               : (original ? original(swap_chain, sync_interval, flags,
+                                      parameters)
+                           : E_FAIL);
   if (outer) {
     g_inside_present = false;
   }
   return result;
 }
 
+size_t SwapChainVtableSize(IDXGISwapChain* swap_chain) {
+  IDXGISwapChain4* swap_chain4 = nullptr;
+  if (SUCCEEDED(swap_chain->QueryInterface(IID_PPV_ARGS(&swap_chain4)))) {
+    swap_chain4->Release();
+    return 41u;
+  }
+  IDXGISwapChain3* swap_chain3 = nullptr;
+  if (SUCCEEDED(swap_chain->QueryInterface(IID_PPV_ARGS(&swap_chain3)))) {
+    swap_chain3->Release();
+    return 40u;
+  }
+  IDXGISwapChain2* swap_chain2 = nullptr;
+  if (SUCCEEDED(swap_chain->QueryInterface(IID_PPV_ARGS(&swap_chain2)))) {
+    swap_chain2->Release();
+    return 36u;
+  }
+  IDXGISwapChain1* swap_chain1 = nullptr;
+  if (SUCCEEDED(swap_chain->QueryInterface(IID_PPV_ARGS(&swap_chain1)))) {
+    swap_chain1->Release();
+    return 29u;
+  }
+  return 18u;
+}
+
+bool CloneAndPatchSwapChainVtable(void* interface_pointer,
+                                  size_t vtable_size, bool patch_present,
+                                  bool patch_present1) {
+  if (!interface_pointer || vtable_size < 18u ||
+      (patch_present1 && vtable_size <= 22u)) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(g_swap_chain_hooks_mutex);
+  auto*** const object = reinterpret_cast<void***>(interface_pointer);
+  void** const current = *object;
+  if (!current) {
+    return false;
+  }
+
+  const bool present_already_patched =
+      !patch_present || current[8] == reinterpret_cast<void*>(&HookPresent);
+  const bool present1_already_patched =
+      !patch_present1 ||
+      current[22] == reinterpret_cast<void*>(&HookPresent1);
+  if (present_already_patched && present1_already_patched) {
+    return true;
+  }
+
+  const size_t bytes = vtable_size * sizeof(void*);
+  auto** const clone = static_cast<void**>(VirtualAlloc(
+      nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+  if (!clone) {
+    return false;
+  }
+  std::memcpy(clone, current, bytes);
+
+  if (patch_present && !present_already_patched) {
+    const auto original = reinterpret_cast<SwapChainPresentFn>(current[8]);
+    if (!original || original == &HookPresent) {
+      VirtualFree(clone, 0, MEM_RELEASE);
+      return false;
+    }
+    g_swap_chain_present[interface_pointer] = original;
+    clone[8] = reinterpret_cast<void*>(&HookPresent);
+  }
+  if (patch_present1 && !present1_already_patched) {
+    const auto original = reinterpret_cast<SwapChainPresent1Fn>(current[22]);
+    if (!original || original == &HookPresent1) {
+      VirtualFree(clone, 0, MEM_RELEASE);
+      return false;
+    }
+    g_swap_chain_present1[interface_pointer] = original;
+    clone[22] = reinterpret_cast<void*>(&HookPresent1);
+  }
+
+  // DXGI implementations share their class vtables. Steam's overlay patches
+  // that shared table as each swap chain is created. Patching it in place made
+  // Steam save our hook as its original while we saved Steam's hook as ours,
+  // producing an immediate Present -> Present recursion on the next chain.
+  // Give this COM instance an immutable private table instead, so both hook
+  // layers retain one stable downstream target.
+  InterlockedExchangePointer(reinterpret_cast<PVOID volatile*>(object), clone);
+  return true;
+}
+
 void AttachSwapChain(IDXGISwapChain* swap_chain, IUnknown* creation_device) {
   if (!swap_chain) {
     return;
   }
-  void** vtable = *reinterpret_cast<void***>(swap_chain);
-  PatchVtableSlot(vtable, 8, reinterpret_cast<void*>(&HookPresent),
-                  &g_present);
   IDXGISwapChain1* swap_chain1 = nullptr;
-  if (SUCCEEDED(swap_chain->QueryInterface(IID_PPV_ARGS(&swap_chain1)))) {
-    void** vtable1 = *reinterpret_cast<void***>(swap_chain1);
-    PatchVtableSlot(vtable1, 22, reinterpret_cast<void*>(&HookPresent1),
-                    &g_present1);
+  const bool has_swap_chain1 =
+      SUCCEEDED(swap_chain->QueryInterface(IID_PPV_ARGS(&swap_chain1)));
+  const size_t vtable_size = SwapChainVtableSize(swap_chain);
+  if (has_swap_chain1 && swap_chain1 == swap_chain) {
+    CloneAndPatchSwapChainVtable(swap_chain, vtable_size, true, true);
+  } else {
+    CloneAndPatchSwapChainVtable(swap_chain, vtable_size, true, false);
+    if (has_swap_chain1) {
+      CloneAndPatchSwapChainVtable(swap_chain1, vtable_size, false, true);
+    }
+  }
+  if (has_swap_chain1) {
     swap_chain1->Release();
   }
   AttachNativeD3D11PresentGuard(swap_chain, creation_device);

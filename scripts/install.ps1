@@ -133,6 +133,7 @@ $ini = (Resolve-Path -LiteralPath $IniPath).Path
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $backup = Join-Path $game "back\deathtrap-native50-overlay-$stamp"
 $keys = Join-Path $game 'ASYLUM\keys.cfg'
+$retailConfig = Join-Path $game 'ASYLUM\config.dat'
 
 function Add-NativeBinding {
     param(
@@ -163,9 +164,112 @@ function Add-NativeBinding {
     return $Text.Insert($insertAt, $newline + $line)
 }
 
+function Set-NativeKeyboardBinding {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Action,
+        [Parameter(Mandatory = $true)][string]$Trigger,
+        [Parameter(Mandatory = $true)][string]$Expression
+    )
+
+    $newline = if ($Text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $lines = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in [regex]::Split($Text, "\r?\n")) {
+        $lines.Add($line)
+    }
+    $actionPattern = [regex]::Escape($Action)
+    $triggerPattern = [regex]::Escape($Trigger)
+    $pattern = "^(?<prefix>\s*define\s+$actionPattern\s+$triggerPattern\s+)" +
+        '(?<expression>.*?)\s*$'
+    $rewritten = [System.Collections.Generic.List[string]]::new()
+    $inserted = $false
+    $lastAction = -1
+    foreach ($line in $lines) {
+        $match = [regex]::Match($line, $pattern)
+        if ($match.Success) {
+            $boundExpression = $match.Groups['expression'].Value.Trim()
+            if ($boundExpression -notmatch '\b(?:JOY|MOUSE)_') {
+                if (-not $inserted) {
+                    $rewritten.Add($match.Groups['prefix'].Value + $Expression)
+                    $inserted = $true
+                    $lastAction = $rewritten.Count - 1
+                }
+                continue
+            }
+        }
+        $rewritten.Add($line)
+        if ($line -match "^\s*define\s+$actionPattern\b") {
+            $lastAction = $rewritten.Count - 1
+        }
+    }
+    if (-not $inserted) {
+        if ($lastAction -lt 0) {
+            throw "Could not locate $Action in $keys"
+        }
+        $triggerColumn = if ($Trigger -eq 'PRESS') { 'PRESS     ' } else { 'DOWN      ' }
+        $rewritten.Insert(
+            $lastAction + 1,
+            "define    $Action    $triggerColumn$Expression")
+    }
+    return [string]::Join($newline, $rewritten)
+}
+
+function Set-RetailConfigValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Value
+    )
+
+    $newline = if ($Text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $namePattern = [regex]::Escape($Name)
+    # The retail DDCONFIG utility can append its first Direct3D field without
+    # a newline (for example, "RESOLUTION 5RENDERING_PLATFORM 0").  Split that
+    # malformed boundary before normalizing the setting.
+    $Text = [regex]::Replace(
+        $Text, "(?m)(?<=\S)(?=$namePattern\s+)", $newline)
+    $hadTerminalNewline = $Text.EndsWith("`n")
+    $lines = [System.Collections.Generic.List[string]]::new()
+    foreach ($existingLine in [regex]::Split($Text, "\r?\n")) {
+        $lines.Add($existingLine)
+    }
+    if ($hadTerminalNewline -and $lines.Count -gt 0 -and
+            $lines[$lines.Count - 1] -eq '') {
+        $lines.RemoveAt($lines.Count - 1)
+    }
+
+    $pattern = "^\s*$namePattern(?:\s+.*)?\s*$"
+    $rewritten = [System.Collections.Generic.List[string]]::new()
+    $inserted = $false
+    foreach ($existingLine in $lines) {
+        if ([regex]::IsMatch($existingLine, $pattern)) {
+            if (-not $inserted) {
+                $rewritten.Add("$Name $Value")
+                $inserted = $true
+            }
+            continue
+        }
+        $rewritten.Add($existingLine)
+    }
+    if (-not $inserted) {
+        $rewritten.Add("$Name $Value")
+    }
+
+    $result = [string]::Join($newline, $rewritten)
+    if ($hadTerminalNewline -or $Text.Length -eq 0) {
+        $result += $newline
+    }
+    return $result
+}
+
 if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
     New-Item -ItemType Directory -Force -Path $backup | Out-Null
-    foreach ($existing in @('DINPUT.dll', 'deathtrap_native.ini', 'ASYLUM\keys.cfg')) {
+    foreach ($existing in @(
+        'DINPUT.dll',
+        'deathtrap_native.ini',
+        'ASYLUM\keys.cfg',
+        'ASYLUM\config.dat'
+    )) {
         $path = Join-Path $game $existing
         if (Test-Path -LiteralPath $path) {
             $backupName = $existing -replace '[\\/]', '_'
@@ -195,7 +299,43 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
     if (-not (Test-Path -LiteralPath $keys)) {
         throw "Retail control file was not found: $keys"
     }
+    if (-not (Test-Path -LiteralPath $retailConfig)) {
+        throw "Retail rendering configuration was not found: $retailConfig"
+    }
     $keyText = [System.IO.File]::ReadAllText($keys)
+    # The patch's camera-relative input and documented controls require one
+    # deterministic keyboard profile. Preserve mouse and joystick expressions,
+    # but replace each action's keyboard-only expression with the accepted one.
+    foreach ($binding in @(
+        @('ACTION_WALK_FORWARD', 'DOWN', 'KEY_W'),
+        @('ACTION_WALK_BACKWARD', 'DOWN', 'KEY_S'),
+        @('ACTION_RUN_FORWARD', 'DOWN', 'KEY_LSHIFT + KEY_W'),
+        @('ACTION_RUN_BACKWARD', 'DOWN', 'KEY_LSHIFT + KEY_S'),
+        @('ACTION_STEP_FORWARD', 'DOWN', 'KEY_CTRL + KEY_W'),
+        @('ACTION_STEP_BACKWARD', 'DOWN', 'KEY_CTRL + KEY_S'),
+        @('ACTION_LEFT_SIDESTEP', 'DOWN', 'KEY_CTRL + KEY_A'),
+        @('ACTION_RIGHT_SIDESTEP', 'DOWN', 'KEY_CTRL + KEY_D'),
+        @('ACTION_TURN_LEFT', 'DOWN', 'KEY_A'),
+        @('ACTION_TURN_RIGHT', 'DOWN', 'KEY_D'),
+        @('ACTION_TURN_FAST_LEFT', 'DOWN', 'KEY_LSHIFT + KEY_A'),
+        @('ACTION_TURN_FAST_RIGHT', 'DOWN', 'KEY_LSHIFT + KEY_D'),
+        @('ACTION_ATTACK_RANGED', 'DOWN', 'KEY_F'),
+        @('ACTION_ATTACK_1', 'DOWN', 'KEY_F + KEY_W'),
+        @('ACTION_ATTACK_2', 'DOWN', 'KEY_F + KEY_A'),
+        @('ACTION_ATTACK_3', 'DOWN', 'KEY_F + KEY_D'),
+        @('ACTION_ATTACK_BACK', 'DOWN', 'KEY_F + KEY_A + KEY_D'),
+        @('ACTION_PARRY', 'DOWN', 'KEY_F + KEY_S'),
+        @('ACTION_CAST_SPELL', 'DOWN', 'KEY_Q'),
+        @('ACTION_JUMP_CLIMB', 'DOWN', 'KEY_SPACE'),
+        @('ACTION_JUMP_LEFT', 'DOWN', 'KEY_SPACE + KEY_A'),
+        @('ACTION_JUMP_RIGHT', 'DOWN', 'KEY_SPACE + KEY_D'),
+        @('ACTION_JUMP_FORWARD', 'DOWN', 'KEY_SPACE + KEY_W'),
+        @('ACTION_JUMP_BACKWARD', 'DOWN', 'KEY_SPACE + KEY_S'),
+        @('ACTION_OPERATE', 'PRESS', 'KEY_E')
+    )) {
+        $keyText = Set-NativeKeyboardBinding -Text $keyText `
+            -Action $binding[0] -Trigger $binding[1] -Expression $binding[2]
+    }
     foreach ($binding in @(
         @('ACTION_TURN_LEFT', 'MOUSE_HORIZ_LEFT'),
         @('ACTION_TURN_RIGHT', 'MOUSE_HORIZ_RIGHT'),
@@ -227,7 +367,24 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
         throw 'Refusing to write ASYLUM/keys.cfg with invalid CR-CR-LF line endings.'
     }
     [System.IO.File]::WriteAllText($keys, $keyText, [System.Text.Encoding]::ASCII)
+
+    $configText = [System.IO.File]::ReadAllText($retailConfig)
+    foreach ($setting in @(
+        @('RENDERING_PLATFORM', '13'),
+        @('D3D_ALLOW_MIPMAP', '1'),
+        @('D3D_ALLOW_PALETTISED', '0'),
+        @('D3D_TYPE1_SHADOWS', '1')
+    )) {
+        $configText = Set-RetailConfigValue -Text $configText `
+            -Name $setting[0] -Value $setting[1]
+    }
+    if ($configText.Contains("`r`r`n")) {
+        throw 'Refusing to write ASYLUM/config.dat with invalid CR-CR-LF line endings.'
+    }
+    [System.IO.File]::WriteAllText(
+        $retailConfig, $configText, [System.Text.Encoding]::ASCII)
     Write-Host "Installed overlay into: $game"
-Write-Host 'Installed native mouse bindings, wheel bridge and XInput test layer.'
+    Write-Host 'Installed the modern keyboard, mouse and XInput control profile.'
+    Write-Host 'Applied the required Direct3D rendering profile.'
     Write-Host "Rollback copy: $backup"
 }

@@ -2,4 +2,5 @@
 *.exe binary
 *.png binary
 *.conf text eol=crlf
+config/dgVoodoo-recommended.conf -whitespace
 *.ini text eol=crlf
