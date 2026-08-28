@@ -182,16 +182,23 @@ separate 50-tick and 27-tick lifetimes to 150 and 81 ticks. Set it to `100` for
 the original durations. It does not affect menus, inventory selectors,
 animation, simulation, input or audio timing.
 
-For a requested diagnostic run, set `DebugLog=1`, enter actual gameplay and then close
-the game normally. The game's `logs` directory should contain one new file:
+Every launch automatically creates one compact support file in the game's
+`logs` directory:
 
 ```text
 deathtrap-native-YYYYMMDD-HHMMSS-mmm-pidNNNN.log
 ```
 
-The shared session log must contain the version banner, periodic `tick=`
-interpolation telemetry and `native-only D3D11 swapchain attached`. A later
-process launch creates another file instead of appending to the old one.
+No option needs to be enabled before reproducing a public issue. The compact
+records include version, Windows/DPI and display geometry, the relevant
+dgVoodoo configuration, DirectInput setup and a low-rate mouse/cursor summary.
+A later process launch creates another file instead of appending to the old
+one. Ask the user to close the game and attach the newest file.
+
+For a requested deep diagnostic run, set `DebugLog=1`, enter actual gameplay
+and then close the game normally. The same session file then also contains the
+version banner, periodic `tick=` interpolation telemetry and `native-only
+D3D11 swapchain attached`.
 
 `CameraProbe` and `HeadJointProbe` are heavy reverse-engineering streams, not
 normal support logging. Version 0.0.198 keeps both at `0`: the accepted camera,

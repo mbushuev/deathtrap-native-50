@@ -6,6 +6,24 @@ Thanks to the community members who helped test public builds:
 
 - `dbdk422a`
 
+## 0.0.219 — automatic support logs
+
+This update does not intentionally change camera, input or gameplay behavior.
+It makes public bug reports self-contained and much easier to investigate.
+
+- Creates one compact support log automatically on every launch; users no
+  longer need to edit `deathtrap_native.ini` before reproducing a problem.
+- Records the exact patch version, Windows build and display scaling, desktop
+  geometry, the effective mouse-related dgVoodoo settings and whether Steam
+  Overlay was detected.
+- Records DirectInput mouse creation, data format, cooperative mode,
+  acquire/unacquire results, camera ownership transitions and one bounded
+  mouse/window/cursor summary every five seconds.
+- Detects and labels mismatches between the fullscreen client area and the
+  legacy cursor clipping rectangle, including a cursor trapped at its edge.
+- Keeps heavy camera, render and reverse-engineering telemetry behind the
+  existing `DebugLog`, `CameraProbe` and `HeadJointProbe` switches.
+
 ## 0.0.218 — installation and Steam launch fixes
 
 This update focuses on making the public package reproduce the tested local

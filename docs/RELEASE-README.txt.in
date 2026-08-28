@@ -138,6 +138,14 @@ The installer creates timestamped backups of ASYLUM\keys.cfg and
 ASYLUM\config.dat under the game's back directory before applying the verified
 profiles. Do not copy a complete keys.cfg from another installation.
 
+SUPPORT LOG
+
+Every launch automatically creates one compact timestamped file under the
+game's logs directory. If a problem occurs, reproduce it once, close the game
+and attach the newest deathtrap-native-*.log file to the report. The file
+already contains the patch version, relevant display and dgVoodoo settings,
+and a low-rate input/cursor summary. No diagnostic setting needs to be enabled.
+
 This patch contains no game assets or dgVoodoo binaries. Its optional
 dgVoodoo.conf is only a tested user configuration. THIRD_PARTY_NOTICES must
 remain with redistributed copies of the patch.

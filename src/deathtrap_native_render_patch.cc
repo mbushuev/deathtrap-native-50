@@ -1406,6 +1406,179 @@ void AppendNativeLog(const char* format, ...) {
   WriteNativeLogBytes(line, used + 2);
 }
 
+void AppendSupportLogV(const char* format, va_list args) {
+  if (!format) {
+    return;
+  }
+  char line[2048] = {};
+  const int length = std::vsnprintf(line, sizeof(line) - 2, format, args);
+  if (length <= 0) {
+    return;
+  }
+  const size_t used = std::min<size_t>(static_cast<size_t>(length),
+                                       sizeof(line) - 2);
+  line[used] = '\r';
+  line[used + 1] = '\n';
+  WriteNativeLogBytes(line, used + 2);
+}
+
+std::string SupportIniValue(const std::wstring& path,
+                            const wchar_t* section, const wchar_t* key,
+                            const wchar_t* fallback = L"missing") {
+  wchar_t value[160] = {};
+  GetPrivateProfileStringW(section, key, fallback, value,
+                           static_cast<DWORD>(std::size(value)), path.c_str());
+  std::string result;
+  result.reserve(wcslen(value));
+  for (const wchar_t character : std::wstring(value)) {
+    result.push_back(character >= 0x20 && character <= 0x7e
+                         ? static_cast<char>(character)
+                         : '?');
+  }
+  return result;
+}
+
+std::wstring FileNameOnly(const std::wstring& path) {
+  const size_t slash = path.find_last_of(L"\\/");
+  return slash == std::wstring::npos ? path : path.substr(slash + 1);
+}
+
+std::string SupportDgVoodooConfigVersion(const std::wstring& path) {
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    return "missing";
+  }
+  char bytes[4097] = {};
+  DWORD read = 0;
+  const bool loaded = ReadFile(file, bytes, sizeof(bytes) - 1, &read, nullptr)
+      != FALSE;
+  CloseHandle(file);
+  if (!loaded || read == 0) {
+    return "unknown";
+  }
+  const std::string text(bytes, read);
+  size_t line_start = 0;
+  while (line_start < text.size()) {
+    const size_t line_end = text.find_first_of("\r\n", line_start);
+    const std::string line = text.substr(
+        line_start, line_end == std::string::npos
+                        ? std::string::npos
+                        : line_end - line_start);
+    const size_t equals = line.find('=');
+    if (equals != std::string::npos) {
+      std::string key = line.substr(0, equals);
+      std::string value = line.substr(equals + 1);
+      auto trim = [](std::string* item) {
+        const size_t first = item->find_first_not_of(" \t");
+        const size_t last = item->find_last_not_of(" \t");
+        *item = first == std::string::npos
+            ? std::string()
+            : item->substr(first, last - first + 1);
+      };
+      trim(&key);
+      trim(&value);
+      if (key == "Version") {
+        return value.empty() ? "unknown" : value;
+      }
+    }
+    if (line_end == std::string::npos) {
+      break;
+    }
+    line_start = text.find_first_not_of("\r\n", line_end);
+    if (line_start == std::string::npos) {
+      break;
+    }
+  }
+  return "unknown";
+}
+
+void LogCompactSupportEnvironment(uint32_t subframes) {
+  wchar_t executable_path[MAX_PATH] = {};
+  const DWORD executable_length =
+      GetModuleFileNameW(nullptr, executable_path, MAX_PATH);
+  const std::wstring executable = executable_length &&
+          executable_length < MAX_PATH
+      ? FileNameOnly(executable_path)
+      : L"unknown";
+
+  DWORD os_major = 0;
+  DWORD os_minor = 0;
+  DWORD os_build = 0;
+  if (HMODULE ntdll = GetModuleHandleW(L"ntdll.dll")) {
+    using RtlGetVersionFn = LONG(WINAPI*)(OSVERSIONINFOW*);
+    const auto rtl_get_version = reinterpret_cast<RtlGetVersionFn>(
+        GetProcAddress(ntdll, "RtlGetVersion"));
+    if (rtl_get_version) {
+      OSVERSIONINFOW version = {};
+      version.dwOSVersionInfoSize = sizeof(version);
+      if (rtl_get_version(&version) == 0) {
+        os_major = version.dwMajorVersion;
+        os_minor = version.dwMinorVersion;
+        os_build = version.dwBuildNumber;
+      }
+    }
+  }
+
+  UINT system_dpi = 96;
+  if (HMODULE user32 = GetModuleHandleW(L"user32.dll")) {
+    using GetDpiForSystemFn = UINT(WINAPI*)();
+    const auto get_dpi_for_system = reinterpret_cast<GetDpiForSystemFn>(
+        GetProcAddress(user32, "GetDpiForSystem"));
+    if (get_dpi_for_system) {
+      system_dpi = get_dpi_for_system();
+    }
+  }
+
+  const std::wstring dgvoodoo = ModuleDirectory() + L"\\dgVoodoo.conf";
+  const bool dgvoodoo_config_present =
+      GetFileAttributesW(dgvoodoo.c_str()) != INVALID_FILE_ATTRIBUTES;
+  const auto dgvoodoo_version = SupportDgVoodooConfigVersion(dgvoodoo);
+  const auto output_api = SupportIniValue(dgvoodoo, L"General", L"OutputAPI");
+  const auto fullscreen =
+      SupportIniValue(dgvoodoo, L"General", L"FullScreenMode");
+  const auto scaling =
+      SupportIniValue(dgvoodoo, L"General", L"ScalingMode");
+  const auto capture =
+      SupportIniValue(dgvoodoo, L"General", L"CaptureMouse");
+  const auto cursor_scale =
+      SupportIniValue(dgvoodoo, L"GeneralExt", L"CursorScaleFactor");
+  const auto free_mouse =
+      SupportIniValue(dgvoodoo, L"GeneralExt", L"FreeMouse");
+  const auto directx_resolution =
+      SupportIniValue(dgvoodoo, L"DirectX", L"Resolution");
+  const auto antialiasing =
+      SupportIniValue(dgvoodoo, L"DirectX", L"Antialiasing");
+
+  AppendDeathtrapSupportLog(
+      "support_start version=" DEATHTRAP_NATIVE_VERSION
+      " executable=%ls pid=%lu os=%lu.%lu.%lu dpi=%u scale=%u%% "
+      "desktop=%dx%d virtual=%d,%d,%dx%d subframes=%u debug=%u steam=%u",
+      executable.c_str(), static_cast<unsigned long>(GetCurrentProcessId()),
+      static_cast<unsigned long>(os_major),
+      static_cast<unsigned long>(os_minor),
+      static_cast<unsigned long>(os_build), system_dpi,
+      static_cast<unsigned>((system_dpi * 100u + 48u) / 96u),
+      GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+      GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN),
+      GetSystemMetrics(SM_CXVIRTUALSCREEN),
+      GetSystemMetrics(SM_CYVIRTUALSCREEN), subframes,
+      g_debug_log ? 1u : 0u,
+      GetModuleHandleW(L"gameoverlayrenderer.dll") ? 1u : 0u);
+  AppendDeathtrapSupportLog(
+      "support_dgvoodoo config=%u version=%s ddraw=%u d3dimm=%u output=%s "
+      "fullscreen=%s scaling=%s capture_mouse=%s cursor_scale=%s "
+      "free_mouse=%s directx_resolution=%s antialiasing=%s",
+      dgvoodoo_config_present ? 1u : 0u,
+      dgvoodoo_version.c_str(),
+      GetModuleHandleW(L"ddraw.dll") ? 1u : 0u,
+      GetModuleHandleW(L"D3DImm.dll") ? 1u : 0u, output_api.c_str(),
+      fullscreen.c_str(), scaling.c_str(), capture.c_str(),
+      cursor_scale.c_str(), free_mouse.c_str(), directx_resolution.c_str(),
+      antialiasing.c_str());
+}
+
 void AppendNativeLogBlock(const std::string& block) {
   if (!g_debug_log || block.empty()) {
     return;
@@ -2250,6 +2423,7 @@ bool g_injected_mouse_left = false;
 bool g_injected_mouse_right = false;
 bool g_xinput_was_connected = false;
 std::atomic<bool> g_xinput_controller_present{false};
+std::atomic<int32_t> g_support_last_controller_connected{-1};
 WORD g_previous_xinput_buttons = 0;
 std::atomic<bool> g_xinput_first_person_toggled{false};
 std::atomic<bool> g_xinput_menu_mode{true};
@@ -10408,6 +10582,17 @@ void ReconcileXInputFrontendOwnership(bool native_gameplay) {
   }
 }
 
+void LogSupportControllerPresence(bool connected) {
+  const int32_t current = connected ? 1 : 0;
+  const int32_t previous = g_support_last_controller_connected.exchange(
+      current, std::memory_order_acq_rel);
+  if (previous != current) {
+    AppendDeathtrapSupportLog("support_xinput controller=%u connected=%u",
+                              g_xinput_controller_index,
+                              connected ? 1u : 0u);
+  }
+}
+
 void UpdateDeathtrapXInput() {
   if (!g_xinput_enabled || !LoadXInputRuntime()) {
     return;
@@ -10420,6 +10605,7 @@ void UpdateDeathtrapXInput() {
   const bool connected =
       g_xinput_get_state(g_xinput_controller_index, &state) == ERROR_SUCCESS;
   g_xinput_controller_present.store(connected, std::memory_order_release);
+  LogSupportControllerPresence(connected);
   if (!connected || !IsGameForeground()) {
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
     if (g_xinput_was_connected) {
@@ -10473,6 +10659,7 @@ void PollFrontendXInputInternal() {
   const bool connected =
       g_xinput_get_state(g_xinput_controller_index, &state) == ERROR_SUCCESS;
   g_xinput_controller_present.store(connected, std::memory_order_release);
+  LogSupportControllerPresence(connected);
   if (!connected || !IsGameForeground()) {
     SubmitDeathtrapXInputMouseState(0, 0, false, false);
     return;
@@ -14978,15 +15165,18 @@ void InitializePatchState() {
   }
   const uint32_t subframes = ConfiguredSubframes();
   g_subframes.store(subframes, std::memory_order_relaxed);
+  LogCompactSupportEnvironment(subframes);
 
   HMODULE dungeon = GetModuleHandleW(L"Dungeon.dll");
   if (!dungeon) {
+    AppendDeathtrapSupportLog("support_patch state=dungeon_module_missing");
     g_state.store(DeathtrapNativeRenderPatchState::kDungeonModuleMissing,
                   std::memory_order_release);
     return;
   }
   g_dungeon_base = reinterpret_cast<uint8_t*>(dungeon);
   if (!IsExpectedDungeonImage(g_dungeon_base)) {
+    AppendDeathtrapSupportLog("support_patch state=unsupported_dungeon_dll");
     g_state.store(DeathtrapNativeRenderPatchState::kUnsupportedDungeonDll,
                   std::memory_order_release);
     return;
@@ -15111,9 +15301,23 @@ void InitializePatchState() {
                   g_head_joint_probe_enabled ? 1u : 0u);
   g_state.store(DeathtrapNativeRenderPatchState::kActive,
                 std::memory_order_release);
+  AppendDeathtrapSupportLog(
+      "support_patch state=active orbit=%u immersive=%u xinput=%u "
+      "xinput_runtime=%u music_fix=%u",
+      g_third_person_orbit_enabled ? 1u : 0u,
+      g_immersive_first_person_enabled ? 1u : 0u,
+      g_xinput_enabled ? 1u : 0u, g_xinput_get_state ? 1u : 0u,
+      g_music_track_fix_enabled ? 1u : 0u);
 }
 
 }  // namespace
+
+void AppendDeathtrapSupportLog(const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+  AppendSupportLogV(format, args);
+  va_end(args);
+}
 
 const wchar_t* GetDeathtrapSessionLogPath() {
   static std::once_flag once;

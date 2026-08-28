@@ -6,6 +6,12 @@
 // timestamped file under the game's logs subdirectory.
 const wchar_t* GetDeathtrapSessionLogPath();
 
+// Writes one compact, always-on support record to the current per-launch log.
+// Unlike DebugLog, this is reserved for startup environment, input ownership
+// transitions and low-rate summaries that are safe to keep enabled in public
+// builds. Never pass user paths or other private data to this function.
+void AppendDeathtrapSupportLog(const char* format, ...);
+
 enum class DeathtrapNativeRenderPatchState : uint32_t {
   kNotAttempted,
   kDisabled,

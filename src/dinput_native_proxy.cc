@@ -40,6 +40,14 @@ using DirectInputDeviceGetStateFn = HRESULT(STDMETHODCALLTYPE*)(
     IDirectInputDeviceA*, DWORD, LPVOID);
 using DirectInputDeviceGetDataFn = HRESULT(STDMETHODCALLTYPE*)(
     IDirectInputDeviceA*, DWORD, LPDIDEVICEOBJECTDATA, LPDWORD, DWORD);
+using DirectInputDeviceAcquireFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDirectInputDeviceA*);
+using DirectInputDeviceUnacquireFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDirectInputDeviceA*);
+using DirectInputDeviceSetDataFormatFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDirectInputDeviceA*, LPCDIDATAFORMAT);
+using DirectInputDeviceSetCooperativeLevelFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDirectInputDeviceA*, HWND, DWORD);
 
 HMODULE g_system_dinput = nullptr;
 HMODULE g_dxgi = nullptr;
@@ -57,6 +65,12 @@ FactoryCreateSwapChainForCompositionFn
 DirectInputCreateDeviceAFn g_direct_input_create_device = nullptr;
 DirectInputDeviceGetStateFn g_direct_input_device_get_state = nullptr;
 DirectInputDeviceGetDataFn g_direct_input_device_get_data = nullptr;
+DirectInputDeviceAcquireFn g_direct_input_device_acquire = nullptr;
+DirectInputDeviceUnacquireFn g_direct_input_device_unacquire = nullptr;
+DirectInputDeviceSetDataFormatFn g_direct_input_device_set_data_format =
+    nullptr;
+DirectInputDeviceSetCooperativeLevelFn
+    g_direct_input_device_set_cooperative_level = nullptr;
 std::mutex g_swap_chain_hooks_mutex;
 std::unordered_map<void*, SwapChainPresentFn> g_swap_chain_present;
 std::unordered_map<void*, SwapChainPresent1Fn> g_swap_chain_present1;
@@ -74,6 +88,18 @@ std::atomic<uint32_t> g_xinput_buffered_mouse_sequence{1};
 std::atomic<bool> g_physical_operate_key_down{false};
 std::atomic<uint64_t> g_last_physical_cursor_activity_ms{0};
 std::atomic<uint64_t> g_last_controller_cursor_activity_ms{0};
+std::atomic<IDirectInputDeviceA*> g_support_mouse_device{nullptr};
+std::atomic<HWND> g_support_mouse_window{nullptr};
+std::atomic<uint32_t> g_support_mouse_cooperative_flags{0};
+std::atomic<uint64_t> g_support_mouse_state_calls{0};
+std::atomic<uint64_t> g_support_mouse_data_calls{0};
+std::atomic<uint64_t> g_support_mouse_failures{0};
+std::atomic<HRESULT> g_support_mouse_last_failure{S_OK};
+std::atomic<int64_t> g_support_mouse_delta_x{0};
+std::atomic<int64_t> g_support_mouse_delta_y{0};
+std::atomic<uint64_t> g_support_last_summary_ms{0};
+std::atomic<int32_t> g_support_last_camera_owner{-1};
+std::atomic<int32_t> g_support_last_clip_mismatch{-1};
 
 extern "C" {
 FARPROC g_target_DirectInputCreateA = nullptr;
@@ -136,6 +162,168 @@ bool ControllerCursorAxesOwnInput() {
              std::memory_order_acquire) >
          g_last_physical_cursor_activity_ms.load(
              std::memory_order_acquire);
+}
+
+bool IsCurrentProcessWindow(HWND window) {
+  if (!window) {
+    return false;
+  }
+  DWORD process_id = 0;
+  GetWindowThreadProcessId(window, &process_id);
+  return process_id == GetCurrentProcessId();
+}
+
+void AccumulateSupportMouseDelta(int32_t delta_x, int32_t delta_y) {
+  g_support_mouse_delta_x.fetch_add(delta_x, std::memory_order_relaxed);
+  g_support_mouse_delta_y.fetch_add(delta_y, std::memory_order_relaxed);
+}
+
+void MaybeLogMouseSupportSummary(bool camera_consumes) {
+  const int32_t owner = camera_consumes ? 1 : 0;
+  const int32_t previous_owner =
+      g_support_last_camera_owner.exchange(owner, std::memory_order_acq_rel);
+  if (previous_owner != owner) {
+    AppendDeathtrapSupportLog("support_mouse_owner camera=%u",
+                              camera_consumes ? 1u : 0u);
+  }
+
+  const uint64_t now_ms = GetTickCount64();
+  uint64_t previous_ms =
+      g_support_last_summary_ms.load(std::memory_order_relaxed);
+  // Five seconds is enough to expose focus/capture/edge failures while
+  // keeping an hour-long public session comfortably below the old debug-log
+  // volume. Ownership transitions and acquire events are still immediate.
+  if (previous_ms && now_ms - previous_ms < 5000u) {
+    return;
+  }
+  if (!g_support_last_summary_ms.compare_exchange_strong(
+          previous_ms, now_ms, std::memory_order_acq_rel,
+          std::memory_order_relaxed)) {
+    return;
+  }
+
+  HWND window = g_support_mouse_window.load(std::memory_order_acquire);
+  if (!IsCurrentProcessWindow(window)) {
+    const HWND foreground = GetForegroundWindow();
+    window = IsCurrentProcessWindow(foreground) ? foreground : nullptr;
+  }
+  RECT window_rect = {};
+  RECT client_rect = {};
+  POINT client_origin = {};
+  const bool have_window_rect = window && GetWindowRect(window, &window_rect);
+  bool have_client_rect = window && GetClientRect(window, &client_rect);
+  if (have_client_rect && !ClientToScreen(window, &client_origin)) {
+    have_client_rect = false;
+  }
+  if (have_client_rect) {
+    OffsetRect(&client_rect, client_origin.x, client_origin.y);
+  }
+
+  POINT cursor = {};
+  const bool have_cursor = GetCursorPos(&cursor) != FALSE;
+  CURSORINFO cursor_info = {};
+  cursor_info.cbSize = sizeof(cursor_info);
+  const bool cursor_visible =
+      GetCursorInfo(&cursor_info) &&
+      (cursor_info.flags & CURSOR_SHOWING) != 0u;
+  RECT clip = {};
+  const bool have_clip = GetClipCursor(&clip) != FALSE;
+  const int virtual_left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+  const int virtual_top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+  const int virtual_right = virtual_left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
+  const int virtual_bottom = virtual_top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
+  const bool screen_right =
+      have_cursor && cursor.x >= virtual_right - 2;
+  const bool screen_bottom =
+      have_cursor && cursor.y >= virtual_bottom - 2;
+  const bool client_right = have_cursor && have_client_rect &&
+      cursor.x >= client_rect.right - 2;
+  const bool client_bottom = have_cursor && have_client_rect &&
+      cursor.y >= client_rect.bottom - 2;
+  const bool clip_right = have_cursor && have_clip &&
+      cursor.x >= clip.right - 2;
+  const bool clip_bottom = have_cursor && have_clip &&
+      cursor.y >= clip.bottom - 2;
+  const long client_width = have_client_rect
+      ? client_rect.right - client_rect.left
+      : 0;
+  const long client_height = have_client_rect
+      ? client_rect.bottom - client_rect.top
+      : 0;
+  const long clip_width = have_clip ? clip.right - clip.left : 0;
+  const long clip_height = have_clip ? clip.bottom - clip.top : 0;
+  const bool clip_client_mismatch = have_clip && have_client_rect &&
+      (std::abs(clip_width - client_width) > 2 ||
+       std::abs(clip_height - client_height) > 2);
+  const int32_t mismatch_state = clip_client_mismatch ? 1 : 0;
+  const int32_t previous_mismatch = g_support_last_clip_mismatch.exchange(
+      mismatch_state, std::memory_order_acq_rel);
+  if (clip_client_mismatch && previous_mismatch != mismatch_state) {
+    AppendDeathtrapSupportLog(
+        "support_mouse_warning type=clip_client_mismatch "
+        "cursor=%ld,%ld clip=%ld,%ld,%ld,%ld "
+        "client=%ld,%ld,%ld,%ld at_clip_edge=%u%u",
+        have_cursor ? cursor.x : -1L, have_cursor ? cursor.y : -1L,
+        clip.left, clip.top, clip.right, clip.bottom,
+        client_rect.left, client_rect.top, client_rect.right,
+        client_rect.bottom, clip_right ? 1u : 0u,
+        clip_bottom ? 1u : 0u);
+  }
+
+  UINT window_dpi = 96;
+  if (window) {
+    if (HMODULE user32 = GetModuleHandleW(L"user32.dll")) {
+      using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
+      const auto get_dpi_for_window = reinterpret_cast<GetDpiForWindowFn>(
+          GetProcAddress(user32, "GetDpiForWindow"));
+      if (get_dpi_for_window) {
+        window_dpi = get_dpi_for_window(window);
+      }
+    }
+  }
+
+  AppendDeathtrapSupportLog(
+      "support_mouse_summary state_calls=%llu data_calls=%llu failures=%llu "
+      "last_failure=0x%08lx "
+      "delta=%lld,%lld camera=%u controller_cursor=%u foreground=%u "
+      "cursor=%ld,%ld visible=%u "
+      "edge=screen_%u%u_client_%u%u_clip_%u%u "
+      "clip_client_mismatch=%u "
+      "window=%ld,%ld,%ld,%ld client=%ld,%ld,%ld,%ld "
+      "clip=%ld,%ld,%ld,%ld dpi=%u coop=0x%08lx",
+      static_cast<unsigned long long>(g_support_mouse_state_calls.exchange(
+          0, std::memory_order_acq_rel)),
+      static_cast<unsigned long long>(g_support_mouse_data_calls.exchange(
+          0, std::memory_order_acq_rel)),
+      static_cast<unsigned long long>(g_support_mouse_failures.exchange(
+          0, std::memory_order_acq_rel)),
+      static_cast<unsigned long>(
+          g_support_mouse_last_failure.load(std::memory_order_acquire)),
+      static_cast<long long>(g_support_mouse_delta_x.exchange(
+          0, std::memory_order_acq_rel)),
+      static_cast<long long>(g_support_mouse_delta_y.exchange(
+          0, std::memory_order_acq_rel)),
+      camera_consumes ? 1u : 0u,
+      ControllerCursorAxesOwnInput() ? 1u : 0u,
+      window && GetForegroundWindow() == window ? 1u : 0u,
+      have_cursor ? cursor.x : -1L, have_cursor ? cursor.y : -1L,
+      cursor_visible ? 1u : 0u, screen_right ? 1u : 0u,
+      screen_bottom ? 1u : 0u, client_right ? 1u : 0u,
+      client_bottom ? 1u : 0u, clip_right ? 1u : 0u,
+      clip_bottom ? 1u : 0u, clip_client_mismatch ? 1u : 0u,
+      have_window_rect ? window_rect.left : -1L,
+      have_window_rect ? window_rect.top : -1L,
+      have_window_rect ? window_rect.right : -1L,
+      have_window_rect ? window_rect.bottom : -1L,
+      have_client_rect ? client_rect.left : -1L,
+      have_client_rect ? client_rect.top : -1L,
+      have_client_rect ? client_rect.right : -1L,
+      have_client_rect ? client_rect.bottom : -1L,
+      have_clip ? clip.left : -1L, have_clip ? clip.top : -1L,
+      have_clip ? clip.right : -1L, have_clip ? clip.bottom : -1L,
+      window_dpi,
+      static_cast<unsigned long>(
+          g_support_mouse_cooperative_flags.load(std::memory_order_acquire)));
 }
 
 template <typename T>
@@ -213,9 +401,12 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
   if (SUCCEEDED(result) && data &&
       (data_size == sizeof(DIMOUSESTATE) ||
        data_size == sizeof(DIMOUSESTATE2))) {
+    g_support_mouse_state_calls.fetch_add(1, std::memory_order_relaxed);
     auto* mouse = static_cast<DIMOUSESTATE*>(data);
+    AccumulateSupportMouseDelta(mouse->lX, mouse->lY);
     NotePhysicalCursorActivity(mouse->lX, mouse->lY);
-    if (DeathtrapModernCameraConsumesMouse()) {
+    const bool camera_consumes = DeathtrapModernCameraConsumesMouse();
+    if (camera_consumes) {
       SubmitDeathtrapPhysicalMouseDelta(mouse->lX, mouse->lY);
       // Camera-look owns only the physical axes during gameplay. Buttons and
       // wheel remain native, while frontend/menu samples bypass this branch.
@@ -242,6 +433,13 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     if (mouse->lZ != 0) {
       QueueDeathtrapWeaponWheelDelta(mouse->lZ);
     }
+    MaybeLogMouseSupportSummary(camera_consumes);
+  } else if (FAILED(result) &&
+             device == g_support_mouse_device.load(std::memory_order_acquire)) {
+    g_support_mouse_state_calls.fetch_add(1, std::memory_order_relaxed);
+    g_support_mouse_failures.fetch_add(1, std::memory_order_relaxed);
+    g_support_mouse_last_failure.store(result, std::memory_order_release);
+    MaybeLogMouseSupportSummary(DeathtrapModernCameraConsumesMouse());
   }
   return result;
 }
@@ -257,8 +455,19 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetData(
                                            flags)
           : DIERR_GENERIC;
   if (FAILED(result) || !count || !data || object_size == 0u) {
+    if (device ==
+        g_support_mouse_device.load(std::memory_order_acquire)) {
+      g_support_mouse_data_calls.fetch_add(1, std::memory_order_relaxed);
+      if (FAILED(result)) {
+        g_support_mouse_failures.fetch_add(1, std::memory_order_relaxed);
+        g_support_mouse_last_failure.store(result, std::memory_order_release);
+      }
+      MaybeLogMouseSupportSummary(DeathtrapModernCameraConsumesMouse());
+    }
     return result;
   }
+
+  g_support_mouse_data_calls.fetch_add(1, std::memory_order_relaxed);
 
   DWORD written = *count;
   const bool peek = (flags & DIGDD_PEEK) != 0;
@@ -281,6 +490,7 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetData(
       }
     }
     if (!peek) {
+      AccumulateSupportMouseDelta(observed_physical_x, observed_physical_y);
       NotePhysicalCursorActivity(observed_physical_x, observed_physical_y);
     }
   }
@@ -370,6 +580,67 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetData(
     }
   }
   *count = written;
+  MaybeLogMouseSupportSummary(DeathtrapModernCameraConsumesMouse());
+  return result;
+}
+
+HRESULT STDMETHODCALLTYPE HookDirectInputDeviceAcquire(
+    IDirectInputDeviceA* device) {
+  const HRESULT result = g_direct_input_device_acquire
+      ? g_direct_input_device_acquire(device)
+      : DIERR_GENERIC;
+  if (device == g_support_mouse_device.load(std::memory_order_acquire)) {
+    AppendDeathtrapSupportLog("support_mouse_acquire result=0x%08lx",
+                              static_cast<unsigned long>(result));
+  }
+  return result;
+}
+
+HRESULT STDMETHODCALLTYPE HookDirectInputDeviceUnacquire(
+    IDirectInputDeviceA* device) {
+  const HRESULT result = g_direct_input_device_unacquire
+      ? g_direct_input_device_unacquire(device)
+      : DIERR_GENERIC;
+  if (device == g_support_mouse_device.load(std::memory_order_acquire)) {
+    AppendDeathtrapSupportLog("support_mouse_unacquire result=0x%08lx",
+                              static_cast<unsigned long>(result));
+  }
+  return result;
+}
+
+HRESULT STDMETHODCALLTYPE HookDirectInputDeviceSetDataFormat(
+    IDirectInputDeviceA* device, LPCDIDATAFORMAT format) {
+  const HRESULT result = g_direct_input_device_set_data_format
+      ? g_direct_input_device_set_data_format(device, format)
+      : DIERR_GENERIC;
+  if (device == g_support_mouse_device.load(std::memory_order_acquire)) {
+    AppendDeathtrapSupportLog(
+        "support_mouse_data_format result=0x%08lx size=%lu objects=%lu "
+        "flags=0x%08lx",
+        static_cast<unsigned long>(result),
+        format ? static_cast<unsigned long>(format->dwDataSize) : 0ul,
+        format ? static_cast<unsigned long>(format->dwNumObjs) : 0ul,
+        format ? static_cast<unsigned long>(format->dwFlags) : 0ul);
+  }
+  return result;
+}
+
+HRESULT STDMETHODCALLTYPE HookDirectInputDeviceSetCooperativeLevel(
+    IDirectInputDeviceA* device, HWND window, DWORD flags) {
+  const HRESULT result = g_direct_input_device_set_cooperative_level
+      ? g_direct_input_device_set_cooperative_level(device, window, flags)
+      : DIERR_GENERIC;
+  if (device == g_support_mouse_device.load(std::memory_order_acquire)) {
+    g_support_mouse_window.store(window, std::memory_order_release);
+    g_support_mouse_cooperative_flags.store(flags, std::memory_order_release);
+    AppendDeathtrapSupportLog(
+        "support_mouse_cooperative result=0x%08lx flags=0x%08lx "
+        "exclusive=%u foreground=%u window_valid=%u",
+        static_cast<unsigned long>(result), static_cast<unsigned long>(flags),
+        (flags & DISCL_EXCLUSIVE) != 0u ? 1u : 0u,
+        (flags & DISCL_FOREGROUND) != 0u ? 1u : 0u,
+        IsCurrentProcessWindow(window) ? 1u : 0u);
+  }
   return result;
 }
 
@@ -407,13 +678,35 @@ HRESULT STDMETHODCALLTYPE HookDirectInputCreateDeviceA(
           : DIERR_GENERIC;
   if (SUCCEEDED(result) && device && *device &&
       IsEqualGUID(device_guid, GUID_SysMouse)) {
+    g_support_mouse_device.store(*device, std::memory_order_release);
     void** vtable = *reinterpret_cast<void***>(*device);
+    const bool acquire_hooked = PatchVtableSlot(
+        vtable, 7, reinterpret_cast<void*>(&HookDirectInputDeviceAcquire),
+        &g_direct_input_device_acquire);
+    const bool unacquire_hooked = PatchVtableSlot(
+        vtable, 8, reinterpret_cast<void*>(&HookDirectInputDeviceUnacquire),
+        &g_direct_input_device_unacquire);
     PatchVtableSlot(vtable, 9,
                     reinterpret_cast<void*>(&HookDirectInputDeviceGetState),
                     &g_direct_input_device_get_state);
     PatchVtableSlot(vtable, 10,
                     reinterpret_cast<void*>(&HookDirectInputDeviceGetData),
                     &g_direct_input_device_get_data);
+    const bool data_format_hooked = PatchVtableSlot(
+        vtable, 11,
+        reinterpret_cast<void*>(&HookDirectInputDeviceSetDataFormat),
+        &g_direct_input_device_set_data_format);
+    const bool cooperative_hooked = PatchVtableSlot(
+        vtable, 13,
+        reinterpret_cast<void*>(&HookDirectInputDeviceSetCooperativeLevel),
+        &g_direct_input_device_set_cooperative_level);
+    AppendDeathtrapSupportLog(
+        "support_mouse_device result=0x%08lx hooks=%u%u%u%u%u%u",
+        static_cast<unsigned long>(result), acquire_hooked ? 1u : 0u,
+        unacquire_hooked ? 1u : 0u,
+        g_direct_input_device_get_state ? 1u : 0u,
+        g_direct_input_device_get_data ? 1u : 0u,
+        data_format_hooked ? 1u : 0u, cooperative_hooked ? 1u : 0u);
   }
   return result;
 }
@@ -831,6 +1124,13 @@ extern "C" HRESULT WINAPI Proxy_DirectInputCreateA(
       g_target_DirectInputCreateA);
   const HRESULT result =
       target ? target(instance, version, direct_input, outer) : DIERR_GENERIC;
+  AppendDeathtrapSupportLog(
+      "support_directinput_create version=0x%08lx system_dinput=%u "
+      "result=0x%08lx object=%u steam=%u",
+      static_cast<unsigned long>(version), target ? 1u : 0u,
+      static_cast<unsigned long>(result),
+      SUCCEEDED(result) && direct_input && *direct_input ? 1u : 0u,
+      GetModuleHandleW(L"gameoverlayrenderer.dll") ? 1u : 0u);
   if (SUCCEEDED(result) && direct_input && *direct_input) {
     AttachDirectInput(*direct_input);
   }

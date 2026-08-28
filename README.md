@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current development version: **0.0.218**
+Current development version: **0.0.219**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -8,7 +8,7 @@ Current development version: **0.0.218**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.218.jpg" alt="Deathtrap Native 50 v0.0.218" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.219.jpg" alt="Deathtrap Native 50 v0.0.219" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -338,10 +338,18 @@ Dungeon, its assets, names or trademarks.
 
 ## Support and diagnostics
 
-Normal releases set `Diagnostics/DebugLog=0`. If a problem needs investigation,
-set it to `1` for one short run. A new timestamped file is then created under
-the game's `logs` directory. Heavy `CameraProbe` and `HeadJointProbe` streams
-should remain disabled unless a specific diagnostic capture is requested.
+Every launch automatically creates one compact timestamped support log under
+the game's `logs` directory. No diagnostic option needs to be enabled. The log
+records the patch version, Windows display/DPI environment, relevant dgVoodoo
+settings, window geometry, DirectInput mouse setup, input ownership changes and
+low-rate mouse summaries. It does not contain save data or full local paths.
 
-When reporting a problem, include the patch version, storefront, game binary
-hash, dgVoodoo version, reproduction steps and the single relevant log file.
+When reporting a problem, reproduce it once, close the game and attach the
+newest `deathtrap-native-*.log` file together with a short description. The log
+already contains the minimum environment and version information needed for
+initial investigation.
+
+`Diagnostics/DebugLog=0` remains the normal setting. Changing it to `1` adds
+the much larger development telemetry to the same per-launch file and should
+only be done when specifically requested. Heavy `CameraProbe` and
+`HeadJointProbe` streams should remain disabled unless requested.
