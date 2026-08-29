@@ -133,11 +133,18 @@ ACKNOWLEDGEMENTS
 Thanks to the community members who helped test public builds:
 
 - dbdk422a
+- 517342 - for testing and identifying the directional-control problems
+  fixed in version 0.0.221
 
 The installer creates a timestamped backup of existing patch files,
 DDraw.dll, D3DImm.dll, dgVoodoo.conf, ASYLUM\keys.cfg and ASYLUM\config.dat
 under the game's back directory before applying the verified setup. Do not
 copy a complete keys.cfg from another installation.
+
+HELP AND BUG REPORTS
+
+Discord #help-and-bug-reports:
+https://discord.gg/9tP8qFG7Y
 
 SUPPORT LOG
 

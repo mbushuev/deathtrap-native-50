@@ -345,6 +345,9 @@ Dungeon, its assets, names or trademarks.
 
 ## Support and diagnostics
 
+For installation help and bug reports, join the
+[`#help-and-bug-reports` Discord channel](https://discord.gg/9tP8qFG7Y).
+
 Every launch automatically creates one compact timestamped support log under
 the game's `logs` directory. No diagnostic option needs to be enabled. The log
 records the patch version, Windows display/DPI environment, relevant dgVoodoo
