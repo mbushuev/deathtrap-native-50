@@ -17,37 +17,37 @@ The complete user-facing list of changes is included in CHANGELOG.txt.
 
 QUICK INSTALL
 
+Everything required for the supported setup is already included. You do not
+need to download or configure dgVoodoo before the first launch.
+
 1. Close the game.
-2. Download dgVoodoo2 2.86 or newer from:
-   https://github.com/dege-diosg/dgVoodoo2/releases
-3. Copy dgVoodooCpl.exe plus the x86 DDraw.dll and D3DImm.dll wrappers from
-   the dgVoodoo2 package directly beside DD_CD.EXE. Do not use x64 wrappers.
-   D3D9.dll is not required by Deathtrap Dungeon.
-4. Run dgVoodooCpl.exe for the game directory. Set Output API to Direct3D 11
-   feature level 11.0, apply it, and confirm that dgVoodoo.conf beside
-   DD_CD.EXE contains:
+2. Extract every file from this patch ZIP directly beside DD_CD.EXE. Preserve
+   the included payload directory.
+3. Double-click INSTALL.cmd once.
+4. Start Deathtrap Dungeon normally through Steam or DD_CD.EXE.
 
-       [General]
-       OutputAPI = d3d11_fl11_0
+INSTALL.cmd backs up any existing patch, dgVoodoo, control and rendering files,
+then installs the complete tested setup. The archive includes the unmodified
+dgVoodoo 2.86.2 x86 DDraw.dll and D3DImm.dll plus the tested profile: D3D11
+FL11, 3x internal resolution, 8x antialiasing, 16x anisotropic filtering,
+automatic mipmaps and VSync.
 
-5. Only after dgVoodoo2 is configured, extract every file from this patch ZIP
-   directly beside DD_CD.EXE. Preserve the included payload directory.
-6. Recommended for the best tested image: back up the active dgVoodoo.conf,
-   then copy optional\dgVoodoo.conf over it. The preset uses 3x internal
-   resolution, 8x antialiasing, 16x anisotropic filtering, automatic mipmaps
-   and VSync. For lower-end systems, use 2x resolution and 4x antialiasing.
-   Screenshots of both required tabs are included as
-   optional\dgVoodoo-General.png and optional\dgVoodoo-DirectX.png.
-7. Double-click INSTALL.cmd once. It validates dgVoodoo2 and the game, backs
-   up the game control and rendering files, installs the payload, applies the
-   verified controls and normalizes the required game rendering settings.
-8. Start Deathtrap Dungeon normally.
+OPTIONAL DGVOODOO TUNING
 
-INSTALL.cmd reads dgVoodoo.conf for validation but never modifies it. Applying
-the optional preset is always an explicit manual action.
+No tuning is required to run the patch. To change resolution, antialiasing,
+filtering or other wrapper options, download the complete official dgVoodoo
+package from:
 
-dgVoodoo2 is required for the supported patch. DINPUT.dll may load without it,
-but the complete higher-rate rendering path is not expected to work correctly.
+https://github.com/dege-diosg/dgVoodoo2/releases
+
+Copy only dgVoodooCpl.exe beside DD_CD.EXE and the installed dgVoodoo.conf,
+then run it and apply your preferred settings to the game directory. The
+required x86 runtime DLLs are already installed by this patch. Do not replace
+them with x64 wrappers, and keep OutputAPI set to d3d11_fl11_0.
+
+For lower-end systems, try 2x resolution and 4x antialiasing. Reference
+screenshots are included as optional\dgVoodoo-General.png and
+optional\dgVoodoo-DirectX.png.
 
 The tested Steam Dungeon.dll SHA-256 is:
 95FE9CE0FFF387F00704548F152E4340815213FCB3833DBE1B5C42871E7D2E56
@@ -116,7 +116,7 @@ PROJECTS AND REPOSITORIES USED
 MinHook 1.3.4 - statically linked API-hooking dependency:
 https://github.com/TsudaKageyu/minhook
 
-dgVoodoo2 - required external DirectDraw/D3DImm runtime:
+dgVoodoo2 - bundled DirectDraw/D3DImm runtime:
 https://github.com/dege-diosg/dgVoodoo2
 
 Unity Cinemachine - camera design reference; no code included:
@@ -134,9 +134,10 @@ Thanks to the community members who helped test public builds:
 
 - dbdk422a
 
-The installer creates timestamped backups of ASYLUM\keys.cfg and
-ASYLUM\config.dat under the game's back directory before applying the verified
-profiles. Do not copy a complete keys.cfg from another installation.
+The installer creates a timestamped backup of existing patch files,
+DDraw.dll, D3DImm.dll, dgVoodoo.conf, ASYLUM\keys.cfg and ASYLUM\config.dat
+under the game's back directory before applying the verified setup. Do not
+copy a complete keys.cfg from another installation.
 
 SUPPORT LOG
 
@@ -146,8 +147,8 @@ and attach the newest deathtrap-native-*.log file to the report. The file
 already contains the patch version, relevant display and dgVoodoo settings,
 and a low-rate input/cursor summary. No diagnostic setting needs to be enabled.
 
-This patch contains no game assets or dgVoodoo binaries. Its optional
-dgVoodoo.conf is only a tested user configuration. THIRD_PARTY_NOTICES must
+This patch contains no game assets. It redistributes only the two unmodified
+dgVoodoo runtime DLLs required by Deathtrap Dungeon. THIRD_PARTY_NOTICES must
 remain with redistributed copies of the patch.
 
 Deathtrap Native 50 is licensed under the MIT License. See LICENSE.txt.

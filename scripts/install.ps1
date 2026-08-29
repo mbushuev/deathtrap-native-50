@@ -3,6 +3,8 @@ param(
     [string]$GameDirectory = '',
     [string]$DllPath = '',
     [string]$IniPath = '',
+    [string]$DgVoodooRuntimeDirectory = '',
+    [string]$DgVoodooConfigPath = '',
     [switch]$SkipGameHashCheck
 )
 
@@ -78,32 +80,51 @@ if (-not $SkipGameHashCheck) {
     }
 }
 
-foreach ($wrapper in @('DDraw.dll', 'D3DImm.dll')) {
-    if (-not (Test-Path -LiteralPath (Join-Path $game $wrapper))) {
-        throw "External dgVoodoo wrapper is missing: $wrapper"
+if (-not $DgVoodooRuntimeDirectory) {
+    $payloadRuntime = Join-Path $PSScriptRoot 'payload\dgVoodoo'
+    $repositoryRuntime = Join-Path $repoRoot 'third_party\dgVoodoo2-2.86.2\x86'
+    $DgVoodooRuntimeDirectory = if (
+        (Test-Path -LiteralPath (Join-Path $payloadRuntime 'DDraw.dll') -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $payloadRuntime 'D3DImm.dll') -PathType Leaf)
+    ) {
+        $payloadRuntime
+    } else {
+        $repositoryRuntime
     }
 }
-$ddrawVersionText = (Get-Item -LiteralPath (Join-Path $game 'DDraw.dll')).VersionInfo.ProductVersion
-$ddrawVersion = $null
-if ($ddrawVersionText) {
-    $normalizedVersion = ($ddrawVersionText -replace '[^0-9.].*$', '')
-    $parsedVersion = [version]'0.0'
-    if ([version]::TryParse($normalizedVersion, [ref]$parsedVersion)) {
-        $ddrawVersion = $parsedVersion
+$dgRuntime = (Resolve-Path -LiteralPath $DgVoodooRuntimeDirectory).Path
+$dgVoodooPayload = @(
+    @{
+        Name = 'DDraw.dll'
+        Sha256 = '9EDACB27DE03EA2D0C104DE2CE255D4C992A46E2867BCCB3713A8995D56F84A5'
+    },
+    @{
+        Name = 'D3DImm.dll'
+        Sha256 = '8B2850D0AF5F07CF2928AC9666192C3ADCB0290F10ED8F942F1594F3A4F51C73'
+    }
+)
+foreach ($wrapper in $dgVoodooPayload) {
+    $path = Join-Path $dgRuntime $wrapper.Name
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "Bundled dgVoodoo runtime file is missing: $path"
+    }
+    $actualHash = Get-FileSha256 -Path $path
+    if ($actualHash -ne $wrapper.Sha256) {
+        throw "Bundled dgVoodoo runtime file failed verification: $($wrapper.Name)"
     }
 }
-if ($ddrawVersion -and $ddrawVersion -lt [version]'2.8.6') {
-    throw "dgVoodoo 2.86 or newer is required; found $ddrawVersionText"
+if (-not $DgVoodooConfigPath) {
+    $payloadConfig = Join-Path $PSScriptRoot 'payload\dgVoodoo.conf'
+    $DgVoodooConfigPath = if (Test-Path -LiteralPath $payloadConfig -PathType Leaf) {
+        $payloadConfig
+    } else {
+        Join-Path $repoRoot 'config\dgVoodoo-recommended.conf'
+    }
 }
-if (-not $ddrawVersion) {
-    Write-Warning 'Could not identify the dgVoodoo version; 2.86 or newer is required.'
-}
-$dgConfig = Join-Path $game 'dgVoodoo.conf'
-if (-not (Test-Path -LiteralPath $dgConfig)) {
-    throw 'dgVoodoo.conf is missing.'
-}
-if (-not (Select-String -LiteralPath $dgConfig -Pattern '^OutputAPI\s*=\s*d3d11_fl11_0\s*$' -Quiet)) {
-    throw 'dgVoodoo OutputAPI must be d3d11_fl11_0.'
+$dgConfigSource = (Resolve-Path -LiteralPath $DgVoodooConfigPath).Path
+if (-not (Select-String -LiteralPath $dgConfigSource `
+        -Pattern '^OutputAPI\s*=\s*d3d11_fl11_0\s*$' -Quiet)) {
+    throw 'Bundled dgVoodoo configuration must use OutputAPI = d3d11_fl11_0.'
 }
 
 if (-not $DllPath) {
@@ -267,6 +288,9 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
     foreach ($existing in @(
         'DINPUT.dll',
         'deathtrap_native.ini',
+        'DDraw.dll',
+        'D3DImm.dll',
+        'dgVoodoo.conf',
         'ASYLUM\keys.cfg',
         'ASYLUM\config.dat'
     )) {
@@ -296,6 +320,12 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
             [System.StringComparison]::OrdinalIgnoreCase)) {
         Copy-Item -LiteralPath $ini -Destination $iniDestination -Force
     }
+    foreach ($wrapper in $dgVoodooPayload) {
+        Copy-Item -LiteralPath (Join-Path $dgRuntime $wrapper.Name) `
+            -Destination (Join-Path $game $wrapper.Name) -Force
+    }
+    Copy-Item -LiteralPath $dgConfigSource `
+        -Destination (Join-Path $game 'dgVoodoo.conf') -Force
     if (-not (Test-Path -LiteralPath $keys)) {
         throw "Retail control file was not found: $keys"
     }
@@ -384,6 +414,7 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
     [System.IO.File]::WriteAllText(
         $retailConfig, $configText, [System.Text.Encoding]::ASCII)
     Write-Host "Installed overlay into: $game"
+    Write-Host 'Installed the tested dgVoodoo 2.86.2 x86 runtime and configuration.'
     Write-Host 'Installed the modern keyboard, mouse and XInput control profile.'
     Write-Host 'Applied the required Direct3D rendering profile.'
     Write-Host "Rollback copy: $backup"

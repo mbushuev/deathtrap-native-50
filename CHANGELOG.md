@@ -6,6 +6,26 @@ Thanks to the community members who helped test public builds:
 
 - `dbdk422a`
 
+## 0.0.220 — self-contained dgVoodoo installation
+
+This update removes manual dgVoodoo setup from the normal installation path.
+It does not intentionally change camera, input or gameplay behavior.
+
+- Bundles the two unmodified dgVoodoo 2.86.2 x86 runtime files required by
+  Deathtrap Dungeon: `DDraw.dll` and `D3DImm.dll`.
+- Installs the exact high-quality `dgVoodoo.conf` used during project testing,
+  including D3D11 FL11, 3x internal resolution, 8x MSAA, 16x anisotropic
+  filtering, automatic mipmaps and VSync.
+- Backs up any existing `DDraw.dll`, `D3DImm.dll` and `dgVoodoo.conf` together
+  with the patch and retail configuration before replacing them.
+- Verifies the bundled runtime hashes during packaging and installation so a
+  damaged or substituted wrapper cannot be installed silently.
+- Removes the separate dgVoodoo download and control-panel configuration from
+  the normal quick-install procedure. Advanced users can still download the
+  complete dgVoodoo package separately to tune the installed profile.
+- Adds the dgVoodoo attribution, exact bundled version, file hashes and
+  redistribution terms to the public third-party notices.
+
 ## 0.0.219 — automatic support logs
 
 This update does not intentionally change camera, input or gameplay behavior.

@@ -6,7 +6,7 @@
 DD_CD.EXE / Dungeon.dll
   |-- imports DINPUT.dll --> our native overlay --> Windows x86 dinput.dll
   |
-  `-- imports DDRAW.dll  --> unmodified dgVoodoo 2.86+
+  `-- imports DDRAW.dll  --> bundled unmodified dgVoodoo 2.86.2 x86
                                |
                                `-- D3D11 / DXGI swapchain
                                       ^
@@ -15,8 +15,9 @@ DD_CD.EXE / Dungeon.dll
 
 The overlay and dgVoodoo are siblings in the process, not a proxy chain. Our
 DLL never loads a renamed `DDraw_dgVoodoo.dll` and never forwards DirectDraw.
-No dgVoodoo path or binary hash is compiled into the overlay. Version 2.86 is
-the minimum compatibility baseline; the currently validated build is 2.86.2.
+No dgVoodoo path or binary hash is compiled into the overlay itself. The
+release installer verifies and installs the bundled unmodified 2.86.2 x86
+runtime before launch.
 
 ## Native rendering
 

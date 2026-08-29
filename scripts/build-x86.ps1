@@ -53,6 +53,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Installer hash warning test failed.' }
 & (Join-Path $PSScriptRoot 'test-install-payload-upgrade.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Installer payload upgrade test failed.' }
 
+& (Join-Path $PSScriptRoot 'test-install-clean-bundled-dgvoodoo.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Clean bundled dgVoodoo installation test failed.' }
+
 $dist = Join-Path $repoRoot 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 Copy-Item -LiteralPath $dll -Destination (Join-Path $dist 'DINPUT.dll') -Force

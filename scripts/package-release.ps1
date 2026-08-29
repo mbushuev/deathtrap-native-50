@@ -29,6 +29,27 @@ if ($config -notmatch '(?m)^DebugLog=0\s*$') {
     throw 'Release configuration must set Diagnostics/DebugLog=0.'
 }
 
+$dgVoodooFiles = @(
+    @{
+        Path = 'third_party\dgVoodoo2-2.86.2\x86\DDraw.dll'
+        Sha256 = '9EDACB27DE03EA2D0C104DE2CE255D4C992A46E2867BCCB3713A8995D56F84A5'
+    },
+    @{
+        Path = 'third_party\dgVoodoo2-2.86.2\x86\D3DImm.dll'
+        Sha256 = '8B2850D0AF5F07CF2928AC9666192C3ADCB0290F10ED8F942F1594F3A4F51C73'
+    }
+)
+foreach ($dgVoodooFile in $dgVoodooFiles) {
+    $path = Join-Path $repoRoot $dgVoodooFile.Path
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "Required dgVoodoo runtime file is missing: $path"
+    }
+    $actualHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+    if ($actualHash -ne $dgVoodooFile.Sha256) {
+        throw "Unexpected dgVoodoo runtime hash for $path`: $actualHash"
+    }
+}
+
 if (-not $SkipBuild) {
     & (Join-Path $PSScriptRoot 'build-x86.ps1') `
         -Configuration Release -BuildDirectory $BuildDirectory
@@ -76,7 +97,9 @@ New-Item -ItemType Directory -Path $stageRoot | Out-Null
 $releaseFiles = @(
     @{ Source = 'dist\DINPUT.dll'; Destination = 'payload\DINPUT.dll' },
     @{ Source = 'config\deathtrap_native.ini'; Destination = 'payload\deathtrap_native.ini' },
-    @{ Source = 'config\dgVoodoo-recommended.conf'; Destination = 'optional\dgVoodoo.conf' },
+    @{ Source = 'third_party\dgVoodoo2-2.86.2\x86\DDraw.dll'; Destination = 'payload\dgVoodoo\DDraw.dll' },
+    @{ Source = 'third_party\dgVoodoo2-2.86.2\x86\D3DImm.dll'; Destination = 'payload\dgVoodoo\D3DImm.dll' },
+    @{ Source = 'config\dgVoodoo-recommended.conf'; Destination = 'payload\dgVoodoo.conf' },
     @{ Source = 'docs\images\dgvoodoo-general.png'; Destination = 'optional\dgVoodoo-General.png' },
     @{ Source = 'docs\images\dgvoodoo-directx.png'; Destination = 'optional\dgVoodoo-DirectX.png' },
     @{ Source = 'scripts\install.ps1'; Destination = 'install.ps1' },

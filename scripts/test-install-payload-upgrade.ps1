@@ -31,6 +31,9 @@ try {
     [System.IO.File]::WriteAllText($oldIni, 'previous installed configuration')
     $oldDllHash = Get-TestHash $oldDll
     $oldIniHash = Get-TestHash $oldIni
+    $oldDDrawHash = Get-TestHash (Join-Path $game 'DDraw.dll')
+    $oldD3DImmHash = Get-TestHash (Join-Path $game 'D3DImm.dll')
+    $oldDgConfigHash = Get-TestHash (Join-Path $game 'dgVoodoo.conf')
 
     $originalKeys = (@(
         'define    ACTION_WALK_FORWARD       DOWN      KEY_UP',
@@ -81,6 +84,15 @@ try {
         -Destination (Join-Path $payload 'DINPUT.dll')
     Copy-Item -LiteralPath (Join-Path $repoRoot 'config\deathtrap_native.ini') `
         -Destination (Join-Path $payload 'deathtrap_native.ini')
+    $payloadDgVoodoo = Join-Path $payload 'dgVoodoo'
+    New-Item -ItemType Directory -Path $payloadDgVoodoo -Force | Out-Null
+    foreach ($wrapper in @('DDraw.dll', 'D3DImm.dll')) {
+        Copy-Item -LiteralPath (Join-Path $repoRoot `
+            "third_party\dgVoodoo2-2.86.2\x86\$wrapper") `
+            -Destination (Join-Path $payloadDgVoodoo $wrapper)
+    }
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'config\dgVoodoo-recommended.conf') `
+        -Destination (Join-Path $payload 'dgVoodoo.conf')
 
     & powershell.exe -NoProfile -ExecutionPolicy Bypass `
         -File (Join-Path $game 'install.ps1') -SkipGameHashCheck
@@ -94,6 +106,16 @@ try {
     if ((Get-TestHash $oldIni) -ne (Get-TestHash (Join-Path $payload 'deathtrap_native.ini'))) {
         throw 'Installer did not replace the old configuration with the payload configuration.'
     }
+    foreach ($wrapper in @('DDraw.dll', 'D3DImm.dll')) {
+        if ((Get-TestHash (Join-Path $game $wrapper)) -ne
+                (Get-TestHash (Join-Path $payloadDgVoodoo $wrapper))) {
+            throw "Installer did not install bundled dgVoodoo file $wrapper."
+        }
+    }
+    if ((Get-TestHash (Join-Path $game 'dgVoodoo.conf')) -ne
+            (Get-TestHash (Join-Path $payload 'dgVoodoo.conf'))) {
+        throw 'Installer did not install the bundled dgVoodoo configuration.'
+    }
 
     $backups = @(Get-ChildItem -LiteralPath (Join-Path $game 'back') -Directory |
         Where-Object { $_.Name -like 'deathtrap-native50-overlay-*' })
@@ -106,6 +128,15 @@ try {
     }
     if ((Get-TestHash (Join-Path $backup.FullName 'deathtrap_native.ini')) -ne $oldIniHash) {
         throw 'Rollback directory does not contain the previous configuration.'
+    }
+    if ((Get-TestHash (Join-Path $backup.FullName 'DDraw.dll')) -ne $oldDDrawHash) {
+        throw 'Rollback directory does not contain the previous DDraw.dll.'
+    }
+    if ((Get-TestHash (Join-Path $backup.FullName 'D3DImm.dll')) -ne $oldD3DImmHash) {
+        throw 'Rollback directory does not contain the previous D3DImm.dll.'
+    }
+    if ((Get-TestHash (Join-Path $backup.FullName 'dgVoodoo.conf')) -ne $oldDgConfigHash) {
+        throw 'Rollback directory does not contain the previous dgVoodoo.conf.'
     }
     if ((Get-TestHash (Join-Path $backup.FullName 'ASYLUM_keys.cfg')) -ne $oldKeysHash) {
         throw 'Rollback directory does not contain the original control file.'

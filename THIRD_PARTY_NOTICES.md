@@ -1,7 +1,33 @@
 # Third-party notices
 
-`DINPUT.dll` statically links MinHook 1.3.4. MinHook source is downloaded at
-configure time and is not vendored in this repository.
+The public package also includes two unmodified runtime files from dgVoodoo
+2.86.2: the x86 `DDraw.dll` and `D3DImm.dll`. `DINPUT.dll` statically links
+MinHook 1.3.4. MinHook source is downloaded at configure time and is not
+vendored in this repository.
+
+## dgVoodoo2
+
+dgVoodoo 2
+
+Copyright (c) 2013-2025 Dege
+
+Project: https://github.com/dege-diosg/dgVoodoo2
+
+Official documentation and redistribution terms:
+https://dgvoodoo2.dege.freeweb.hu/dgVoodoo2/ReadmeGeneral/
+
+The author permits individual dgVoodoo files to be shipped with a game or game
+mod. Hosting or redistributing dgVoodoo as a standalone component requires the
+complete original ZIP package. Deathtrap Native 50 is a game-specific patch
+and redistributes only the two unmodified x86 runtime DLLs required by this
+game. It does not include the control-panel application.
+
+Bundled version: 2.86.2
+
+- `DDraw.dll` SHA-256:
+  `9EDACB27DE03EA2D0C104DE2CE255D4C992A46E2867BCCB3713A8995D56F84A5`
+- `D3DImm.dll` SHA-256:
+  `8B2850D0AF5F07CF2928AC9666192C3ADCB0290F10ED8F942F1594F3A4F51C73`
 
 ## MinHook
 
