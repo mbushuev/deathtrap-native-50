@@ -124,6 +124,15 @@ constexpr uintptr_t kCameraVolumeVisibleRva = 0x00030910u;
 // validator, which requires all focus samples and all points of the camera's
 // own cardinal endpoint footprint to succeed.
 constexpr uintptr_t kCameraRoomTraceVisibleRva = 0x0004E760u;
+// Native gameplay-object collision contracts. 0x66910 walks two object lists
+// rooted at sector+0x38 and keeps objects whose descriptor+0x20 intersects the
+// supplied mask. Its caller-owned result cursor is fixed at +0xA0 and has no
+// capacity argument, so the diagnostic reproduces that read-only traversal
+// with explicit bounds instead of invoking it. 0x4A110 is the engine getter
+// that refreshes and returns the selected object's transformed collision
+// resource.
+constexpr uintptr_t kNativeCollisionResourceRva = 0x0004A110u;
+constexpr uint32_t kNativeCameraCollisionMask = 0x00000001u;
 constexpr size_t kCameraControllerPlayerXPointerOffset = 0xFCu;
 constexpr size_t kCameraControllerPlayerYPointerOffset = 0x100u;
 constexpr size_t kCameraControllerPlayerZPointerOffset = 0x104u;
@@ -276,6 +285,21 @@ constexpr double kMaximumNodeRotationDegrees = 100.0;
 constexpr double kMaximumScaleRatio = 1.25;
 constexpr double kMaximumBasisDot = 0.025;
 constexpr double kCameraCollisionSphereRadius = 96.0;
+constexpr double kOwnedCameraRoomRadiusRampDistance =
+    kCameraCollisionSphereRadius * 3.0;
+constexpr double kOwnedCameraPredictionTicks = 6.0;
+constexpr double kOwnedCameraPredictionMaximumDistance = 512.0;
+constexpr double kOwnedCameraAngularPredictionTicks = 4.0;
+constexpr double kOwnedCameraAngularPredictionMaximumRadians =
+    18.0 * 3.14159265358979323846 / 180.0;
+constexpr double kOwnedCameraPredictiveContractionStep = 256.0;
+constexpr double kOwnedCameraBlockedReleaseMargin = 48.0;
+constexpr uint32_t kOwnedCameraNearPivotClearTicksBeforeRelease = 30u;
+constexpr uint32_t kOwnedCameraNearPivotBlockedTicksBeforeRelease = 30u;
+constexpr double kOwnedCameraNearPivotReleaseStep = 16.0;
+constexpr double kOwnedCameraPlayerBodyRadius = 120.0;
+constexpr double kOwnedCameraPlayerCapsuleRadius =
+    kOwnedCameraPlayerBodyRadius + kCameraCollisionSphereRadius;
 constexpr double kCameraCollisionMaximumObjectRadius = 6000.0;
 constexpr double kCameraCollisionRadiusMotionTolerance = 8.0;
 // Dungeon.dll+0x3B93F tests this bit before dispatching the node's render
@@ -284,6 +308,13 @@ constexpr double kCameraCollisionRadiusMotionTolerance = 8.0;
 // invisible camera obstacle merely because its transform and bounds are still
 // present in the scene tree.
 constexpr uint32_t kNodeSkipOwnRenderFlag = 0x02000000u;
+// Dungeon.dll+0x3B950 maps this node bit to render-command flag 0x08. The
+// legacy D3D backend handles that command flag at 0x5834E/0x584D0 by enabling
+// alpha blending and publishing 0x80 vertex alpha. Applying it temporarily to
+// the player subtree therefore gives us the engine's own stable 50-percent
+// character presentation without changing shared mesh resources or global
+// render state.
+constexpr uint32_t kNodeHalfTransparentRenderFlag = 0x04000000u;
 
 constexpr std::array<uint8_t, 16> kRateConsumerSignature = {
     0x8B, 0x83, 0x08, 0x08, 0x00, 0x00, 0x85, 0xC0,
@@ -377,6 +408,8 @@ struct CameraCollisionMesh {
 struct CameraMeshHitDiagnostic {
   uintptr_t node = 0;
   uintptr_t resource = 0;
+  uintptr_t native_object = 0;
+  uintptr_t native_collision_resource = 0;
   size_t triangle_index = std::numeric_limits<size_t>::max();
   Vec3 a{};
   Vec3 b{};
@@ -385,11 +418,32 @@ struct CameraMeshHitDiagnostic {
   std::array<int32_t, 3> bounds_center{};
   int32_t bounds_radius = 0;
   double bounds_motion = 0.0;
+  std::array<double, 3> scaled_extents{};
   bool initial_overlap = false;
   bool overlap_pushout = false;
   bool near_pivot_escape = false;
+  bool native_collision = false;
+  bool soft_obstacle = false;
   size_t pushout_axis = std::numeric_limits<size_t>::max();
   bool valid = false;
+};
+
+struct NativeCollisionResourceProbe {
+  uintptr_t resource = 0;
+  uint32_t group_count = 0;
+  uint32_t convex_group_count = 0;
+  uint32_t other_group_count = 0;
+  uint32_t plane_count = 0;
+  uint32_t other_primitive_count = 0;
+  double hit_distance = std::numeric_limits<double>::infinity();
+  bool layout_valid = false;
+  bool hit = false;
+  bool initial_overlap = false;
+};
+
+struct NativeCollisionObjectLogState {
+  uint64_t signature = 0;
+  uint64_t last_tick = 0;
 };
 
 struct OwnedCameraSceneSweepResult {
@@ -471,20 +525,31 @@ struct InterpolationStats {
 struct ActivePresentationTrace {
   uint64_t tick = 0;
   uintptr_t player = 0;
+  uintptr_t camera = 0;
   const SceneSnapshot* exact_scene = nullptr;
   std::array<int32_t, 3> exact_projection{};
+  std::array<int32_t, 3> midpoint_expected{};
   std::array<int32_t, 3> midpoint_seen{};
+  std::array<int32_t, 3> midpoint_camera_expected{};
+  std::array<int32_t, 3> midpoint_camera_seen{};
+  std::array<int32_t, 3> midpoint_camera_focus{};
   std::array<int32_t, 3> exact_before_projection{};
   std::array<int32_t, 3> exact_seen{};
+  std::array<int32_t, 3> exact_camera_seen{};
   uint64_t exact_projection_nodes = 0;
   uint32_t midpoint_calls = 0;
   uint32_t exact_calls = 0;
   DeathtrapNativePresentationStage stage =
       DeathtrapNativePresentationStage::kNone;
   bool exact_projection_valid = false;
+  bool midpoint_expected_valid = false;
   bool midpoint_seen_valid = false;
+  bool midpoint_camera_expected_valid = false;
+  bool midpoint_camera_seen_valid = false;
+  bool midpoint_camera_focus_valid = false;
   bool exact_before_projection_valid = false;
   bool exact_seen_valid = false;
+  bool exact_camera_seen_valid = false;
 };
 
 struct PresentationTraceSample {
@@ -612,6 +677,7 @@ std::mutex g_native_log_mutex;
 HANDLE g_native_log_file = INVALID_HANDLE_VALUE;
 bool g_camera_probe_enabled = false;
 bool g_head_joint_probe_enabled = false;
+bool g_native_collision_probe_enabled = false;
 CameraProbeSnapshot g_camera_probe_previous;
 std::string g_camera_probe_log_buffer;
 bool g_third_person_orbit_enabled = false;
@@ -663,6 +729,11 @@ struct ThirdPersonOrbitState {
   double collision_radius = 0.0;
   double filtered_input_x = 0.0;
   double filtered_input_y = 0.0;
+  double control_yaw_step = 0.0;
+  double control_pitch_step = 0.0;
+  double focus_motion_this_tick = 0.0;
+  int32_t mouse_delta_x_this_tick = 0;
+  int32_t mouse_delta_y_this_tick = 0;
   // Native mode-3 focus (controller+0x264). The retail controller itself
   // maintains the previous focus at +0x258 and its source-tick delta at
   // +0x270; using the same anchor prevents actor/prop geometry around the
@@ -692,7 +763,6 @@ struct ThirdPersonOrbitState {
   bool motion_active_this_tick = false;
   bool orbit_input_active_this_tick = false;
   uint64_t last_input_sequence = 0;
-  uint64_t last_input_time_ms = 0;
   uint64_t applications = 0;
   bool suspended = false;
   // The current native endpoint is contracted or otherwise collision-owned.
@@ -727,6 +797,19 @@ struct ThirdPersonOrbitState {
   uint32_t owned_collision_blocked_release_ticks = 0;
   double owned_collision_blocked_candidate_distance = 0.0;
   uint64_t owned_collision_blocker_key = 0;
+  uint64_t owned_soft_obstacle_blocker_key = 0;
+  uint64_t owned_soft_obstacle_last_source_tick = 0;
+  uint32_t owned_soft_obstacle_consecutive_ticks = 0;
+  double owned_support_log_radius = 0.0;
+  bool owned_support_log_radius_valid = false;
+  double owned_support_previous_radius_delta = 0.0;
+  uint64_t owned_support_oscillation_window_start_tick = 0;
+  uint32_t owned_support_oscillation_reversal_count = 0;
+  uint64_t owned_character_probe_sequence = 0;
+  bool owned_character_probe_inside = false;
+  bool owned_character_probe_valid = false;
+  uint32_t owned_player_fade_clear_ticks = 0;
+  bool owned_player_fade_active = false;
   bool owned_publication_active = false;
 };
 
@@ -738,6 +821,9 @@ std::unordered_set<uintptr_t> g_camera_nonblocking_meshes_logged;
 std::unordered_set<uintptr_t> g_camera_renderer_skipped_nodes_logged;
 std::unordered_set<uint64_t> g_camera_room_sectors_logged;
 uintptr_t g_camera_room_collection_base = 0;
+uintptr_t g_native_collision_probe_scene_root = 0;
+std::unordered_map<uintptr_t, NativeCollisionObjectLogState>
+    g_native_collision_object_log_states;
 
 struct RuntimeRoomGraphCache {
   uintptr_t collection = 0;
@@ -766,6 +852,7 @@ std::atomic<uint32_t> g_custom_camera_view_mode{
 std::atomic<bool> g_custom_head_publication_active{false};
 std::atomic<uint64_t> g_custom_head_last_publication_ms{0};
 std::atomic<bool> g_scripted_camera_override_active{false};
+std::atomic<bool> g_owned_camera_player_fade_requested{false};
 // A full-owned source state may jump between disconnected safe shot regions.
 // The source hook sets this once; the presentation scheduler consumes it and
 // suppresses interpolation across that one transition.
@@ -988,6 +1075,7 @@ using CameraLookAtFn = void(__cdecl*)(const int32_t* camera_position,
                                       int32_t* angles);
 using CameraHistoryAddFn = int32_t*(__cdecl*)(void* history,
                                               const int32_t* position);
+using NativeCollisionResourceFn = uintptr_t(__cdecl*)(uintptr_t object);
 using RedbookTracksFn = uint32_t(__stdcall*)(void* handle);
 using RedbookPlayFn = int32_t(__stdcall*)(void* handle, uint32_t start,
                                           uint32_t end);
@@ -1021,6 +1109,7 @@ CameraVolumeVisibleFn g_camera_volume_visible = nullptr;
 CameraRoomTraceVisibleFn g_camera_room_trace_visible = nullptr;
 CameraLookAtFn g_original_camera_look_at = nullptr;
 CameraHistoryAddFn g_original_camera_history_add = nullptr;
+NativeCollisionResourceFn g_native_collision_resource = nullptr;
 RedbookTracksFn g_original_redbook_tracks = nullptr;
 RedbookPlayFn g_original_redbook_play = nullptr;
 uint32_t* g_steam_mss_mp3_track_index = nullptr;
@@ -2232,7 +2321,8 @@ bool SweepOwnedCameraAgainstRooms(
         cache.sectors, start_index, room_focus, room_requested,
         kCameraCollisionSphereRadius, g_third_person_orbit_min_radius,
         kCandidateOffsets, previous_candidate_index,
-        kCameraCollisionSphereRadius, 8.0, 32u, false);
+        kCameraCollisionSphereRadius, 8.0, 32u, false,
+        kOwnedCameraRoomRadiusRampDistance);
     if (!orbit_plan->valid || orbit_plan->candidates.empty()) {
       return false;
     }
@@ -2240,7 +2330,8 @@ bool SweepOwnedCameraAgainstRooms(
   } else {
     *sweep = deathtrap_camera::SweepSphereThroughRooms(
         cache.sectors, start_index, room_focus, room_requested,
-        kCameraCollisionSphereRadius, 8.0, 32u);
+        kCameraCollisionSphereRadius, 8.0, 32u,
+        kOwnedCameraRoomRadiusRampDistance);
   }
   if (!sweep->valid) {
     return false;
@@ -3453,8 +3544,6 @@ bool InitializeThirdPersonOrbit(void* controller, int32_t native_x,
   // effect immediately instead of waiting for another native source tick.
   g_third_person_orbit_state.last_input_sequence =
       input_sequence ? input_sequence - 1u : 0u;
-  g_third_person_orbit_state.last_input_time_ms =
-      GetTickCount64() - kOriginalPeriodMilliseconds;
   AppendNativeLog(
       "camera_orbit engage native=%d/%d/%d focus=%d/%d/%d "
       "yaw=%.2f pitch=%.2f radius=%.1f",
@@ -3473,6 +3562,8 @@ void ResetThirdPersonOrbit(const char* reason) {
   g_custom_head_publication_active.store(false,
                                           std::memory_order_release);
   g_custom_head_last_publication_ms.store(0, std::memory_order_release);
+  g_owned_camera_player_fade_requested.store(
+      false, std::memory_order_release);
   if (g_third_person_orbit_state.engaged) {
     AppendNativeLog("camera_orbit disengage reason=%s applications=%llu",
                     reason,
@@ -3494,6 +3585,8 @@ bool BuildThirdPersonOrbitPosition(void* controller,
     ResetThirdPersonOrbit("disabled");
     return false;
   }
+  const double control_yaw_before = g_third_person_orbit_state.yaw;
+  const double control_pitch_before = g_third_person_orbit_state.pitch;
   // This function is reached only from the verified mode-3 dispatcher hook.
   // Do not re-check controller+0x27C after the retail callback: fixed/rail
   // branches rewrite that byte to 0/1 even though execution is still inside
@@ -3525,6 +3618,8 @@ bool BuildThirdPersonOrbitPosition(void* controller,
   const int32_t mouse_delta_y = std::clamp(
       g_third_person_mouse_delta_y.exchange(0, std::memory_order_acq_rel),
       -2048, 2048);
+  g_third_person_orbit_state.mouse_delta_x_this_tick = mouse_delta_x;
+  g_third_person_orbit_state.mouse_delta_y_this_tick = mouse_delta_y;
   const uint64_t input_sequence =
       g_third_person_orbit_input_sequence.load(std::memory_order_acquire);
   const bool stick_moved = std::abs(input_x) > 0.0001 ||
@@ -3550,17 +3645,57 @@ bool BuildThirdPersonOrbitPosition(void* controller,
                        g_third_person_orbit_state.previous_player[2])),
         static_cast<double>(
             focus[1] - g_third_person_orbit_state.previous_player[1]));
-    if (focus_jump > 2500.0 &&
-        !InitializeThirdPersonOrbit(controller, native[0], native[1], native[2],
-                                    focus, input_sequence)) {
-      ResetThirdPersonOrbit("focus_teleport");
-      return false;
+    if (focus_jump > 2500.0) {
+      // A level/portal teleport can leave the retail camera's delayed desired
+      // point thousands of units from the new player position. Re-seeding the
+      // modern orbit from that value produced a large, late direction jump.
+      // Keep user yaw/pitch/radius, move only the focus, discard all old-room
+      // collision history and cut once to the newly validated owned pose.
+      g_third_person_orbit_state.previous_player = focus;
+      g_third_person_orbit_state.chase_focus = {
+          static_cast<double>(focus[0]),
+          static_cast<double>(focus[1]),
+          static_cast<double>(focus[2])};
+      g_third_person_orbit_state.chase_velocity = {0.0, 0.0, 0.0};
+      g_third_person_orbit_state.chase_initialized = true;
+      g_third_person_orbit_state.collision_clear_ticks = 0;
+      g_third_person_orbit_state.collision_blocked_release_ticks = 0;
+      g_third_person_orbit_state.collision_blocked_candidate_distance = 0.0;
+      g_third_person_orbit_state.collision_blocker_key = 0;
+      g_third_person_orbit_state.owned_collision_radius = 0.0;
+      g_third_person_orbit_state.owned_collision_clear_ticks = 0;
+      g_third_person_orbit_state.owned_collision_blocked_release_ticks = 0;
+      g_third_person_orbit_state
+          .owned_collision_blocked_candidate_distance = 0.0;
+      g_third_person_orbit_state.owned_collision_blocker_key = 0;
+      g_third_person_orbit_state.owned_soft_obstacle_blocker_key = 0;
+      g_third_person_orbit_state.owned_soft_obstacle_last_source_tick = 0;
+      g_third_person_orbit_state.owned_soft_obstacle_consecutive_ticks = 0;
+      g_third_person_orbit_state.owned_support_log_radius = 0.0;
+      g_third_person_orbit_state.owned_support_log_radius_valid = false;
+      g_third_person_orbit_state.owned_support_previous_radius_delta = 0.0;
+      g_third_person_orbit_state
+          .owned_support_oscillation_window_start_tick = 0;
+      g_third_person_orbit_state
+          .owned_support_oscillation_reversal_count = 0;
+      g_third_person_orbit_state.owned_room_shadow_candidate_index =
+          std::numeric_limits<size_t>::max();
+      g_third_person_orbit_state.owned_room_direct_clear_ticks = 0;
+      g_third_person_orbit_state.owned_near_pivot_view_active = false;
+      g_third_person_orbit_state.owned_near_pivot_direct_clear_ticks = 0;
+      g_third_person_orbit_state.owned_room_shadow_offset_initialized = false;
+      g_third_person_orbit_state.mesh_contact_preference = {};
+      g_third_person_orbit_state.owned_publication_active = false;
+      g_owned_camera_presentation_cut_pending.store(
+          true, std::memory_order_release);
+      AppendDeathtrapSupportLog(
+          "camera_focus_teleport distance=%.1f action=PRESERVE_ORBIT",
+          focus_jump);
     }
   }
 
   if (g_third_person_orbit_state.suspended) {
     g_third_person_orbit_state.suspended = false;
-    g_third_person_orbit_state.last_input_time_ms = GetTickCount64();
     g_third_person_orbit_state.last_input_sequence = input_sequence;
     AppendNativeLog("camera_orbit resume yaw=%.2f pitch=%.2f radius=%.1f",
                     g_third_person_orbit_state.yaw * 180.0 / kOrbitPi,
@@ -3589,12 +3724,12 @@ bool BuildThirdPersonOrbitPosition(void* controller,
       active_maximum_pitch);
 
   if (input_sequence != g_third_person_orbit_state.last_input_sequence) {
-    const uint64_t now_ms = GetTickCount64();
-    const double elapsed_seconds = std::clamp(
-        static_cast<double>(now_ms -
-                            g_third_person_orbit_state.last_input_time_ms) /
-            1000.0,
-        0.010, 0.100);
+    // Mode-3 consumes controller state at Dungeon's deterministic 16.7 Hz
+    // source boundary. A wall-clock delta gives constant stick input unequal
+    // yaw arcs whenever Windows scheduling varies; interpolation then merely
+    // subdivides those unequal arcs and preserves their velocity pulse.
+    constexpr double elapsed_seconds =
+        static_cast<double>(kOriginalPeriodMilliseconds) / 1000.0;
     const double response = 1.0 - std::exp(
         -elapsed_seconds / g_third_person_orbit_response_seconds);
     if (stick_input_active) {
@@ -3624,7 +3759,6 @@ bool BuildThirdPersonOrbitPosition(void* controller,
           g_third_person_orbit_state.yaw, 2.0 * kOrbitPi);
     }
     g_third_person_orbit_state.last_input_sequence = input_sequence;
-    g_third_person_orbit_state.last_input_time_ms = now_ms;
   }
 
   // Physical relative mouse motion is positional, not a velocity. Apply each
@@ -3667,6 +3801,12 @@ bool BuildThirdPersonOrbitPosition(void* controller,
 
   const double player_motion = CameraPositionDistance(
       focus, g_third_person_orbit_state.previous_player);
+  g_third_person_orbit_state.focus_motion_this_tick = player_motion;
+  g_third_person_orbit_state.control_yaw_step = std::remainder(
+      g_third_person_orbit_state.yaw - control_yaw_before,
+      2.0 * kOrbitPi);
+  g_third_person_orbit_state.control_pitch_step =
+      g_third_person_orbit_state.pitch - control_pitch_before;
   g_third_person_orbit_state.motion_active_this_tick =
       player_motion > 8.0 || stick_moved || mouse_moved;
   g_third_person_orbit_state.orbit_input_active_this_tick =
@@ -3892,6 +4032,186 @@ bool ResolveLivePlayerHeadMount(
     *head_node = node;
   }
   return true;
+}
+
+bool ResolveOwnedCameraPlayerCapsule(
+    const SceneSnapshot& scene,
+    const std::array<int32_t, 3>& current_camera_focus,
+    std::array<int32_t, 3>* lower,
+    std::array<int32_t, 3>* upper,
+    bool* animated_head_used) {
+  if (!lower || !upper || !scene.player_position_valid ||
+      !scene.camera_focus_valid) {
+    return false;
+  }
+  for (size_t axis = 0; axis < 3u; ++axis) {
+    const int64_t translated_root =
+        static_cast<int64_t>(scene.player_position[axis]) +
+        static_cast<int64_t>(current_camera_focus[axis]) -
+        static_cast<int64_t>(scene.camera_focus[axis]);
+    (*lower)[axis] = static_cast<int32_t>(std::clamp<int64_t>(
+        translated_root, std::numeric_limits<int32_t>::min(),
+        std::numeric_limits<int32_t>::max()));
+  }
+
+  uintptr_t ignored_head_node = 0;
+  const bool head_resolved = ResolveLivePlayerHeadMount(
+      scene, current_camera_focus, upper, &ignored_head_node);
+  if (!head_resolved) {
+    // The engine focus is a stable torso-height point. Extend the root-to-focus
+    // vector for a conservative diagnostic head fallback without depending on
+    // an animated weapon, braid, or projectile attachment.
+    constexpr double kFallbackHeadScale = 1.6;
+    for (size_t axis = 0; axis < 3u; ++axis) {
+      const double fallback = static_cast<double>((*lower)[axis]) +
+          (static_cast<double>(current_camera_focus[axis]) -
+           static_cast<double>((*lower)[axis])) * kFallbackHeadScale;
+      if (!std::isfinite(fallback) ||
+          fallback < static_cast<double>(std::numeric_limits<int32_t>::min()) ||
+          fallback > static_cast<double>(std::numeric_limits<int32_t>::max())) {
+        return false;
+      }
+      (*upper)[axis] = static_cast<int32_t>(std::lround(fallback));
+    }
+  }
+
+  const double capsule_length = CameraPositionDistance(*lower, *upper);
+  if (!std::isfinite(capsule_length) || capsule_length < 160.0 ||
+      capsule_length > 1200.0) {
+    return false;
+  }
+  if (animated_head_used) {
+    *animated_head_used = head_resolved;
+  }
+  return true;
+}
+
+CameraCapsuleClearance MeasureOwnedCameraPlayerClearance(
+    const SceneSnapshot& scene,
+    const std::array<int32_t, 3>& current_camera_focus,
+    const std::array<int32_t, 3>& camera_position,
+    bool* animated_head_used = nullptr,
+    std::array<int32_t, 3>* resolved_lower = nullptr,
+    std::array<int32_t, 3>* resolved_upper = nullptr) {
+  std::array<int32_t, 3> lower{};
+  std::array<int32_t, 3> upper{};
+  bool head_used = false;
+  if (!ResolveOwnedCameraPlayerCapsule(
+          scene, current_camera_focus, &lower, &upper, &head_used)) {
+    return {};
+  }
+  if (animated_head_used) {
+    *animated_head_used = head_used;
+  }
+  if (resolved_lower) {
+    *resolved_lower = lower;
+  }
+  if (resolved_upper) {
+    *resolved_upper = upper;
+  }
+  return MeasureCameraCapsuleClearance(
+      {static_cast<double>(camera_position[0]),
+       static_cast<double>(camera_position[1]),
+       static_cast<double>(camera_position[2])},
+      {static_cast<double>(lower[0]), static_cast<double>(lower[1]),
+       static_cast<double>(lower[2])},
+      {static_cast<double>(upper[0]), static_cast<double>(upper[1]),
+       static_cast<double>(upper[2])},
+      kOwnedCameraPlayerCapsuleRadius);
+}
+
+void UpdateOwnedCameraPlayerFade(
+    const SceneSnapshot& scene,
+    const std::array<int32_t, 3>& current_camera_focus,
+    const std::array<int32_t, 3>& camera_position) {
+  auto& state = g_third_person_orbit_state;
+  const CameraCapsuleClearance clearance =
+      MeasureOwnedCameraPlayerClearance(
+          scene, current_camera_focus, camera_position);
+  const CameraCharacterFadeStep step = StepCameraCharacterFade(
+      state.owned_player_fade_active, clearance.valid,
+      clearance.clearance, state.owned_player_fade_clear_ticks,
+      0.0, 64.0, 3u);
+  state.owned_player_fade_active = step.active;
+  state.owned_player_fade_clear_ticks = step.clear_ticks;
+  g_owned_camera_player_fade_requested.store(
+      step.active, std::memory_order_release);
+  if (step.changed) {
+    AppendDeathtrapSupportLog(
+        "camera_character_fade state=%s clearance=%.1f "
+        "centerline=%.1f t=%.3f",
+        step.active ? "HALF_TRANSPARENT" : "OPAQUE",
+        clearance.valid ? clearance.clearance : 0.0,
+        clearance.valid ? clearance.centerline_distance : 0.0,
+        clearance.valid ? clearance.segment_parameter : 0.0);
+  }
+}
+
+void LogOwnedCameraCharacterProbe(
+    const std::array<int32_t, 3>& current_camera_focus,
+    const std::array<int32_t, 3>& requested,
+    const std::array<int32_t, 3>& accepted) {
+  auto& state = g_third_person_orbit_state;
+  ++state.owned_character_probe_sequence;
+  std::array<int32_t, 3> lower{};
+  std::array<int32_t, 3> upper{};
+  bool animated_head_used = false;
+  const bool capsule_valid = ResolveOwnedCameraPlayerCapsule(
+      g_previous_snapshot, current_camera_focus, &lower, &upper,
+      &animated_head_used);
+  if (!capsule_valid) {
+    if (state.owned_character_probe_valid ||
+        (state.owned_character_probe_sequence % 120u) == 1u) {
+      AppendDeathtrapSupportLog(
+          "camera_character_probe valid=0 focus=%d/%d/%d",
+          current_camera_focus[0], current_camera_focus[1],
+          current_camera_focus[2]);
+    }
+    state.owned_character_probe_valid = false;
+    state.owned_character_probe_inside = false;
+    return;
+  }
+
+  const std::array<double, 3> lower_double{
+      static_cast<double>(lower[0]), static_cast<double>(lower[1]),
+      static_cast<double>(lower[2])};
+  const std::array<double, 3> upper_double{
+      static_cast<double>(upper[0]), static_cast<double>(upper[1]),
+      static_cast<double>(upper[2])};
+  const std::array<double, 3> accepted_double{
+      static_cast<double>(accepted[0]), static_cast<double>(accepted[1]),
+      static_cast<double>(accepted[2])};
+  const CameraCapsuleClearance clearance = MeasureCameraCapsuleClearance(
+      accepted_double, lower_double, upper_double,
+      kOwnedCameraPlayerCapsuleRadius);
+  if (!clearance.valid) {
+    state.owned_character_probe_valid = false;
+    state.owned_character_probe_inside = false;
+    return;
+  }
+
+  const bool transition = !state.owned_character_probe_valid ||
+      clearance.inside != state.owned_character_probe_inside;
+  const double accepted_radius = CameraPositionDistance(
+      current_camera_focus, accepted);
+  const bool periodic =
+      (state.owned_character_probe_sequence % 120u) == 1u;
+  if (transition || periodic) {
+    AppendDeathtrapSupportLog(
+        "camera_character_probe valid=1 inside=%u head=%s "
+        "radius=%.1f clearance=%.1f centerline=%.1f t=%.3f "
+        "root=%d/%d/%d head_pos=%d/%d/%d requested=%d/%d/%d "
+        "accepted=%d/%d/%d",
+        clearance.inside ? 1u : 0u,
+        animated_head_used ? "ANIMATED" : "FOCUS_FALLBACK",
+        accepted_radius, clearance.clearance,
+        clearance.centerline_distance, clearance.segment_parameter,
+        lower[0], lower[1], lower[2], upper[0], upper[1], upper[2],
+        requested[0], requested[1], requested[2], accepted[0], accepted[1],
+        accepted[2]);
+  }
+  state.owned_character_probe_valid = true;
+  state.owned_character_probe_inside = clearance.inside;
 }
 
 void ProbePlayerHeadJoints(const SceneSnapshot& scene, uint64_t source_tick,
@@ -4729,11 +5049,618 @@ bool CameraMeshSweepDistance(const CameraCollisionMesh& mesh,
   return hit;
 }
 
+struct NativeCollisionSectorCollectionStats {
+  uint32_t list_nodes = 0;
+  uint32_t mask_matches = 0;
+  uint32_t duplicate_objects = 0;
+  uint32_t invalid_reads = 0;
+  bool truncated = false;
+};
+
+bool CollectNativeCollisionObjectsFromSector(
+    uintptr_t sector, std::vector<uintptr_t>* objects,
+    std::unordered_set<uintptr_t>* object_set,
+    NativeCollisionSectorCollectionStats* stats) {
+  if (!sector || !objects || !object_set || !stats) {
+    return false;
+  }
+  uintptr_t lists = 0;
+  if (!SafeReadValue(reinterpret_cast<const void*>(sector + 0x38u),
+                     &lists) ||
+      !lists) {
+    ++stats->invalid_reads;
+    return false;
+  }
+
+  constexpr size_t kMaximumListNodes = 128u;
+  constexpr size_t kMaximumCollectedObjects = 256u;
+  bool any_list_valid = false;
+  for (uintptr_t list_offset : {0x08u, 0x0Cu}) {
+    uintptr_t link = 0;
+    if (!SafeReadValue(reinterpret_cast<const void*>(lists + list_offset),
+                       &link)) {
+      ++stats->invalid_reads;
+      continue;
+    }
+    any_list_valid = true;
+    std::unordered_set<uintptr_t> visited;
+    visited.reserve(32u);
+    for (size_t index = 0; link && index < kMaximumListNodes; ++index) {
+      if (!visited.insert(link).second) {
+        ++stats->invalid_reads;
+        break;
+      }
+      ++stats->list_nodes;
+      uintptr_t next = 0;
+      uintptr_t object = 0;
+      if (!SafeReadValue(reinterpret_cast<const void*>(link), &next) ||
+          !SafeReadValue(reinterpret_cast<const void*>(link + 0x08u),
+                         &object)) {
+        ++stats->invalid_reads;
+        break;
+      }
+      if (object) {
+        uintptr_t descriptor = 0;
+        uint32_t flags = 0;
+        if (SafeReadValue(reinterpret_cast<const void*>(object + 0x28u),
+                          &descriptor) &&
+            descriptor &&
+            SafeReadValue(reinterpret_cast<const void*>(descriptor + 0x20u),
+                          &flags)) {
+          if ((flags & kNativeCameraCollisionMask) != 0u) {
+            ++stats->mask_matches;
+            if (object_set->insert(object).second) {
+              if (objects->size() < kMaximumCollectedObjects) {
+                objects->push_back(object);
+              } else {
+                stats->truncated = true;
+              }
+            } else {
+              ++stats->duplicate_objects;
+            }
+          }
+        } else {
+          ++stats->invalid_reads;
+        }
+      }
+      link = next;
+    }
+    if (link) {
+      stats->truncated = true;
+    }
+  }
+  return any_list_valid;
+}
+
+bool CollectNativeCollisionObjectsAlongSegment(
+    const SceneSnapshot& scene, const std::array<int32_t, 3>& focus,
+    const std::array<int32_t, 3>& requested,
+    std::vector<uintptr_t>* objects,
+    NativeCollisionSectorCollectionStats* stats) {
+  if (!objects || !stats || !g_resolve_camera_sector) {
+    return false;
+  }
+  objects->clear();
+  *stats = {};
+  uintptr_t collection = 0;
+  int32_t sector_count = 0;
+  uintptr_t sector_base = 0;
+  if (!ReadRuntimeRoomCollection(&collection, &sector_count, &sector_base)) {
+    return false;
+  }
+
+  uintptr_t seed_sector = scene.camera_sector_valid
+      ? scene.camera_sector
+      : sector_base;
+  if (g_third_person_orbit_state.controller) {
+    uintptr_t holder = 0;
+    uintptr_t controller_seed = 0;
+    const uintptr_t controller = reinterpret_cast<uintptr_t>(
+        g_third_person_orbit_state.controller);
+    if (SafeReadValue(reinterpret_cast<const void*>(
+                          controller + kCameraControllerRoomPointerOffset),
+                      &holder) &&
+        holder &&
+        SafeReadValue(reinterpret_cast<const void*>(holder),
+                      &controller_seed) &&
+        controller_seed) {
+      seed_sector = controller_seed;
+    }
+  }
+
+  std::vector<uintptr_t> sectors;
+  sectors.reserve(9u);
+  std::unordered_set<uintptr_t> sector_set;
+  sector_set.reserve(9u);
+  const uintptr_t sector_bytes =
+      static_cast<uintptr_t>(sector_count) * 0x3Cu;
+  for (int32_t sample = 0; sample <= 8; ++sample) {
+    std::array<int32_t, 3> point{};
+    for (size_t axis = 0; axis < point.size(); ++axis) {
+      const int64_t weighted =
+          static_cast<int64_t>(focus[axis]) * (8 - sample) +
+          static_cast<int64_t>(requested[axis]) * sample;
+      point[axis] = static_cast<int32_t>(weighted / 8);
+    }
+    const uintptr_t sector =
+        ResolveOwnedCameraStartSector(point, seed_sector);
+    const bool sector_valid = sector >= sector_base &&
+        sector < sector_base + sector_bytes &&
+        ((sector - sector_base) % 0x3Cu) == 0u;
+    if (sector_valid) {
+      seed_sector = sector;
+      if (sector_set.insert(sector).second) {
+        sectors.push_back(sector);
+      }
+    }
+  }
+
+  std::unordered_set<uintptr_t> object_set;
+  object_set.reserve(128u);
+  objects->reserve(64u);
+  for (uintptr_t sector : sectors) {
+    CollectNativeCollisionObjectsFromSector(
+        sector, objects, &object_set, stats);
+  }
+  return !sectors.empty();
+}
+
+uintptr_t ResolveNativeCollisionSceneNode(const SceneSnapshot& scene,
+                                          uintptr_t object) {
+  if (!object) {
+    return 0;
+  }
+  if (scene.nodes.find(object) != scene.nodes.end()) {
+    return object;
+  }
+  uintptr_t render_link = 0;
+  if (!SafeReadValue(reinterpret_cast<const void*>(object + 0x10u),
+                     &render_link) ||
+      !render_link) {
+    return 0;
+  }
+  if (scene.nodes.find(render_link) != scene.nodes.end()) {
+    return render_link;
+  }
+  uintptr_t render_node = 0;
+  if (SafeReadValue(reinterpret_cast<const void*>(render_link),
+                    &render_node) &&
+      render_node && scene.nodes.find(render_node) != scene.nodes.end()) {
+    return render_node;
+  }
+  return 0;
+}
+
+bool SweepNativeCollisionResource(uintptr_t resource, const Vec3& origin,
+                                  const Vec3& direction, double radius,
+                                  double maximum_distance,
+                                  NativeCollisionResourceProbe* probe,
+                                  bool ignore_initial_overlap = false) {
+  if (!resource || !probe || !std::isfinite(maximum_distance) ||
+      maximum_distance <= 0.0) {
+    return false;
+  }
+  *probe = {};
+  probe->resource = resource;
+
+  int32_t group_count = 0;
+  if (!SafeReadValue(reinterpret_cast<const void*>(resource + 0x04u),
+                     &group_count) ||
+      group_count < 0 || group_count > 128) {
+    return false;
+  }
+  probe->group_count = static_cast<uint32_t>(group_count);
+  uintptr_t cursor = resource + 0x08u;
+  double nearest = maximum_distance;
+  bool any_hit = false;
+  bool nearest_initial_overlap = false;
+
+  for (int32_t group_index = 0; group_index < group_count; ++group_index) {
+    uint32_t flags = 0;
+    int32_t primitive_count = 0;
+    if (!SafeReadValue(reinterpret_cast<const void*>(cursor), &flags) ||
+        !SafeReadValue(reinterpret_cast<const void*>(cursor + 0x04u),
+                       &primitive_count) ||
+        primitive_count < 0 || primitive_count > 4096) {
+      return false;
+    }
+    const bool convex_planes = (flags & 0x00000100u) != 0u;
+    const uintptr_t stride = convex_planes ? 0x18u : 0x10u;
+    const uintptr_t data = cursor + 0x08u;
+    const uintptr_t byte_count =
+        static_cast<uintptr_t>(primitive_count) * stride;
+    if (data < cursor || byte_count > 0x00100000u ||
+        data + byte_count < data) {
+      return false;
+    }
+
+    if (!convex_planes) {
+      ++probe->other_group_count;
+      probe->other_primitive_count +=
+          static_cast<uint32_t>(primitive_count);
+      cursor = data + byte_count;
+      continue;
+    }
+
+    ++probe->convex_group_count;
+    probe->plane_count += static_cast<uint32_t>(primitive_count);
+    bool group_valid = primitive_count >= 4;
+    std::vector<CameraConvexPlane> planes;
+    planes.reserve(static_cast<size_t>(std::max(primitive_count, 0)));
+    for (int32_t plane_index = 0;
+         plane_index < primitive_count && group_valid; ++plane_index) {
+      std::array<int32_t, 6> plane{};
+      const uintptr_t plane_address =
+          data + static_cast<uintptr_t>(plane_index) * stride;
+      if (!SafeRead(reinterpret_cast<const void*>(plane_address),
+                    plane.data(), sizeof(plane))) {
+        group_valid = false;
+        break;
+      }
+      const Vec3 point{static_cast<double>(plane[0]),
+                       static_cast<double>(plane[1]),
+                       static_cast<double>(plane[2])};
+      const Vec3 normal{static_cast<double>(plane[3]),
+                        static_cast<double>(plane[4]),
+                        static_cast<double>(plane[5])};
+      const double normal_length =
+          std::sqrt(CameraVectorDot(normal, normal));
+      if (!std::isfinite(normal_length) || normal_length < 1024.0 ||
+          normal_length > 32768.0) {
+        group_valid = false;
+        break;
+      }
+      planes.push_back({{point.x, point.y, point.z},
+                        {normal.x, normal.y, normal.z}});
+    }
+
+    const CameraConvexSweep sweep = group_valid
+        ? SweepCameraSphereAgainstConvexVolume(
+              {origin.x, origin.y, origin.z},
+              {direction.x, direction.y, direction.z}, radius,
+              maximum_distance, planes.data(), planes.size(),
+              ignore_initial_overlap)
+        : CameraConvexSweep{};
+    if (group_valid && !sweep.valid) {
+      return false;
+    }
+    if (sweep.hit && sweep.distance <= nearest) {
+        nearest = sweep.distance;
+        nearest_initial_overlap = sweep.initial_overlap;
+        any_hit = true;
+    }
+    cursor = data + byte_count;
+  }
+
+  probe->layout_valid = true;
+  probe->hit = any_hit;
+  probe->initial_overlap = nearest_initial_overlap;
+  probe->hit_distance = any_hit
+      ? nearest
+      : std::numeric_limits<double>::infinity();
+  return true;
+}
+
+uint64_t NativeCollisionProbeSignature(
+    uintptr_t descriptor, uint32_t flags, uintptr_t node,
+    uintptr_t render_resource,
+    const NativeCollisionResourceProbe& native_probe, bool mesh_hit,
+    double mesh_distance) {
+  auto mix = [](uint64_t seed, uint64_t value) {
+    return seed ^ (value + 0x9E3779B97F4A7C15ull + (seed << 6u) +
+                   (seed >> 2u));
+  };
+  auto distance_bin = [](bool hit, double distance) -> uint64_t {
+    if (!hit || !std::isfinite(distance)) {
+      return 0xFFFFFFFFull;
+    }
+    return static_cast<uint64_t>(std::max(0.0, std::floor(distance / 32.0)));
+  };
+  uint64_t signature = static_cast<uint64_t>(descriptor);
+  signature = mix(signature, flags);
+  signature = mix(signature, node);
+  signature = mix(signature, render_resource);
+  signature = mix(signature, native_probe.resource);
+  signature = mix(signature, native_probe.group_count);
+  signature = mix(signature, native_probe.convex_group_count);
+  signature = mix(signature, native_probe.plane_count);
+  signature = mix(signature,
+                  distance_bin(native_probe.hit,
+                               native_probe.hit_distance));
+  signature = mix(signature, distance_bin(mesh_hit, mesh_distance));
+  return signature;
+}
+
+uintptr_t ResolveNativeCollisionResourceSafely(uintptr_t object) {
+  if (!object || !g_native_collision_resource) {
+    return 0;
+  }
+  __try {
+    return g_native_collision_resource(object);
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return 0;
+  }
+}
+
 bool SweepOwnedCameraAgainstSceneMeshesInSnapshots(
     const SceneSnapshot& scene, const SceneSnapshot& stable_scene,
     const std::array<int32_t, 3>& focus,
     const std::array<int32_t, 3>& requested,
-    OwnedCameraSceneSweepResult* result) {
+    OwnedCameraSceneSweepResult* result,
+    bool filter_soft_obstacles = true);
+
+uint64_t CameraSpringBlockerKey(
+    bool native_blocked, bool mesh_blocked,
+    const CameraMeshHitDiagnostic* mesh_diagnostic);
+
+void ProbeNativeGameplayCollision(const SceneSnapshot& scene,
+                                  uint64_t source_tick) {
+  if (!g_native_collision_probe_enabled || !g_dungeon_base ||
+      !g_native_collision_resource || !g_resolve_camera_sector ||
+      (source_tick % 5u) != 1u) {
+    return;
+  }
+  if (scene.root != g_native_collision_probe_scene_root) {
+    g_native_collision_probe_scene_root = scene.root;
+    g_native_collision_object_log_states.clear();
+  }
+
+  std::array<int32_t, 3> focus{};
+  if (scene.camera_focus_valid) {
+    focus = scene.camera_focus;
+  } else if (g_third_person_orbit_state.previous_player !=
+             std::array<int32_t, 3>{}) {
+    focus = g_third_person_orbit_state.previous_player;
+  } else {
+    return;
+  }
+  std::array<int32_t, 3> requested{};
+  if (g_third_person_orbit_state.requested_position_valid) {
+    requested = g_third_person_orbit_state.requested_position;
+  } else {
+    const auto camera = scene.nodes.find(scene.camera);
+    if (camera == scene.nodes.end()) {
+      return;
+    }
+    std::copy_n(camera->second.world.values.begin() + 9, 3,
+                requested.begin());
+  }
+
+  const Vec3 origin{static_cast<double>(focus[0]),
+                    static_cast<double>(focus[1]),
+                    static_cast<double>(focus[2])};
+  const Vec3 endpoint{static_cast<double>(requested[0]),
+                      static_cast<double>(requested[1]),
+                      static_cast<double>(requested[2])};
+  const Vec3 delta = CameraVectorSubtract(endpoint, origin);
+  const double requested_distance =
+      std::sqrt(CameraVectorDot(delta, delta));
+  if (!std::isfinite(requested_distance) || requested_distance < 1.0 ||
+      requested_distance > 5000.0) {
+    return;
+  }
+  const Vec3 direction = CameraVectorScale(delta, 1.0 / requested_distance);
+
+  uintptr_t collection = 0;
+  int32_t sector_count = 0;
+  uintptr_t sector_base = 0;
+  if (!ReadRuntimeRoomCollection(&collection, &sector_count, &sector_base)) {
+    AppendDeathtrapSupportLog(
+        "native_collision_probe tick=%llu result=ROOM_COLLECTION_INVALID",
+        static_cast<unsigned long long>(source_tick));
+    return;
+  }
+  uintptr_t seed_sector = scene.camera_sector_valid
+      ? scene.camera_sector
+      : sector_base;
+  if (g_third_person_orbit_state.controller) {
+    uintptr_t holder = 0;
+    uintptr_t controller_seed = 0;
+    const uintptr_t controller = reinterpret_cast<uintptr_t>(
+        g_third_person_orbit_state.controller);
+    if (SafeReadValue(reinterpret_cast<const void*>(
+                          controller + kCameraControllerRoomPointerOffset),
+                      &holder) &&
+        holder &&
+        SafeReadValue(reinterpret_cast<const void*>(holder),
+                      &controller_seed) &&
+        controller_seed) {
+      seed_sector = controller_seed;
+    }
+  }
+
+  std::vector<uintptr_t> sectors;
+  sectors.reserve(9u);
+  std::unordered_set<uintptr_t> sector_set;
+  sector_set.reserve(9u);
+  const uintptr_t sector_bytes =
+      static_cast<uintptr_t>(sector_count) * 0x3Cu;
+  for (int32_t sample = 0; sample <= 8; ++sample) {
+    std::array<int32_t, 3> point{};
+    for (size_t axis = 0; axis < point.size(); ++axis) {
+      const int64_t weighted =
+          static_cast<int64_t>(focus[axis]) * (8 - sample) +
+          static_cast<int64_t>(requested[axis]) * sample;
+      point[axis] = static_cast<int32_t>(weighted / 8);
+    }
+    const uintptr_t sector =
+        ResolveOwnedCameraStartSector(point, seed_sector);
+    const bool sector_valid = sector >= sector_base &&
+        sector < sector_base + sector_bytes &&
+        ((sector - sector_base) % 0x3Cu) == 0u;
+    if (sector_valid) {
+      seed_sector = sector;
+      if (sector_set.insert(sector).second) {
+        sectors.push_back(sector);
+      }
+    }
+  }
+
+  std::vector<uintptr_t> objects;
+  objects.reserve(64u);
+  std::unordered_set<uintptr_t> object_set;
+  object_set.reserve(128u);
+  NativeCollisionSectorCollectionStats collection_stats;
+  for (uintptr_t sector : sectors) {
+    CollectNativeCollisionObjectsFromSector(
+        sector, &objects, &object_set, &collection_stats);
+  }
+
+  OwnedCameraSceneSweepResult scene_sweep;
+  const bool scene_sweep_valid =
+      !g_previous_snapshot.nodes.empty() &&
+      SweepOwnedCameraAgainstSceneMeshesInSnapshots(
+          scene, g_previous_snapshot, focus, requested, &scene_sweep,
+          false);
+
+  uintptr_t nearest_native_object = 0;
+  double nearest_native_distance = requested_distance;
+  uint32_t native_hits = 0;
+  uint32_t mapped_objects = 0;
+  uint32_t resource_objects = 0;
+  uint32_t layout_objects = 0;
+  uint32_t detail_lines = 0;
+  for (uintptr_t object : objects) {
+    uintptr_t descriptor = 0;
+    uint32_t flags = 0;
+    SafeReadValue(reinterpret_cast<const void*>(object + 0x28u),
+                  &descriptor);
+    if (descriptor) {
+      SafeReadValue(reinterpret_cast<const void*>(descriptor + 0x20u),
+                    &flags);
+    }
+
+    const uintptr_t collision_resource =
+        ResolveNativeCollisionResourceSafely(object);
+    if (collision_resource) {
+      ++resource_objects;
+    }
+    NativeCollisionResourceProbe native_probe;
+    const bool native_layout = collision_resource &&
+        SweepNativeCollisionResource(
+            collision_resource, origin, direction,
+            kCameraCollisionSphereRadius, requested_distance,
+            &native_probe);
+    if (native_layout) {
+      ++layout_objects;
+    }
+    if (native_probe.hit) {
+      ++native_hits;
+      if (!nearest_native_object ||
+          native_probe.hit_distance < nearest_native_distance) {
+        nearest_native_object = object;
+        nearest_native_distance = native_probe.hit_distance;
+      }
+    }
+
+    const uintptr_t node = ResolveNativeCollisionSceneNode(scene, object);
+    uintptr_t render_resource = 0;
+    bool mesh_hit = false;
+    double mesh_distance = requested_distance;
+    if (node) {
+      ++mapped_objects;
+      const auto transform = scene.nodes.find(node);
+      if (transform != scene.nodes.end()) {
+        render_resource = transform->second.render_resource_handle;
+        if (render_resource) {
+          std::lock_guard<std::mutex> mesh_lock(
+              g_camera_collision_mesh_mutex);
+          const CameraCollisionMesh* mesh =
+              ResolveCameraCollisionMesh(render_resource);
+          if (mesh) {
+            mesh_hit = CameraMeshSweepDistance(
+                *mesh, transform->second.world, origin, direction,
+                kCameraCollisionSphereRadius, 0.0, requested_distance,
+                &mesh_distance);
+          }
+        }
+      }
+    }
+
+    const uint64_t signature = NativeCollisionProbeSignature(
+        descriptor, flags, node, render_resource, native_probe, mesh_hit,
+        mesh_distance);
+    NativeCollisionObjectLogState& state =
+        g_native_collision_object_log_states[object];
+    const bool changed = state.signature != signature;
+    const bool heartbeat = source_tick - state.last_tick >= 60u;
+    const bool relevant = native_probe.hit || mesh_hit;
+    const bool relevant_sample = relevant &&
+        source_tick - state.last_tick >= 15u;
+    if (detail_lines < 24u &&
+        (changed || heartbeat || relevant_sample)) {
+      const char* result = !descriptor
+          ? "NO_DESCRIPTOR"
+          : (flags & kNativeCameraCollisionMask) == 0u
+                ? "MASK_REJECT"
+                : !collision_resource
+                      ? "NO_RESOURCE"
+                      : !native_layout
+                            ? "LAYOUT_INVALID"
+                            : native_probe.convex_group_count == 0u
+                                  ? "NO_CONVEX_GROUP"
+                                  : native_probe.hit ? "HIT" : "MISS";
+      AppendDeathtrapSupportLog(
+          "native_collision_object tick=%llu object=%08llX "
+          "descriptor=%08llX flags=%08X mask1=%u node=%08llX "
+          "render=%llu collision=%08llX groups=%u convex=%u other=%u "
+          "planes=%u other_primitives=%u native=%s/%.1f/%u "
+          "mesh=%s/%.1f result=%s",
+          static_cast<unsigned long long>(source_tick),
+          static_cast<unsigned long long>(object),
+          static_cast<unsigned long long>(descriptor), flags,
+          (flags & kNativeCameraCollisionMask) != 0u ? 1u : 0u,
+          static_cast<unsigned long long>(node),
+          static_cast<unsigned long long>(render_resource),
+          static_cast<unsigned long long>(collision_resource),
+          native_probe.group_count, native_probe.convex_group_count,
+          native_probe.other_group_count, native_probe.plane_count,
+          native_probe.other_primitive_count,
+          native_probe.hit ? "HIT" : "MISS",
+          native_probe.hit ? native_probe.hit_distance : -1.0,
+          native_probe.initial_overlap ? 1u : 0u,
+          mesh_hit ? "HIT" : "MISS", mesh_hit ? mesh_distance : -1.0,
+          result);
+      state.signature = signature;
+      state.last_tick = source_tick;
+      ++detail_lines;
+    }
+  }
+
+  AppendDeathtrapSupportLog(
+      "native_collision_probe tick=%llu focus=%d/%d/%d "
+      "requested=%d/%d/%d distance=%.1f sectors=%u objects=%u "
+      "list_nodes=%u mask_matches=%u duplicates=%u invalid=%u "
+      "truncated=%u mapped=%u resources=%u layouts=%u native_hits=%u "
+      "native_nearest=%08llX/%.1f mesh_nearest=%08llX/%llu/%.1f",
+      static_cast<unsigned long long>(source_tick), focus[0], focus[1],
+      focus[2], requested[0], requested[1], requested[2],
+      requested_distance, static_cast<unsigned>(sectors.size()),
+      static_cast<unsigned>(objects.size()), collection_stats.list_nodes,
+      collection_stats.mask_matches, collection_stats.duplicate_objects,
+      collection_stats.invalid_reads, collection_stats.truncated ? 1u : 0u,
+      mapped_objects, resource_objects, layout_objects, native_hits,
+      static_cast<unsigned long long>(nearest_native_object),
+      nearest_native_object ? nearest_native_distance : -1.0,
+      static_cast<unsigned long long>(
+          scene_sweep_valid && scene_sweep.blocked
+              ? scene_sweep.diagnostic.node
+              : 0u),
+      static_cast<unsigned long long>(
+          scene_sweep_valid && scene_sweep.blocked
+              ? scene_sweep.diagnostic.resource
+              : 0u),
+      scene_sweep_valid && scene_sweep.blocked
+          ? scene_sweep.contact_distance
+          : -1.0);
+}
+
+bool SweepOwnedCameraAgainstSceneMeshesInSnapshots(
+    const SceneSnapshot& scene, const SceneSnapshot& stable_scene,
+    const std::array<int32_t, 3>& focus,
+    const std::array<int32_t, 3>& requested,
+    OwnedCameraSceneSweepResult* result,
+    bool filter_soft_obstacles) {
   if (!result) {
     return false;
   }
@@ -4769,11 +5696,134 @@ bool SweepOwnedCameraAgainstSceneMeshesInSnapshots(
   const Vec3 direction = CameraVectorScale(delta, 1.0 / requested_distance);
 
   constexpr double kContactBackoff = 8.0;
+  constexpr double kSoftObstacleTwoAxisSpan =
+      kCameraCollisionSphereRadius * 4.0;
+  constexpr uint32_t kSoftObstacleConfirmationTicks = 3u;
   double nearest_contact = requested_distance;
   CameraMeshHitDiagnostic nearest_diagnostic;
   bool nearest_initial_overlap = false;
   bool found = false;
+  double nearest_soft_contact = requested_distance;
+  CameraMeshHitDiagnostic nearest_soft_diagnostic;
+  bool nearest_soft_initial_overlap = false;
+  bool soft_found = false;
+
+  // Native gameplay collision can be associated with the same render mesh
+  // that supplies the geometric clutter classification, so both paths share
+  // one cache lock for the duration of this deterministic query.
   std::lock_guard<std::mutex> mesh_lock(g_camera_collision_mesh_mutex);
+
+  // Dynamic gameplay objects expose transformed convex collision volumes
+  // through Dungeon.dll+0x4A110. Those volumes are closed and two-sided, so
+  // they remain well-defined when the focus begins inside their expanded
+  // boundary. They own collision for their render subtree; the old triangle
+  // fallback remains authoritative for every prop without such a volume.
+  std::vector<uintptr_t> native_owned_roots;
+  std::vector<uintptr_t> native_objects;
+  NativeCollisionSectorCollectionStats native_collection_stats;
+  if (g_native_collision_resource &&
+      CollectNativeCollisionObjectsAlongSegment(
+          scene, focus, requested, &native_objects,
+          &native_collection_stats)) {
+    native_owned_roots.reserve(native_objects.size());
+    for (uintptr_t object : native_objects) {
+      if (!object || object == scene.player_object) {
+        continue;
+      }
+      const uintptr_t collision_resource =
+          ResolveNativeCollisionResourceSafely(object);
+      if (!collision_resource) {
+        continue;
+      }
+      const uintptr_t native_root =
+          ResolveNativeCollisionSceneNode(scene, object);
+      std::array<double, 3> native_scaled_extents{};
+      bool native_render_blocks = true;
+      bool native_soft_obstacle = false;
+      const auto native_transform = scene.nodes.find(native_root);
+      if (native_transform != scene.nodes.end() &&
+          native_transform->second.render_resource_handle) {
+        const CameraCollisionMesh* native_mesh = ResolveCameraCollisionMesh(
+            native_transform->second.render_resource_handle);
+        if (native_mesh) {
+          native_render_blocks = CameraCollisionMeshBlocksCameraVolume(
+              *native_mesh, native_transform->second.world,
+              &native_scaled_extents);
+          native_soft_obstacle =
+              CameraMeshExtentsAreSoftObstacle(
+                  native_scaled_extents,
+                  kCameraCollisionSphereRadius * 2.0,
+                  kSoftObstacleTwoAxisSpan) ||
+              CameraMeshExtentsAreThinSheet(
+                  native_scaled_extents,
+                  kCameraCollisionSphereRadius * 0.5,
+                  kSoftObstacleTwoAxisSpan);
+        }
+      }
+      if (native_root && native_root != scene.root &&
+          native_root != scene.camera &&
+          !SceneNodeDescendsFrom(scene, native_root, scene.player) &&
+          !SceneNodeDescendsFrom(scene, scene.player, native_root) &&
+          std::find(native_owned_roots.begin(), native_owned_roots.end(),
+                    native_root) == native_owned_roots.end()) {
+        native_owned_roots.push_back(native_root);
+      }
+      if (!native_render_blocks) {
+        LogNonblockingCameraMesh(
+            native_transform != scene.nodes.end()
+                ? native_transform->second.render_resource_handle
+                : 0u,
+            native_scaled_extents);
+        continue;
+      }
+
+      const double native_maximum_distance = native_soft_obstacle
+          ? nearest_soft_contact
+          : nearest_contact;
+      NativeCollisionResourceProbe native_probe;
+      if (!SweepNativeCollisionResource(
+              collision_resource, origin, direction,
+              kCameraCollisionSphereRadius, native_maximum_distance,
+              &native_probe, true) ||
+          native_probe.convex_group_count == 0u) {
+        continue;
+      }
+      if (!native_probe.hit ||
+          native_probe.hit_distance > native_maximum_distance) {
+        continue;
+      }
+
+      CameraMeshHitDiagnostic native_diagnostic;
+      native_diagnostic.node = native_root;
+      native_diagnostic.native_object = object;
+      native_diagnostic.native_collision_resource = collision_resource;
+      native_diagnostic.native_collision = true;
+      native_diagnostic.soft_obstacle = native_soft_obstacle;
+      native_diagnostic.scaled_extents = native_scaled_extents;
+      native_diagnostic.initial_overlap =
+          native_probe.initial_overlap;
+      if (native_transform != scene.nodes.end()) {
+        native_diagnostic.resource =
+            native_transform->second.render_resource_handle;
+        native_diagnostic.bounds_center =
+            native_transform->second.bounds_center;
+        native_diagnostic.bounds_radius =
+            native_transform->second.bounds_radius;
+      }
+      if (native_soft_obstacle) {
+        nearest_soft_contact = native_probe.hit_distance;
+        nearest_soft_initial_overlap = native_probe.initial_overlap;
+        nearest_soft_diagnostic = native_diagnostic;
+        soft_found = true;
+      } else {
+        nearest_contact = native_probe.hit_distance;
+        nearest_initial_overlap = native_probe.initial_overlap;
+        nearest_diagnostic = native_diagnostic;
+        found = true;
+      }
+    }
+  }
+
   for (const auto& entry : scene.nodes) {
     const uintptr_t node = entry.first;
     const NodeTransform& current = entry.second;
@@ -4785,6 +5835,16 @@ bool SweepOwnedCameraAgainstSceneMeshesInSnapshots(
     }
     if (SceneNodeDescendsFrom(scene, node, scene.player) ||
         SceneNodeDescendsFrom(scene, scene.player, node)) {
+      continue;
+    }
+    bool native_subtree_owned = false;
+    for (uintptr_t native_root : native_owned_roots) {
+      if (SceneNodeDescendsFrom(scene, node, native_root)) {
+        native_subtree_owned = true;
+        break;
+      }
+    }
+    if (native_subtree_owned) {
       continue;
     }
 
@@ -4805,6 +5865,29 @@ bool SweepOwnedCameraAgainstSceneMeshesInSnapshots(
       continue;
     }
 
+    const CameraCollisionMesh* mesh =
+        ResolveCameraCollisionMesh(current.render_resource_handle);
+    if (!mesh) {
+      continue;
+    }
+    std::array<double, 3> scaled_extents{};
+    if (!CameraCollisionMeshBlocksCameraVolume(
+            *mesh, current.world, &scaled_extents)) {
+      LogNonblockingCameraMesh(current.render_resource_handle,
+                               scaled_extents);
+      continue;
+    }
+    const bool soft_obstacle =
+        CameraMeshExtentsAreSoftObstacle(
+            scaled_extents, kCameraCollisionSphereRadius * 2.0,
+            kSoftObstacleTwoAxisSpan) ||
+        CameraMeshExtentsAreThinSheet(
+            scaled_extents, kCameraCollisionSphereRadius * 0.5,
+            kSoftObstacleTwoAxisSpan);
+    const double class_nearest_contact = soft_obstacle
+        ? nearest_soft_contact
+        : nearest_contact;
+
     const Vec3 relative_center{
         static_cast<double>(current.bounds_center[0]) - origin.x,
         static_cast<double>(current.bounds_center[1]) - origin.y,
@@ -4814,7 +5897,7 @@ bool SweepOwnedCameraAgainstSceneMeshesInSnapshots(
         kCameraCollisionSphereRadius;
     const double projection = CameraVectorDot(relative_center, direction);
     if (projection + inflated_radius <= 0.0 ||
-        projection - inflated_radius >= nearest_contact) {
+        projection - inflated_radius >= class_nearest_contact) {
       continue;
     }
     const double center_distance_squared =
@@ -4826,25 +5909,13 @@ bool SweepOwnedCameraAgainstSceneMeshesInSnapshots(
       continue;
     }
 
-    const CameraCollisionMesh* mesh =
-        ResolveCameraCollisionMesh(current.render_resource_handle);
-    if (!mesh) {
-      continue;
-    }
-    double contact_distance = nearest_contact;
+    double contact_distance = class_nearest_contact;
     bool initial_overlap = false;
     CameraMeshHitDiagnostic diagnostic;
     if (!CameraMeshSweepDistance(
             *mesh, current.world, origin, direction,
-            kCameraCollisionSphereRadius, 0.0, nearest_contact,
+            kCameraCollisionSphereRadius, 0.0, class_nearest_contact,
             &contact_distance, &initial_overlap, &diagnostic)) {
-      continue;
-    }
-    std::array<double, 3> scaled_extents{};
-    if (!CameraCollisionMeshBlocksCameraVolume(
-            *mesh, current.world, &scaled_extents)) {
-      LogNonblockingCameraMesh(current.render_resource_handle,
-                               scaled_extents);
       continue;
     }
 
@@ -4861,18 +5932,20 @@ bool SweepOwnedCameraAgainstSceneMeshesInSnapshots(
       if (CameraMeshContainedPivotRayExitDistance(
               *mesh, current.world, origin, direction,
               kCameraCollisionSphereRadius, kContactBackoff,
-              nearest_contact, &pivot_exit_distance, &pivot_exit_axis)) {
+              class_nearest_contact, &pivot_exit_distance,
+              &pivot_exit_axis)) {
         constexpr double kPostExitStartMargin = 1.0;
         const double post_exit_start = std::min(
-            nearest_contact, pivot_exit_distance + kPostExitStartMargin);
+            class_nearest_contact,
+            pivot_exit_distance + kPostExitStartMargin);
         bool post_exit_hit = false;
-        double post_exit_distance = nearest_contact;
+        double post_exit_distance = class_nearest_contact;
         CameraMeshHitDiagnostic post_exit_diagnostic;
-        if (post_exit_start + 0.5 < nearest_contact) {
+        if (post_exit_start + 0.5 < class_nearest_contact) {
           post_exit_hit = CameraMeshSweepDistance(
               *mesh, current.world, origin, direction,
               kCameraCollisionSphereRadius, post_exit_start,
-              nearest_contact, &post_exit_distance, nullptr,
+              class_nearest_contact, &post_exit_distance, nullptr,
               &post_exit_diagnostic);
         }
         if (!post_exit_hit) {
@@ -4925,18 +5998,98 @@ bool SweepOwnedCameraAgainstSceneMeshesInSnapshots(
       }
     }
 
-    nearest_contact = contact_distance;
-    nearest_initial_overlap = initial_overlap;
-    nearest_diagnostic = diagnostic;
-    nearest_diagnostic.node = node;
-    nearest_diagnostic.resource = current.render_resource_handle;
-    nearest_diagnostic.bounds_center = current.bounds_center;
-    nearest_diagnostic.bounds_radius = current.bounds_radius;
-    nearest_diagnostic.bounds_motion = bounds_motion;
-    nearest_diagnostic.initial_overlap = initial_overlap;
-    nearest_diagnostic.overlap_pushout = false;
-    nearest_diagnostic.near_pivot_escape = false;
+    diagnostic.node = node;
+    diagnostic.resource = current.render_resource_handle;
+    diagnostic.native_object = 0;
+    diagnostic.native_collision_resource = 0;
+    diagnostic.native_collision = false;
+    diagnostic.soft_obstacle = soft_obstacle;
+    diagnostic.scaled_extents = scaled_extents;
+    diagnostic.bounds_center = current.bounds_center;
+    diagnostic.bounds_radius = current.bounds_radius;
+    diagnostic.bounds_motion = bounds_motion;
+    diagnostic.initial_overlap = initial_overlap;
+    diagnostic.overlap_pushout = false;
+    diagnostic.near_pivot_escape = false;
+    if (soft_obstacle) {
+      nearest_soft_contact = contact_distance;
+      nearest_soft_initial_overlap = initial_overlap;
+      nearest_soft_diagnostic = diagnostic;
+      soft_found = true;
+    } else {
+      nearest_contact = contact_distance;
+      nearest_initial_overlap = initial_overlap;
+      nearest_diagnostic = diagnostic;
+      found = true;
+    }
+  }
+
+  const bool soft_is_nearest =
+      soft_found && (!found || nearest_soft_contact < nearest_contact);
+  if (soft_is_nearest && filter_soft_obstacles &&
+      !nearest_soft_diagnostic.native_collision) {
+    // A narrow render-only mesh is visual clutter, not authored gameplay
+    // collision. Flags, posts and small housings may remain in the orbit ray
+    // for many ticks, so a temporal delay merely postpones the same snap.
+    // Ignore them persistently. A real wall/door behind the mesh is retained
+    // in nearest_diagnostic, and any object exposing a native closed volume
+    // follows the confirmed soft-volume path below.
+    const uint64_t soft_blocker_key = CameraSpringBlockerKey(
+        false, true, &nearest_soft_diagnostic);
+    static std::unordered_set<uint64_t> logged_render_only_ignores;
+    if (logged_render_only_ignores.insert(soft_blocker_key).second) {
+      AppendDeathtrapSupportLog(
+          "camera_soft_obstacle action=IGNORE_RENDER_ONLY key=%llu "
+          "contact=%.1f extents=%.1f/%.1f/%.1f",
+          static_cast<unsigned long long>(soft_blocker_key),
+          nearest_soft_contact,
+          nearest_soft_diagnostic.scaled_extents[0],
+          nearest_soft_diagnostic.scaled_extents[1],
+          nearest_soft_diagnostic.scaled_extents[2]);
+    }
+  } else if (soft_is_nearest &&
+      !filter_soft_obstacles) {
+    nearest_contact = nearest_soft_contact;
+    nearest_initial_overlap = nearest_soft_initial_overlap;
+    nearest_diagnostic = nearest_soft_diagnostic;
     found = true;
+  } else if (soft_is_nearest) {
+    ThirdPersonOrbitState& state = g_third_person_orbit_state;
+    const uint64_t source_tick =
+        g_source_ticks.load(std::memory_order_relaxed);
+    const uint64_t soft_blocker_key = CameraSpringBlockerKey(
+        false, true, &nearest_soft_diagnostic);
+    const uint64_t previous_tick =
+        state.owned_soft_obstacle_last_source_tick;
+    const CameraSoftObstacleGateStep gate = StepCameraSoftObstacleGate(
+        state.owned_soft_obstacle_blocker_key,
+        state.owned_soft_obstacle_last_source_tick,
+        state.owned_soft_obstacle_consecutive_ticks,
+        soft_blocker_key, source_tick,
+        kSoftObstacleConfirmationTicks);
+    state.owned_soft_obstacle_blocker_key = gate.blocker_key;
+    state.owned_soft_obstacle_last_source_tick = gate.last_source_tick;
+    state.owned_soft_obstacle_consecutive_ticks = gate.consecutive_ticks;
+    if (source_tick != previous_tick &&
+        (gate.consecutive_ticks == 1u || gate.accepted)) {
+      AppendDeathtrapSupportLog(
+          "camera_soft_obstacle tick=%llu action=%s key=%llu "
+          "contact=%.1f evidence=%u extents=%.1f/%.1f/%.1f native=%u",
+          static_cast<unsigned long long>(source_tick),
+          gate.accepted ? "ACCEPT" : "PENDING",
+          static_cast<unsigned long long>(soft_blocker_key),
+          nearest_soft_contact, gate.consecutive_ticks,
+          nearest_soft_diagnostic.scaled_extents[0],
+          nearest_soft_diagnostic.scaled_extents[1],
+          nearest_soft_diagnostic.scaled_extents[2],
+          nearest_soft_diagnostic.native_collision ? 1u : 0u);
+    }
+    if (gate.accepted) {
+      nearest_contact = nearest_soft_contact;
+      nearest_initial_overlap = nearest_soft_initial_overlap;
+      nearest_diagnostic = nearest_soft_diagnostic;
+      found = true;
+    }
   }
 
   if (!found) {
@@ -5404,7 +6557,8 @@ bool PublishOwnedCameraEndpoint(
   const deathtrap_camera::RoomSweepResult final_room =
       deathtrap_camera::SweepSphereThroughRooms(
           g_runtime_room_graph.sectors, start_sector_index, room_focus,
-          room_target, kCameraCollisionSphereRadius, 8.0, 32u);
+          room_target, kCameraCollisionSphereRadius, 8.0, 32u,
+          kOwnedCameraRoomRadiusRampDistance);
   if (!final_room.valid ||
       final_room.sector >= g_runtime_room_graph.sectors.size()) {
     AppendNativeLog(
@@ -5708,7 +6862,7 @@ bool PublishImmersiveFirstPersonEndpoint(
   OwnedCameraSceneSweepResult scene_sweep;
   const bool scene_valid = SweepOwnedCameraAgainstSceneMeshesInSnapshots(
       g_previous_snapshot, g_older_snapshot, head_center, safe_eye,
-      &scene_sweep);
+      &scene_sweep, false);
   if (scene_valid && scene_sweep.blocked) {
     safe_eye = scene_sweep.position;
   }
@@ -6419,8 +7573,25 @@ uint64_t CameraSpringBlockerKey(
     const CameraMeshHitDiagnostic* mesh_diagnostic) {
   constexpr uint64_t kNativeBlockerKey = 1u;
   if (!mesh_blocked || !mesh_diagnostic ||
-      (!mesh_diagnostic->node && !mesh_diagnostic->resource)) {
+      (!mesh_diagnostic->node && !mesh_diagnostic->resource &&
+       !mesh_diagnostic->native_object)) {
     return native_blocked ? kNativeBlockerKey : 0u;
+  }
+  if (mesh_diagnostic->native_collision &&
+      mesh_diagnostic->native_object) {
+    // The native function returns one of several transformed scratch buffers,
+    // so the resource address changes while the same block moves. Gameplay
+    // object identity is stable and must own the spring release history.
+    uint64_t key = static_cast<uint64_t>(
+        mesh_diagnostic->native_object);
+    if (mesh_diagnostic->node) {
+      key ^= static_cast<uint64_t>(mesh_diagnostic->node) +
+          0x9E3779B97F4A7C15ull + (key << 6u) + (key >> 2u);
+    }
+    if (native_blocked) {
+      key ^= 0xD1B54A32D192ED03ull;
+    }
+    return key > kNativeBlockerKey ? key : key + 2u;
   }
   // Node pointers are stable only within one launch, which is exactly the
   // lifetime of the spring state. Mix the render resource as well so reused
@@ -6511,7 +7682,9 @@ bool ResolveOwnedCameraSpringArm(
     const std::array<int32_t, 3>& requested,
     const std::array<int32_t, 3>& collision_safe,
     bool obstruction_present, uint64_t blocker_key,
-    std::array<int32_t, 3>* submitted) {
+    std::array<int32_t, 3>* submitted,
+    double predictive_safe_distance =
+        std::numeric_limits<double>::quiet_NaN()) {
   if (!submitted || !g_third_person_orbit_state.engaged) {
     return false;
   }
@@ -6559,6 +7732,23 @@ bool ResolveOwnedCameraSpringArm(
 
   const double previous_radius = std::clamp(
       state.owned_collision_radius, 0.0, desired_distance);
+  const bool near_pivot_recovery =
+      state.owned_near_pivot_view_active;
+  // A long near-pivot hold is useful while the player runs along one wall,
+  // but it must not imprison an actively rotated camera inside the actor.
+  // Current user orbit input is an explicit search for another ray. Once that
+  // exact ray has room, recover promptly until the camera is outside the
+  // player volume; any renewed current obstruction still contracts
+  // immediately through the unchanged hard-safe path.
+  const bool user_orbit_close_recovery =
+      state.orbit_input_active_this_tick && previous_radius < 512.0;
+  // Keep a collision-contracted ordinary orbit radially stable while the
+  // user is turning. Inward safety remains immediate, but a clear sector no
+  // longer extends the arm just before the next wall sector contracts it.
+  // Near-pivot input deliberately keeps its prompt escape path.
+  const bool user_orbit_radius_hold =
+      state.orbit_input_active_this_tick && !user_orbit_close_recovery &&
+      previous_radius + 0.5 < desired_distance;
   const CameraSpringArmStep step = StepCameraSpringArm(
       desired_distance,
       obstruction_present ? std::min(safe_distance, desired_distance)
@@ -6568,7 +7758,23 @@ bool ResolveOwnedCameraSpringArm(
       state.owned_collision_blocked_release_ticks,
       state.owned_collision_blocked_candidate_distance,
       state.owned_collision_blocker_key, blocker_key,
-      10u, 8u, 64.0, false);
+      user_orbit_close_recovery
+          ? 2u
+          : near_pivot_recovery
+          ? kOwnedCameraNearPivotClearTicksBeforeRelease
+          : 10u,
+      user_orbit_close_recovery
+          ? 2u
+          : near_pivot_recovery
+          ? kOwnedCameraNearPivotBlockedTicksBeforeRelease
+          : 8u,
+      user_orbit_close_recovery
+          ? 96.0
+          : near_pivot_recovery ? kOwnedCameraNearPivotReleaseStep : 64.0,
+      false, predictive_safe_distance,
+      kOwnedCameraPredictiveContractionStep,
+      kOwnedCameraBlockedReleaseMargin,
+      user_orbit_radius_hold);
   state.owned_collision_radius = step.radius;
   state.owned_collision_clear_ticks = step.clear_ticks;
   state.owned_collision_blocked_release_ticks =
@@ -6587,13 +7793,14 @@ bool ResolveOwnedCameraSpringArm(
     AppendNativeLog(
         "camera_owned_spring desired=%.1f hard=%.1f actual=%.1f->%.1f "
         "blocked=%u clear_ticks=%u blocked_release_ticks=%u "
-        "blocker=%llu candidate=%.1f",
+        "blocker=%llu candidate=%.1f forecast=%.1f",
         desired_distance, safe_distance, previous_radius, step.radius,
         obstruction_present ? 1u : 0u,
         state.owned_collision_clear_ticks,
         state.owned_collision_blocked_release_ticks,
         static_cast<unsigned long long>(state.owned_collision_blocker_key),
-        state.owned_collision_blocked_candidate_distance);
+        state.owned_collision_blocked_candidate_distance,
+        predictive_safe_distance);
   }
   return true;
 }
@@ -7430,6 +8637,11 @@ void __cdecl HookMode3Camera(void* controller) {
   if (!BeginMode3SourceTick(controller)) {
     return;
   }
+  // Fail open for every new camera transaction. Only a successfully
+  // published modern third-person endpoint below may request character
+  // transparency; head view, scripted shots and hybrid fallback stay opaque.
+  g_owned_camera_player_fade_requested.store(
+      false, std::memory_order_release);
   g_third_person_orbit_state.collision_constrained_this_tick = false;
   g_last_mode3_source_tick_ms.store(GetTickCount64(),
                                      std::memory_order_release);
@@ -7493,6 +8705,8 @@ void __cdecl HookMode3Camera(void* controller) {
       g_third_person_orbit_state.controller == controller;
   const std::array<int32_t, 3> previous_focus =
       g_third_person_orbit_state.previous_player;
+  const double previous_orbit_yaw = g_third_person_orbit_state.yaw;
+  const double previous_orbit_pitch = g_third_person_orbit_state.pitch;
   std::array<int32_t, 3> orbit{};
   if (!BuildThirdPersonOrbitPosition(controller, native, &orbit)) {
     return;
@@ -7606,6 +8820,9 @@ void __cdecl HookMode3Camera(void* controller) {
         owned_room_plan.selected_index;
     const auto& target =
         owned_room_plan.candidates[owned_room_plan.selected_index].offset;
+    // World collision shortens only the exact user orbit. The analytic player
+    // capsule no longer selects another pitch or camera mode; it is consumed
+    // later as presentation-only evidence for character transparency.
     if (!g_third_person_orbit_state
              .owned_room_shadow_offset_initialized) {
       g_third_person_orbit_state.owned_room_shadow_applied_yaw = 0.0;
@@ -7644,7 +8861,8 @@ void __cdecl HookMode3Camera(void* controller) {
              g_third_person_orbit_state.owned_room_shadow_applied_pitch});
     owned_room_applied_sweep = deathtrap_camera::SweepSphereThroughRooms(
         g_runtime_room_graph.sectors, owned_room_start_index, room_focus,
-        applied_requested, kCameraCollisionSphereRadius, 8.0, 32u);
+        applied_requested, kCameraCollisionSphereRadius, 8.0, 32u,
+        kOwnedCameraRoomRadiusRampDistance);
     owned_room_applied_valid = owned_room_applied_sweep.valid;
     if (owned_room_applied_valid) {
       const double applied_safe_distance = deathtrap_camera::Length(
@@ -7727,34 +8945,123 @@ void __cdecl HookMode3Camera(void* controller) {
           owned_room_applied_sweep.blocked, owned_scene_sweep.blocked,
           owned_scene_sweep.blocked ? &owned_scene_sweep.diagnostic
                                     : nullptr);
-      const CameraNearPivotModeStep near_pivot_step =
-          StepCameraNearPivotMode(
-              g_third_person_orbit_state.owned_near_pivot_view_active,
-              combined_safe_distance,
-              g_third_person_orbit_state
-                  .owned_near_pivot_direct_clear_ticks,
-              kThirdPersonMinimumCameraDistance,
-              owned_minimum_transition_distance, 4u);
-      g_third_person_orbit_state.owned_near_pivot_view_active =
-          near_pivot_step.active;
-      g_third_person_orbit_state.owned_near_pivot_direct_clear_ticks =
-          near_pivot_step.direct_clear_ticks;
+      double owned_predictive_safe_distance =
+          std::numeric_limits<double>::quiet_NaN();
+      bool owned_predictive_room_blocked = false;
+      bool owned_predictive_motion_blocked = false;
+      bool owned_predictive_angular_blocked = false;
+      double owned_predictive_focus_distance = 0.0;
+      double owned_predictive_angular_distance = 0.0;
+      if (previous_modern_sample_valid &&
+          !g_third_person_orbit_state.owned_near_pivot_view_active &&
+          owned_room_start_index < g_runtime_room_graph.sectors.size()) {
+        const deathtrap_camera::RoomVec3 focus_motion{
+            static_cast<double>(camera_focus[0] - previous_focus[0]),
+            static_cast<double>(camera_focus[1] - previous_focus[1]),
+            static_cast<double>(camera_focus[2] - previous_focus[2])};
+        const double focus_motion_distance =
+            deathtrap_camera::Length(focus_motion);
+        if (std::isfinite(focus_motion_distance) &&
+            focus_motion_distance >= 1.0 &&
+            focus_motion_distance <= 256.0) {
+          const double prediction_scale = std::min(
+              kOwnedCameraPredictionTicks,
+              kOwnedCameraPredictionMaximumDistance /
+                  focus_motion_distance);
+          const deathtrap_camera::RoomVec3 predicted_focus =
+              room_focus + focus_motion * prediction_scale;
+          const deathtrap_camera::RoomSweepResult focus_path =
+              deathtrap_camera::SweepSphereThroughRooms(
+                  g_runtime_room_graph.sectors, owned_room_start_index,
+                  room_focus, predicted_focus, 0.0, 0.0, 32u);
+          if (focus_path.valid && !focus_path.blocked &&
+              focus_path.fraction >= 1.0 - 1.0e-6 &&
+              focus_path.sector < g_runtime_room_graph.sectors.size()) {
+            const deathtrap_camera::RoomVec3 predicted_requested =
+                predicted_focus + (applied_requested - room_focus);
+            const deathtrap_camera::RoomSweepResult predicted_camera =
+                deathtrap_camera::SweepSphereThroughRooms(
+                    g_runtime_room_graph.sectors, focus_path.sector,
+                    predicted_focus, predicted_requested,
+                    kCameraCollisionSphereRadius, 8.0, 32u,
+                    kOwnedCameraRoomRadiusRampDistance);
+            const double predicted_distance = deathtrap_camera::Length(
+                predicted_camera.position - predicted_focus);
+            if (predicted_camera.valid && predicted_camera.blocked &&
+                std::isfinite(predicted_distance) &&
+                CameraPredictionMayContractWithoutNearPivot(
+                    g_third_person_orbit_state
+                        .owned_near_pivot_view_active,
+                    predicted_distance,
+                    owned_minimum_transition_distance) &&
+                predicted_distance + 0.5 < combined_safe_distance) {
+              owned_predictive_safe_distance = predicted_distance;
+              owned_predictive_room_blocked = true;
+              owned_predictive_motion_blocked = true;
+              owned_predictive_focus_distance =
+                  deathtrap_camera::Length(predicted_focus - room_focus);
+            }
+          }
+        }
+      }
+      if (previous_modern_sample_valid &&
+          owned_room_start_index < g_runtime_room_graph.sectors.size()) {
+        const CameraOrbitAngularPrediction angular_prediction =
+            PredictCameraOrbitControlMotion(
+                {static_cast<double>(camera_focus[0]),
+                 static_cast<double>(camera_focus[1]),
+                 static_cast<double>(camera_focus[2])},
+                {applied_requested.x, applied_requested.y,
+                 applied_requested.z},
+                std::remainder(
+                    g_third_person_orbit_state.yaw - previous_orbit_yaw,
+                    2.0 * kOrbitPi),
+                g_third_person_orbit_state.pitch - previous_orbit_pitch,
+                kOwnedCameraAngularPredictionTicks,
+                kOwnedCameraAngularPredictionMaximumRadians);
+        if (angular_prediction.valid) {
+          const deathtrap_camera::RoomVec3 predicted_requested{
+              angular_prediction.position[0],
+              angular_prediction.position[1],
+              angular_prediction.position[2]};
+          const deathtrap_camera::RoomSweepResult predicted_camera =
+              deathtrap_camera::SweepSphereThroughRooms(
+                  g_runtime_room_graph.sectors, owned_room_start_index,
+                  room_focus, predicted_requested,
+                  kCameraCollisionSphereRadius, 8.0, 32u,
+                  kOwnedCameraRoomRadiusRampDistance);
+          const double predicted_distance = deathtrap_camera::Length(
+              predicted_camera.position - room_focus);
+          if (predicted_camera.valid && predicted_camera.blocked &&
+              std::isfinite(predicted_distance) &&
+              CameraAngularPredictionMayContract(
+                  combined_obstructed,
+                  g_third_person_orbit_state
+                      .owned_near_pivot_view_active,
+                  predicted_distance,
+                  owned_minimum_transition_distance) &&
+              predicted_distance + 0.5 < combined_safe_distance &&
+              (!std::isfinite(owned_predictive_safe_distance) ||
+               predicted_distance < owned_predictive_safe_distance)) {
+            owned_predictive_safe_distance = predicted_distance;
+            owned_predictive_room_blocked = true;
+            owned_predictive_motion_blocked = false;
+            owned_predictive_angular_blocked = true;
+            owned_predictive_focus_distance = 0.0;
+            owned_predictive_angular_distance =
+                angular_prediction.angular_distance;
+          }
+        }
+      }
       std::array<int32_t, 3> owned_look_target = camera_focus;
       std::array<double, 3> owned_view_forward{};
       const std::array<double, 3>* owned_fixed_view_forward = nullptr;
       std::array<int32_t, 3> owned_spring_position{};
-      if (near_pivot_step.active) {
-        if (BuildOwnedCameraViewForward(
-                camera_focus, orbit, &owned_view_forward)) {
-          owned_fixed_view_forward = &owned_view_forward;
-        }
-      }
       const bool owned_spring_valid_initial =
-          (!near_pivot_step.active || owned_fixed_view_forward) &&
           ResolveOwnedCameraSpringArm(
               camera_focus, orbit, owned_combined_position,
               combined_obstructed, combined_blocker_key,
-              &owned_spring_position);
+              &owned_spring_position, owned_predictive_safe_distance);
       bool owned_spring_valid = owned_spring_valid_initial;
 
       // Radial recovery is another intermediate source pose. Re-run both
@@ -7772,7 +9079,8 @@ void __cdecl HookMode3Camera(void* controller) {
             static_cast<double>(owned_spring_position[2])};
         owned_spring_room = deathtrap_camera::SweepSphereThroughRooms(
             g_runtime_room_graph.sectors, owned_room_start_index, room_focus,
-            room_spring, kCameraCollisionSphereRadius, 8.0, 32u);
+            room_spring, kCameraCollisionSphereRadius, 8.0, 32u,
+            kOwnedCameraRoomRadiusRampDistance);
         owned_spring_valid = owned_spring_room.valid;
       }
       if (owned_spring_valid) {
@@ -7793,34 +9101,202 @@ void __cdecl HookMode3Camera(void* controller) {
         owned_publish_position = owned_spring_scene.position;
       }
 
-      bool owned_transition_cut = owned_room_applied_safe_cut ||
-          near_pivot_step.changed ||
-          !g_third_person_orbit_state.owned_publication_active;
       const double revalidated_safe_distance = CameraPositionDistance(
           camera_focus, owned_publish_position);
       if (owned_spring_valid &&
-          std::isfinite(revalidated_safe_distance) &&
-          std::isfinite(combined_safe_distance) &&
-          revalidated_safe_distance < owned_minimum_transition_distance &&
-          combined_safe_distance >= owned_minimum_transition_distance) {
-        // The damped radial path crosses an unsafe disconnected region.
-        // Publish the already verified final shot and cut presentation once.
-        owned_publish_position = owned_combined_position;
-        g_third_person_orbit_state.owned_collision_radius =
-            combined_safe_distance;
-        g_third_person_orbit_state.owned_collision_clear_ticks = 0;
-        g_third_person_orbit_state
-            .owned_collision_blocked_release_ticks = 0;
-        g_third_person_orbit_state
-            .owned_collision_blocked_candidate_distance =
-            combined_safe_distance;
-        g_third_person_orbit_state.owned_collision_blocker_key =
-            combined_blocker_key;
-        owned_transition_cut = true;
-      } else if (owned_spring_valid &&
-                 std::isfinite(revalidated_safe_distance)) {
+          std::isfinite(revalidated_safe_distance)) {
+        // Revalidation is the final collision authority. A radial point can
+        // end before a portal while the longer direct ray reaches a connected
+        // sector, so its safe distance may be much shorter than the original
+        // candidate. Publishing that verified near point is idempotent;
+        // jumping to the far candidate for one tick creates a far/near loop.
         g_third_person_orbit_state.owned_collision_radius =
             revalidated_safe_distance;
+      }
+
+      const CameraNearPivotModeStep near_pivot_step =
+          StepCameraNearPivotMode(
+              g_third_person_orbit_state.owned_near_pivot_view_active,
+              combined_safe_distance,
+              g_third_person_orbit_state
+                  .owned_near_pivot_direct_clear_ticks,
+              kThirdPersonMinimumCameraDistance,
+              owned_minimum_transition_distance,
+              g_third_person_orbit_state.orbit_input_active_this_tick
+                  ? 2u
+                  : 4u);
+      g_third_person_orbit_state.owned_near_pivot_view_active =
+          near_pivot_step.active;
+      g_third_person_orbit_state.owned_near_pivot_direct_clear_ticks =
+          near_pivot_step.direct_clear_ticks;
+      if (near_pivot_step.changed) {
+        AppendDeathtrapSupportLog(
+            "camera_near_pivot state=%s direct=%.1f published=%.1f "
+            "orbit_input=%u clear_ticks=%u",
+            near_pivot_step.active ? "ACTIVE" : "INACTIVE",
+            combined_safe_distance, revalidated_safe_distance,
+            g_third_person_orbit_state.orbit_input_active_this_tick
+                ? 1u
+                : 0u,
+            near_pivot_step.direct_clear_ticks);
+      }
+      if (near_pivot_step.active &&
+          BuildOwnedCameraViewForward(
+              camera_focus, orbit, &owned_view_forward)) {
+        owned_fixed_view_forward = &owned_view_forward;
+      }
+      if (near_pivot_step.active && !owned_fixed_view_forward) {
+        owned_spring_valid = false;
+      }
+      const bool owned_transition_cut = owned_room_applied_safe_cut ||
+          near_pivot_step.changed ||
+          !g_third_person_orbit_state.owned_publication_active;
+
+      if (owned_spring_valid) {
+        const OwnedCameraSceneSweepResult* native_contact = nullptr;
+        if (owned_spring_scene.blocked &&
+            owned_spring_scene.diagnostic.native_collision) {
+          native_contact = &owned_spring_scene;
+        } else if (owned_scene_sweep.blocked &&
+                   owned_scene_sweep.diagnostic.native_collision) {
+          native_contact = &owned_scene_sweep;
+        }
+        const uintptr_t native_object = native_contact
+            ? native_contact->diagnostic.native_object
+            : 0u;
+        static uintptr_t last_native_contact_object = 0;
+        static uint64_t last_native_contact_tick = 0;
+        const uint64_t source_tick =
+            g_source_ticks.load(std::memory_order_relaxed);
+        const bool changed =
+            native_object != last_native_contact_object;
+        const bool heartbeat = native_object &&
+            source_tick - last_native_contact_tick >= 60u;
+        if (changed || heartbeat) {
+          AppendDeathtrapSupportLog(
+              "camera_native_contact tick=%llu result=%s object=%08llX "
+              "node=%08llX contact=%.1f safe=%.1f overlap=%u",
+              static_cast<unsigned long long>(source_tick),
+              native_object ? "HIT" : "CLEAR",
+              static_cast<unsigned long long>(native_object),
+              static_cast<unsigned long long>(
+                  native_contact ? native_contact->diagnostic.node : 0u),
+              native_contact ? native_contact->contact_distance : -1.0,
+              native_contact ? native_contact->safe_distance : -1.0,
+              native_contact && native_contact->initial_overlap ? 1u : 0u);
+          last_native_contact_object = native_object;
+          last_native_contact_tick = source_tick;
+        }
+      }
+
+      if (owned_spring_valid) {
+        ThirdPersonOrbitState& state = g_third_person_orbit_state;
+        const double published_radius = CameraPositionDistance(
+            camera_focus, owned_publish_position);
+        if (std::isfinite(published_radius)) {
+          const uint64_t source_tick =
+              g_source_ticks.load(std::memory_order_relaxed);
+          if (state.owned_support_log_radius_valid) {
+            const double radius_delta =
+                published_radius - state.owned_support_log_radius;
+            const CameraRadiusOscillationStep oscillation =
+                StepCameraRadiusOscillationDetector(
+                    state.owned_support_previous_radius_delta,
+                    state.owned_support_oscillation_window_start_tick,
+                    state.owned_support_oscillation_reversal_count,
+                    source_tick, radius_delta);
+            state.owned_support_previous_radius_delta =
+                oscillation.previous_meaningful_delta;
+            state.owned_support_oscillation_window_start_tick =
+                oscillation.window_start_tick;
+            state.owned_support_oscillation_reversal_count =
+                oscillation.reversal_count;
+            if (oscillation.detected) {
+              AppendDeathtrapSupportLog(
+                  "camera_radius_oscillation tick=%llu radius=%.1f "
+                  "delta=%.1f desired=%.1f combined=%.1f "
+                  "revalidated=%.1f room=%u/%u scene=%u/%u near=%u",
+                  static_cast<unsigned long long>(source_tick),
+                  published_radius, radius_delta, desired_distance,
+                  combined_safe_distance, revalidated_safe_distance,
+                  owned_room_applied_sweep.blocked ? 1u : 0u,
+                  owned_spring_room.blocked ? 1u : 0u,
+                  owned_scene_sweep.blocked ? 1u : 0u,
+                  owned_spring_scene.blocked ? 1u : 0u,
+                  near_pivot_step.active ? 1u : 0u);
+            }
+          }
+          constexpr double kSupportRadiusEventThreshold = 160.0;
+          if (state.owned_support_log_radius_valid &&
+              std::abs(published_radius -
+                       state.owned_support_log_radius) >=
+                  kSupportRadiusEventThreshold) {
+            const OwnedCameraSceneSweepResult* scene_contact =
+                owned_spring_scene.blocked
+                    ? &owned_spring_scene
+                    : (owned_scene_sweep.blocked
+                           ? &owned_scene_sweep
+                           : nullptr);
+            const CameraMeshHitDiagnostic* scene_diagnostic =
+                scene_contact ? &scene_contact->diagnostic : nullptr;
+            AppendDeathtrapSupportLog(
+                "camera_radius_event tick=%llu radius=%.1f->%.1f "
+                "desired=%.1f combined=%.1f revalidated=%.1f "
+                "room=%u/%u room_overlap=%u/%u room_key=%llu/%llu "
+                "scene=%u/%u soft=%u native=%u "
+                "object=%08llX resource=%llu extents=%.1f/%.1f/%.1f "
+                "forecast=%.1f/%u lead=%.1f source=%u/%u angle=%.1f "
+                "cut=%u near=%u",
+                static_cast<unsigned long long>(
+                    source_tick),
+                state.owned_support_log_radius, published_radius,
+                desired_distance, combined_safe_distance,
+                revalidated_safe_distance,
+                owned_room_applied_sweep.blocked ? 1u : 0u,
+                owned_spring_room.blocked ? 1u : 0u,
+                owned_room_applied_sweep.started_overlapping ? 1u : 0u,
+                owned_spring_room.started_overlapping ? 1u : 0u,
+                static_cast<unsigned long long>(
+                    owned_room_applied_sweep.blocker_key),
+                static_cast<unsigned long long>(
+                    owned_spring_room.blocker_key),
+                owned_scene_sweep.blocked ? 1u : 0u,
+                owned_spring_scene.blocked ? 1u : 0u,
+                scene_diagnostic && scene_diagnostic->soft_obstacle
+                    ? 1u
+                    : 0u,
+                scene_diagnostic && scene_diagnostic->native_collision
+                    ? 1u
+                    : 0u,
+                static_cast<unsigned long long>(
+                    scene_diagnostic
+                        ? scene_diagnostic->native_object
+                        : 0u),
+                static_cast<unsigned long long>(
+                    scene_diagnostic ? scene_diagnostic->resource : 0u),
+                scene_diagnostic ? scene_diagnostic->scaled_extents[0]
+                                 : 0.0,
+                scene_diagnostic ? scene_diagnostic->scaled_extents[1]
+                                 : 0.0,
+                scene_diagnostic ? scene_diagnostic->scaled_extents[2]
+                                 : 0.0,
+                owned_predictive_safe_distance,
+                owned_predictive_room_blocked ? 1u : 0u,
+                owned_predictive_focus_distance,
+                owned_predictive_motion_blocked ? 1u : 0u,
+                owned_predictive_angular_blocked ? 1u : 0u,
+                owned_predictive_angular_distance * 180.0 / kOrbitPi,
+                owned_transition_cut ? 1u : 0u,
+                near_pivot_step.active ? 1u : 0u);
+          }
+          state.owned_support_log_radius = published_radius;
+          state.owned_support_log_radius_valid = true;
+        }
+      }
+
+      if (owned_spring_valid) {
+        LogOwnedCameraCharacterProbe(
+            camera_focus, orbit, owned_publish_position);
       }
 
       if (g_debug_log && owned_spring_valid) {
@@ -7835,8 +9311,8 @@ void __cdecl HookMode3Camera(void* controller) {
               "camera_owned_solution selected=%llu retained=%u "
               "direct=%.1f selected=%.1f combined=%.1f spring=%.1f "
               "revalidated=%.1f room=%u/%u scene=%u/%u overlap=%u "
-              "resource=%llu tri=%llu motion=%.1f blocker=%llu cut=%u "
-              "direct_clear=%u near=%u/%u",
+              "resource=%llu native=%08llX tri=%llu motion=%.1f "
+              "blocker=%llu cut=%u direct_clear=%u near=%u/%u",
               static_cast<unsigned long long>(
                   owned_combined_plan.selected_index),
               owned_combined_plan.retained_previous ? 1u : 0u,
@@ -7854,6 +9330,10 @@ void __cdecl HookMode3Camera(void* controller) {
                   owned_spring_scene.blocked
                       ? owned_spring_scene.diagnostic.resource
                       : owned_scene_sweep.diagnostic.resource),
+              static_cast<unsigned long long>(
+                  owned_spring_scene.blocked
+                      ? owned_spring_scene.diagnostic.native_object
+                      : owned_scene_sweep.diagnostic.native_object),
               static_cast<unsigned long long>(
                   owned_spring_scene.blocked
                       ? owned_spring_scene.diagnostic.triangle_index
@@ -7874,6 +9354,8 @@ void __cdecl HookMode3Camera(void* controller) {
               owned_fixed_view_forward,
               owned_publish_position,
               owned_room_start_index, owned_transition_cut)) {
+        UpdateOwnedCameraPlayerFade(
+            g_previous_snapshot, camera_focus, owned_publish_position);
         g_third_person_orbit_state.owned_publication_active = true;
         g_third_person_orbit_state.collision_constrained_this_tick =
             combined_obstructed;
@@ -13085,6 +14567,7 @@ void FlushCameraProbeLog() {
 
 void ProbeCameraState(void* context, const SceneSnapshot& scene,
                       uint64_t source_tick) {
+  ProbeNativeGameplayCollision(scene, source_tick);
   if (!g_camera_probe_enabled || !g_debug_log || !g_dungeon_base ||
       !context) {
     return;
@@ -13682,10 +15165,10 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
       current.camera_focus_valid && previous.camera_focus_valid &&
       CurrentCustomCameraViewMode() ==
           CustomCameraViewMode::kModernThirdPerson &&
-      !RetailFirstPersonActive() &&
-      g_third_person_orbit_state.engaged &&
-      g_third_person_orbit_state.controller &&
-      !g_scripted_camera_override_active.load(std::memory_order_acquire)) {
+       !RetailFirstPersonActive() &&
+       g_third_person_orbit_state.engaged &&
+       g_third_person_orbit_state.controller &&
+       !g_scripted_camera_override_active.load(std::memory_order_acquire)) {
     const auto previous_camera = previous.nodes.find(current.camera);
     const auto current_camera = current.nodes.find(current.camera);
     auto midpoint_camera = midpoint_nodes.find(current.camera);
@@ -13735,6 +15218,8 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
                 kThirdPersonMinimumCameraDistance);
 
         if (resolved_clear) {
+          g_active_presentation_trace.midpoint_camera_focus = phase_focus;
+          g_active_presentation_trace.midpoint_camera_focus_valid = true;
           for (size_t axis = 0; axis < 3u; ++axis) {
             const int64_t delta =
                 static_cast<int64_t>(resolved_position[axis]) -
@@ -14088,6 +15573,158 @@ bool SnapshotPlayerTranslation(const SceneSnapshot& scene,
   return true;
 }
 
+void LogSupportPresentationCoherence(
+    uint64_t source_tick, uint32_t subframes,
+    const SceneSnapshot& previous, const SceneSnapshot& current,
+    const InterpolationStats& interpolation) {
+  static uint64_t last_log_tick = 0;
+  const ActivePresentationTrace& trace = g_active_presentation_trace;
+  std::array<int32_t, 3> previous_root{};
+  std::array<int32_t, 3> current_root{};
+  std::array<int32_t, 3> previous_camera{};
+  std::array<int32_t, 3> current_camera{};
+  const bool roots_valid =
+      SnapshotPlayerTranslation(previous, &previous_root) &&
+      SnapshotPlayerTranslation(current, &current_root);
+  auto snapshot_camera = [](const SceneSnapshot& scene,
+                            std::array<int32_t, 3>* translation) {
+    if (!scene.camera || !translation) {
+      return false;
+    }
+    const auto camera = scene.nodes.find(scene.camera);
+    if (camera == scene.nodes.end()) {
+      return false;
+    }
+    *translation = {camera->second.world.values[9],
+                    camera->second.world.values[10],
+                    camera->second.world.values[11]};
+    return true;
+  };
+  const bool cameras_valid =
+      snapshot_camera(previous, &previous_camera) &&
+      snapshot_camera(current, &current_camera);
+  const bool focuses_valid =
+      previous.camera_focus_valid && current.camera_focus_valid;
+  if (!roots_valid || !cameras_valid || !focuses_valid) {
+    return;
+  }
+
+  auto subtract = [](const std::array<int32_t, 3>& a,
+                     const std::array<int32_t, 3>& b) {
+    std::array<int32_t, 3> result{};
+    for (size_t axis = 0; axis < result.size(); ++axis) {
+      result[axis] = static_cast<int32_t>(std::clamp<int64_t>(
+          static_cast<int64_t>(a[axis]) - b[axis],
+          std::numeric_limits<int32_t>::min(),
+          std::numeric_limits<int32_t>::max()));
+    }
+    return result;
+  };
+  auto maximum_component = [](const std::array<int32_t, 3>& value) {
+    int64_t maximum = 0;
+    for (int32_t component : value) {
+      maximum = std::max(maximum,
+                         std::llabs(static_cast<int64_t>(component)));
+    }
+    return maximum;
+  };
+
+  const std::array<int32_t, 3> root_step =
+      subtract(current_root, previous_root);
+  const std::array<int32_t, 3> focus_step =
+      subtract(current.camera_focus, previous.camera_focus);
+  const std::array<int32_t, 3> previous_root_focus =
+      subtract(previous_root, previous.camera_focus);
+  const std::array<int32_t, 3> current_root_focus =
+      subtract(current_root, current.camera_focus);
+  const std::array<int32_t, 3> root_focus_drift =
+      subtract(current_root_focus, previous_root_focus);
+  const std::array<int32_t, 3> previous_render_raw =
+      previous.player_position_valid
+          ? subtract(previous_root, previous.player_position)
+          : std::array<int32_t, 3>{};
+  const std::array<int32_t, 3> current_render_raw =
+      current.player_position_valid
+          ? subtract(current_root, current.player_position)
+          : std::array<int32_t, 3>{};
+  const std::array<int32_t, 3> render_raw_drift =
+      previous.player_position_valid && current.player_position_valid
+          ? subtract(current_render_raw, previous_render_raw)
+          : std::array<int32_t, 3>{};
+  const std::array<int32_t, 3> midpoint_player_error =
+      trace.midpoint_expected_valid && trace.midpoint_seen_valid
+          ? subtract(trace.midpoint_seen, trace.midpoint_expected)
+          : std::array<int32_t, 3>{};
+  const std::array<int32_t, 3> midpoint_camera_error =
+      trace.midpoint_camera_expected_valid &&
+              trace.midpoint_camera_seen_valid
+          ? subtract(trace.midpoint_camera_seen,
+                     trace.midpoint_camera_expected)
+          : std::array<int32_t, 3>{};
+  const std::array<int32_t, 3> exact_player_error =
+      trace.exact_before_projection_valid
+          ? subtract(trace.exact_before_projection, current_root)
+          : std::array<int32_t, 3>{};
+  const std::array<int32_t, 3> exact_camera_error =
+      trace.exact_camera_seen_valid
+          ? subtract(trace.exact_camera_seen, current_camera)
+          : std::array<int32_t, 3>{};
+  const double radius = CameraPositionDistance(
+      current.camera_focus, current_camera);
+  const bool near_player = std::isfinite(radius) && radius < 500.0;
+  const bool contact_active =
+      interpolation.contact_reversal ||
+      interpolation.player_contact_projection_events ||
+      interpolation.player_contact_manifold_events ||
+      current.player_contact_projection_valid ||
+      current.player_contact_manifold_projection_valid;
+  const bool coherence_anomaly =
+      maximum_component(root_focus_drift) >= 8 ||
+      maximum_component(render_raw_drift) >= 8 ||
+      maximum_component(midpoint_player_error) >= 4 ||
+      maximum_component(midpoint_camera_error) >= 4 ||
+      maximum_component(exact_player_error) >= 4 ||
+      maximum_component(exact_camera_error) >= 4;
+  const bool periodic = (source_tick % 120u) == 0u;
+  const bool near_sample = near_player && (source_tick % 8u) == 0u;
+  if (!periodic && !near_sample && !contact_active && !coherence_anomaly) {
+    return;
+  }
+  if (!periodic && source_tick - last_log_tick < 4u) {
+    return;
+  }
+  last_log_tick = source_tick;
+
+  AppendDeathtrapSupportLog(
+      "support_presentation tick=%llu subframes=%u radius=%.1f near=%u "
+      "contact=%u projection=%u/%u root_step=%d/%d/%d "
+      "focus_step=%d/%d/%d root_focus_drift=%d/%d/%d "
+      "render_raw_drift=%d/%d/%d mid_player_error=%d/%d/%d "
+      "mid_camera_error=%d/%d/%d exact_player_error=%d/%d/%d "
+      "exact_camera_error=%d/%d/%d root_coherence=%d/%d/%d "
+      "trace=%u/%u/%u/%u",
+      static_cast<unsigned long long>(source_tick), subframes, radius,
+      near_player ? 1u : 0u, contact_active ? 1u : 0u,
+      current.player_contact_projection_valid ? 1u : 0u,
+      current.player_contact_manifold_projection_valid ? 1u : 0u,
+      root_step[0], root_step[1], root_step[2], focus_step[0],
+      focus_step[1], focus_step[2], root_focus_drift[0],
+      root_focus_drift[1], root_focus_drift[2], render_raw_drift[0],
+      render_raw_drift[1], render_raw_drift[2], midpoint_player_error[0],
+      midpoint_player_error[1], midpoint_player_error[2],
+      midpoint_camera_error[0], midpoint_camera_error[1],
+      midpoint_camera_error[2], exact_player_error[0],
+      exact_player_error[1], exact_player_error[2], exact_camera_error[0],
+      exact_camera_error[1], exact_camera_error[2],
+      interpolation.player_root_coherence_offset[0],
+      interpolation.player_root_coherence_offset[1],
+      interpolation.player_root_coherence_offset[2],
+      trace.midpoint_expected_valid ? 1u : 0u,
+      trace.midpoint_seen_valid ? 1u : 0u,
+      trace.midpoint_camera_seen_valid ? 1u : 0u,
+      trace.exact_camera_seen_valid ? 1u : 0u);
+}
+
 void FlushPresentationTraceBuffer() {
   if (!g_debug_log || g_presentation_trace_buffer.empty()) {
     g_presentation_trace_buffer.clear();
@@ -14175,6 +15812,190 @@ void QueuePresentationTrace(uint64_t source_tick,
   }
 }
 
+struct PlayerRenderFlagRollback {
+  uintptr_t node = 0;
+  uint32_t flags = 0;
+};
+
+bool ThirdPersonCharacterFadeVisible() {
+  return g_owned_camera_player_fade_requested.load(
+             std::memory_order_acquire) &&
+      g_custom_camera_view_mode.load(std::memory_order_acquire) ==
+          static_cast<uint32_t>(CustomCameraViewMode::kModernThirdPerson) &&
+      !CustomHeadViewSelected() && !RetailFirstPersonActive() &&
+      !g_scripted_camera_override_active.load(std::memory_order_acquire);
+}
+
+std::vector<PlayerRenderFlagRollback> ApplyPlayerHalfTransparency(
+    uintptr_t player_root) {
+  std::vector<PlayerRenderFlagRollback> rollback;
+  if (!player_root || !ThirdPersonCharacterFadeVisible()) {
+    return rollback;
+  }
+  rollback.reserve(64u);
+  std::vector<uintptr_t> pending{player_root};
+  std::unordered_set<uintptr_t> visited;
+  visited.reserve(64u);
+  while (!pending.empty() && visited.size() < kMaximumSceneNodes) {
+    const uintptr_t node = pending.back();
+    pending.pop_back();
+    if (!node || !visited.insert(node).second) {
+      continue;
+    }
+    uint32_t flags = 0;
+    uintptr_t child = 0;
+    if (!SafeReadValue(
+            reinterpret_cast<const void*>(node + kNodeFlagsOffset),
+            &flags) ||
+        !SafeReadValue(
+            reinterpret_cast<const void*>(node + kChildOffset), &child)) {
+      continue;
+    }
+    const uint32_t transparent_flags =
+        flags | kNodeHalfTransparentRenderFlag;
+    if (transparent_flags != flags &&
+        SafeWrite(reinterpret_cast<void*>(node + kNodeFlagsOffset),
+                  &transparent_flags, sizeof(transparent_flags))) {
+      rollback.push_back({node, flags});
+    }
+    for (size_t sibling_count = 0;
+         child && sibling_count < kMaximumSceneNodes;
+         ++sibling_count) {
+      pending.push_back(child);
+      uintptr_t sibling = 0;
+      if (!SafeReadValue(
+              reinterpret_cast<const void*>(child + kSiblingOffset),
+              &sibling) ||
+          sibling == child) {
+        break;
+      }
+      child = sibling;
+    }
+  }
+  return rollback;
+}
+
+void RestorePlayerRenderFlags(
+    const std::vector<PlayerRenderFlagRollback>& rollback) {
+  for (auto entry = rollback.rbegin(); entry != rollback.rend(); ++entry) {
+    SafeWrite(reinterpret_cast<void*>(entry->node + kNodeFlagsOffset),
+              &entry->flags, sizeof(entry->flags));
+  }
+}
+
+void RenderOriginalWithPlayerTransparency(void* context,
+                                           uintptr_t player_root) {
+  const std::vector<PlayerRenderFlagRollback> rollback =
+      ApplyPlayerHalfTransparency(player_root);
+  g_original_renderer(context);
+  RestorePlayerRenderFlags(rollback);
+}
+
+struct RenderOnlyCameraBasisBackup {
+  uintptr_t camera = 0;
+  Matrix3x4 world{};
+  Matrix3x4 published{};
+  bool valid = false;
+};
+
+bool StationaryOrbitRenderBasisEligible() {
+  return g_third_person_orbit_state.owned_publication_active &&
+      g_third_person_orbit_state.orbit_input_active_this_tick &&
+      g_third_person_orbit_state.focus_motion_this_tick <= 1.0 &&
+      g_third_person_orbit_state.owned_collision_radius >= 512.0 &&
+      !g_third_person_orbit_state.owned_near_pivot_view_active &&
+      CurrentCustomCameraViewMode() ==
+          CustomCameraViewMode::kModernThirdPerson &&
+      !CustomHeadViewSelected() && !RetailFirstPersonActive() &&
+      !g_scripted_camera_override_active.load(std::memory_order_acquire);
+}
+
+bool ApplyStationaryOrbitRenderBasis(
+    uintptr_t camera, const std::array<int32_t, 3>& focus,
+    RenderOnlyCameraBasisBackup* backup) {
+  if (!camera || !backup || !g_dungeon_base ||
+      !StationaryOrbitRenderBasisEligible()) {
+    return false;
+  }
+  Matrix3x4 world{};
+  Matrix3x4 published{};
+  if (!SafeRead(reinterpret_cast<const void*>(camera + kMatrixOffset),
+                &world, sizeof(world)) ||
+      !SafeRead(g_dungeon_base + kPublishedCameraMatrixRva,
+                &published, sizeof(published)) ||
+      std::memcmp(&world, &published, sizeof(world)) != 0) {
+    return false;
+  }
+  const std::array<double, 3> position = {
+      static_cast<double>(world.values[9]),
+      static_cast<double>(world.values[10]),
+      static_cast<double>(world.values[11])};
+  const CameraContinuousLookAtBasis basis =
+      BuildCameraContinuousLookAtBasis(
+          position,
+          {static_cast<double>(focus[0]),
+           static_cast<double>(focus[1]),
+           static_cast<double>(focus[2])});
+  if (!basis.valid) {
+    return false;
+  }
+
+  Matrix3x4 render_world = world;
+  for (size_t row = 0; row < 3u; ++row) {
+    for (size_t column = 0; column < 3u; ++column) {
+      render_world.values[row * 3u + column] =
+          ToFixed(basis.rows[row][column]);
+    }
+  }
+  backup->camera = camera;
+  backup->world = world;
+  backup->published = published;
+  const bool node_written = SafeWrite(
+      reinterpret_cast<void*>(camera + kMatrixOffset),
+      &render_world, sizeof(render_world));
+  const bool published_written = node_written && SafeWrite(
+      g_dungeon_base + kPublishedCameraMatrixRva,
+      &render_world, sizeof(render_world));
+  if (!published_written) {
+    SafeWrite(reinterpret_cast<void*>(camera + kMatrixOffset),
+              &world, sizeof(world));
+    SafeWrite(g_dungeon_base + kPublishedCameraMatrixRva,
+              &published, sizeof(published));
+    return false;
+  }
+  backup->valid = true;
+
+  return true;
+}
+
+void RestoreStationaryOrbitRenderBasis(
+    const RenderOnlyCameraBasisBackup& backup) {
+  if (!backup.valid || !backup.camera || !g_dungeon_base) {
+    return;
+  }
+  const bool node_restored = SafeWrite(
+      reinterpret_cast<void*>(backup.camera + kMatrixOffset),
+      &backup.world, sizeof(backup.world));
+  const bool published_restored = SafeWrite(
+      g_dungeon_base + kPublishedCameraMatrixRva,
+      &backup.published, sizeof(backup.published));
+  if ((!node_restored || !published_restored) && g_debug_log) {
+    AppendNativeLog(
+        "camera_render_basis_restore node=%08llX result=%u/%u",
+        static_cast<unsigned long long>(backup.camera),
+        node_restored ? 1u : 0u, published_restored ? 1u : 0u);
+  }
+}
+
+void RenderOriginalWithStationaryOrbitBasis(
+    void* context, uintptr_t player_root, uintptr_t camera,
+    const std::array<int32_t, 3>& focus) {
+  RenderOnlyCameraBasisBackup backup;
+  ApplyStationaryOrbitRenderBasis(camera, focus, &backup);
+  RenderOriginalWithPlayerTransparency(context, player_root);
+  RestoreStationaryOrbitRenderBasis(backup);
+}
+
 void __cdecl HookRenderer(void* context) {
   ActivePresentationTrace& trace = g_active_presentation_trace;
   if (!g_original_renderer) {
@@ -14185,7 +16006,14 @@ void __cdecl HookRenderer(void* context) {
     ++trace.midpoint_calls;
     trace.midpoint_seen_valid =
         ReadLiveNodeTranslation(trace.player, &trace.midpoint_seen);
-    g_original_renderer(context);
+    trace.midpoint_camera_seen_valid = ReadLiveNodeTranslation(
+        trace.camera, &trace.midpoint_camera_seen);
+    if (trace.midpoint_camera_focus_valid) {
+      RenderOriginalWithStationaryOrbitBasis(
+          context, trace.player, trace.camera, trace.midpoint_camera_focus);
+    } else {
+      RenderOriginalWithPlayerTransparency(context, trace.player);
+    }
     return;
   }
 
@@ -14205,14 +16033,23 @@ void __cdecl HookRenderer(void* context) {
     }
     trace.exact_seen_valid =
         ReadLiveNodeTranslation(trace.player, &trace.exact_seen);
-    g_original_renderer(context);
+    trace.exact_camera_seen_valid = ReadLiveNodeTranslation(
+        trace.camera, &trace.exact_camera_seen);
+    if (trace.exact_scene && trace.exact_scene->camera_focus_valid) {
+      RenderOriginalWithStationaryOrbitBasis(
+          context, trace.player, trace.camera,
+          trace.exact_scene->camera_focus);
+    } else {
+      RenderOriginalWithPlayerTransparency(context, trace.player);
+    }
     if (projected_nodes && trace.exact_scene) {
       RestorePlayerEndpoint(*trace.exact_scene);
     }
     return;
   }
 
-  g_original_renderer(context);
+  RenderOriginalWithPlayerTransparency(
+      context, trace.player ? trace.player : g_previous_snapshot.player);
 }
 
 PlayerMutableStateRollbackStats RestorePlayerMutableState(
@@ -14517,8 +16354,16 @@ InterpolatedPassResult RenderInterpolatedPass(
     double phase, bool update_temporal_state, uint64_t source_tick) {
   InterpolatedPassResult result;
   const UiRenderStateSnapshot ui_before = CaptureUiRenderState();
+  g_active_presentation_trace.midpoint_camera_focus_valid = false;
   result.interpolation = ApplyInterpolatedScene(
       older, previous, current, phase, update_temporal_state, source_tick);
+  g_active_presentation_trace.midpoint_expected_valid =
+      ReadLiveNodeTranslation(
+          current.player, &g_active_presentation_trace.midpoint_expected);
+  g_active_presentation_trace.midpoint_camera_expected_valid =
+      ReadLiveNodeTranslation(
+          current.camera,
+          &g_active_presentation_trace.midpoint_camera_expected);
   // The renderer also consumes Dungeon.dll's separately published camera
   // transform. Keeping only the scene node at the synthetic phase left the
   // view itself at the preceding 16.7 Hz endpoint and made orbit movement
@@ -14777,6 +16622,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   g_active_presentation_trace = {};
   g_active_presentation_trace.tick = source_tick;
   g_active_presentation_trace.player = current.player;
+  g_active_presentation_trace.camera = current.camera;
   const InterpolatedPassResult first_pass = RenderInterpolatedPass(
       context, older, g_previous_snapshot, current, first_phase,
       true, source_tick);
@@ -14997,6 +16843,8 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   g_active_presentation_trace.exact_scene = nullptr;
   g_player_contact_manifold_endpoint_nodes +=
       g_active_presentation_trace.exact_projection_nodes;
+  LogSupportPresentationCoherence(
+      source_tick, subframes, g_previous_snapshot, current, interpolation);
   QueuePresentationTrace(source_tick, g_previous_snapshot, current,
                          interpolation);
   AdvanceSceneHistory(std::move(current));
@@ -15010,6 +16858,8 @@ void InitializePatchState() {
       ConfiguredInteger(L"Diagnostics", L"CameraProbe", 0) != 0;
   g_head_joint_probe_enabled =
       ConfiguredInteger(L"Diagnostics", L"HeadJointProbe", 0) != 0;
+  g_native_collision_probe_enabled =
+      ConfiguredInteger(L"Diagnostics", L"NativeCollisionProbe", 0) != 0;
   g_weapon_wheel_enabled = ConfiguredWeaponWheelEnabled();
   g_weapon_wheel_invert = ConfiguredWeaponWheelInvert();
   g_xinput_enabled =
@@ -15216,6 +17066,9 @@ void InitializePatchState() {
                   std::memory_order_release);
     return;
   }
+  g_native_collision_resource =
+      reinterpret_cast<NativeCollisionResourceFn>(
+          g_dungeon_base + kNativeCollisionResourceRva);
 
   g_ui_message_lifetime_patched =
       PatchUiMessageLifetime(g_ui_message_lifetime_ticks);
@@ -15335,17 +17188,22 @@ void InitializePatchState() {
       g_ui_message_lifetime_patched ? 1u : 0u,
       g_pst_message_lifetime_ticks,
       g_pst_message_lifetime_patched ? 1u : 0u);
-  AppendNativeLog("diagnostics head_joint_probe=%u interval=10 max_candidates=24",
-                  g_head_joint_probe_enabled ? 1u : 0u);
+  AppendNativeLog(
+      "diagnostics head_joint_probe=%u interval=10 max_candidates=24 "
+      "native_collision_probe=%u interval=5 max_objects=256 "
+      "max_details=24",
+      g_head_joint_probe_enabled ? 1u : 0u,
+      g_native_collision_probe_enabled ? 1u : 0u);
   g_state.store(DeathtrapNativeRenderPatchState::kActive,
                 std::memory_order_release);
   AppendDeathtrapSupportLog(
       "support_patch state=active orbit=%u immersive=%u xinput=%u "
-      "xinput_runtime=%u music_fix=%u",
+      "xinput_runtime=%u music_fix=%u native_collision_probe=%u",
       g_third_person_orbit_enabled ? 1u : 0u,
       g_immersive_first_person_enabled ? 1u : 0u,
       g_xinput_enabled ? 1u : 0u, g_xinput_get_state ? 1u : 0u,
-      g_music_track_fix_enabled ? 1u : 0u);
+      g_music_track_fix_enabled ? 1u : 0u,
+      g_native_collision_probe_enabled ? 1u : 0u);
 }
 
 }  // namespace

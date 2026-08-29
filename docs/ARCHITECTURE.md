@@ -344,3 +344,51 @@ reaches the orbit without a cardinal cone suppressing its secondary axis.
 `camera_spring_arm_test` fixes these mode boundaries deterministically so a
 future input change cannot silently reverse horizontal orbit or alter the
 immersive view.
+
+## Close-camera character presentation
+
+Version 0.0.222 restores the accepted 0.0.221 visible camera after rejecting a
+post-collision vertical endpoint offset. Room and scene revalidation could not
+make that offset safe around the character because the animated player tree is
+correctly excluded from environment collision.
+
+The replacement derives a vertical capsule from the translated live player
+root and the structurally resolved animated head. A stable root-to-focus
+fallback is used only if the head is unavailable. The measured body radius is
+inflated by the existing 96-unit camera sphere, and bounded support records
+report whether the accepted camera centre lies inside that volume.
+
+Runtime evidence showed that pitch-only candidates cannot manufacture room
+where none exists: the failing corner alternated between a clear direct shot
+and `no_solution`, and 91 accepted samples remained inside the player capsule.
+The pitch candidates and the briefly tested automatic head-mounted fallback
+were therefore removed as camera-ownership violations. World collision now
+shortens one exact user-orbit ray; the player capsule cannot select another
+yaw, pitch or camera mode.
+
+Instead, the capsule drives presentation only. Entry marks every node in the
+player render subtree with Dungeon's native half-transparent packet flag for
+the duration of that render transaction, then restores all original node
+flags. The backend converts this to alpha `0x80` and enables blending only for
+those packets. A 64-unit, three-source-tick release hysteresis prevents
+boundary flicker. Custom F10/SELECT first person, retail Tab/R3 first person,
+scripted reveals and fallback camera owners always render the full opaque
+character, so the immersive head view keeps body, arms and weapon visible.
+
+Dynamic mask-bit-1 gameplay objects now contribute their transformed closed
+convex volumes from `Dungeon.dll+0x4A110`. A valid native volume owns the
+corresponding scene-node subtree, so its one-sided render triangles cannot
+produce a second answer. An initial overlap may leave the convex interval
+along the requested orbit, but an endpoint still inside it and any later
+re-entry remain blocked. The stable gameplay object pointer owns spring
+hysteresis because the engine's transformed resource buffer address alternates.
+Static room BSP and props without native volumes retain their existing
+authorities, and the player gameplay object is always excluded.
+
+Large focus teleports preserve user yaw, pitch and radius. Collision history
+from the previous room is cleared and the new complete owned pose is validated
+before one presentation cut; the delayed retail desired point is never used to
+re-author an already engaged orbit.
+
+The full design and test stages are in
+`docs/CLOSE-CAMERA-COLLISION-RESEARCH-2026-08-29.md`.

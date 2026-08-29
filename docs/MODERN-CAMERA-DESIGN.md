@@ -2453,3 +2453,365 @@ sensitivity keeps its existing per-pixel settings. The shipped cardinal-axis
 lock is disabled so diagonal input remains continuous rather than sticking to
 one axis near the four cardinal directions. Pure tests cover horizontal
 preservation, third-person vertical polarity and complete head-view isolation.
+
+## 0.0.222: distance-aware framing after collision ownership
+
+The collision solver continues to own the complete radial spring-arm result.
+Only after that position has passed room and scene revalidation may the
+third-person presentation lower it as the safe radius contracts from 800 to
+320 units. A smoothstep curve caps the vertical drop at 120 units, while
+bounded source-tick steps prevent entry and recovery snaps.
+
+The shifted endpoint is a new collision query, not an assumed-safe camera
+pose. It must reproduce the requested integer position within two units in
+both collision channels. If a newly requested offset is unsafe, the previous
+accepted offset is tested once against current geometry; a failed retest falls
+back to the original unshifted safe point. The accepted vertical offset never
+changes `owned_collision_radius`, preventing framing and collision recovery
+from becoming mutually recursive owners. Mode changes and authored reveals
+clear the state, and interpolated passes do not advance it.
+
+### Runtime rejection
+
+The first `0.0.222` runtime test rejects this post-solve framing model. At
+contracted radii of approximately 188, 88, 83 and 0 units, the shifted endpoint
+could enter the visible player and remain between animated limbs. Room and
+scene revalidation correctly reported clear because the player hierarchy is
+deliberately excluded from environment collision.
+
+The exclusion remains necessary: animated body parts, weapons, braids and
+embedded projectiles must not become world obstacles. The replacement is a
+pre-collision multi-pivot rig plus a stable analytic player capsule. The full
+evidence, SpiderManModernFix comparison, primary-engine references and staged
+implementation plan are recorded in
+`docs/CLOSE-CAMERA-COLLISION-RESEARCH-2026-08-29.md`.
+
+### Runtime result of the pitch-only candidate family
+
+The follow-up run `deathtrap-native-20260829-181800-164-pid34584.log`
+invalidates pitch candidates as a complete tight-space fallback. The planner
+alternated 11 times into and 11 times out of `no_solution`; only one `-40`
+degree candidate found positive capsule clearance. The accepted endpoint was
+inside the analytic player capsule in 91 bounded samples, including repeated
+zero-radius positions approximately 200 units inside the inflated boundary.
+The visible move from the legs to the torso was therefore expected: pitch
+changed which part of the model was intersected but did not create free space.
+
+The first implementation routed `no_solution` to the animated-head endpoint.
+That experiment was removed: even without first-person input bindings, it made
+collision silently change the visible camera mode and could expose the torso.
+The production invariant is stricter: third-person collision remains third
+person, while custom F10/SELECT and retail Tab/R3 first-person modes stay
+explicit owners.
+
+The final 0.0.222 policy also removes the pitch-only family from collision.
+The owned planner submits one exact user-orbit ray to room, render-mesh and
+native-convex collision. The analytic capsule is presentation evidence only:
+when the accepted third-person camera volume enters it, the renderer
+temporarily applies Dungeon's native `0x04000000` node flag to the complete
+player subtree. `Dungeon.dll+0x3B950` maps that bit to render-command flag
+`0x08`; the D3D backend at `0x5834E/0x584D0` supplies alpha `0x80` and enables
+blending for those commands. Original node flags are restored immediately
+after each render pass.
+
+Fade release requires three consecutive source ticks at least 64 units clear
+of the inflated capsule. The test is forcibly disabled in custom immersive
+first person, retail first person, authored reveals and non-owned fallback, so
+the complete character and weapon remain visible in the intentional head
+view. The capsule never changes camera-relative movement or collision state.
+
+### Native dynamic-object collision integration
+
+The read-only native-resource capture validates the engine's transformed
+convex plane groups for mask-bit-1 gameplay objects. The owned scene sweep now
+uses those closed volumes for the corresponding dynamic-object subtree and
+suppresses that subtree's duplicate one-sided render triangles. Static room
+BSP remains the wall/floor/ceiling authority; render meshes remain the fallback
+for props absent from native gameplay lists.
+
+Convex clipping expands every plane by the existing 96-unit camera radius. If
+the focus begins inside a volume, the ray may leave the single convex interval
+and continues clear after its exit. A requested endpoint that does not reach
+the exit is still blocked, as is any exterior entry into another convex group.
+The stable gameplay object pointer—not the alternating transformed resource
+buffer—owns spring history. Pure tests fix entry, tangent, miss, expansion,
+initial exit and repeated-boundary behavior.
+
+An already engaged orbit also no longer reads a large delayed retail desired
+point after a focus teleport. It preserves yaw, pitch and radius, resets only
+old-room collision state, and validates one new owned endpoint before cutting
+presentation.
+
+### Narrow-obstacle temporal classification
+
+The first 0.0.222 transparency run confirms that character presentation and
+world collision are independent. The accepted arm still alternates between
+near-zero and long radii when a narrow scene object appears for only one or
+two source ticks. Immediate inward response is correct for room planes and
+large blocks, but it turns a brief flag, post or protrusion contact into a
+visible cut.
+
+The scene query now retains the conservative 192-unit two-axis classification
+floor while dividing qualified objects at a second 384-unit two-axis boundary.
+Objects above the second boundary are hard and remain immediate. Objects
+between the boundaries are separated by authority: a render-only object is
+visual clutter and is ignored persistently, while an object with a real native
+gameplay collision volume must report the same stable object key for three
+consecutive source ticks before admission. Multiple direct, applied and spring
+revalidation queries during one source tick reuse one gate decision and cannot
+increment the evidence counter.
+
+Ignoring a narrow render mesh does not erase collision behind it. Any hard
+room plane, larger scene mesh or native gameplay volume found on the same ray
+still clips the camera. This lets flags and posts remain visible without
+authoring the view while a thin interactive door continues through the native
+collision path. The support log records `IGNORE_RENDER_ONLY`, `PENDING` and
+`ACCEPT` decisions with intrinsic extents. It also records every accepted
+radius change of at least 160 units as `camera_radius_event`, including the
+room, scene, native, transition-cut and near-pivot authorities.
+
+The first radius-event run resolves the remaining ambiguity. Resource 12613
+measures approximately `21x1071x676`: it is a render-only sheet, not a narrow
+pole, so the two-axis test still promoted it to a hard wall. Render-only sheets
+with intrinsic thickness no greater than 48 units now share the clutter rule.
+Native sheets remain provisional rather than ignored, preserving thin
+interactive collision without an asset list.
+
+The same stationary run records the larger cycle as room-owned. The player
+focus remains fixed while yaw repeatedly changes the direct room result from a
+full radius to zero. A constant 96-unit sphere at the focus makes a pivot that
+is already within the camera margin binary: any inward ray blocks at fraction
+zero, while an outward ray is fully clear. The owned room sweep now ramps its
+radius linearly from zero at the player focus to 96 units at 288 units along
+the arm. Plane clearance is solved against that piecewise-linear radius, so
+wall-tangent distance changes continuously. Full sphere clearance is retained
+beyond the ramp and the camera centre never crosses a solid plane. Direct,
+applied, publication and spring revalidation all use the same ramp, preserving
+idempotence.
+
+### Predictive doorway contraction
+
+After thin-clutter filtering and the pivot radius ramp, the support log still
+records legitimate room contractions of 800--1500 units on individual source
+ticks, especially while the player crosses a narrow doorway. The spring arm
+cannot safely delay a collision that already exists on the current ray.
+
+The owned solver therefore predicts the camera constraint rather than
+softening collision truth. It projects the measured camera-focus motion up to
+six source ticks and 512 world units ahead. A zero-radius room sweep must first
+prove that this future focus is reachable through the room graph; prediction
+is discarded when the projected player path crosses a solid plane. From the
+reachable future sector, the ordinary 96-unit ramped camera sphere is swept on
+the unchanged user orbit. If that future arm is shorter, the current arm may
+contract by at most 256 units per source tick toward it.
+
+Every predicted intermediate point remains at or inside the current exact
+safe distance and is revalidated by the normal room and scene passes before
+publication. A late, unavailable or inaccurate prediction therefore falls
+back to immediate current collision; it can never allow the camera through a
+wall. Outward recovery retains its slower confirmation and 64-unit step.
+
+The first prediction run proves the bounded contraction path works, but also
+identifies a pre-existing one-frame fallback. When an intermediate radius
+ended before a portal, final revalidation could shorten it below 288 units
+while the complete direct ray still reached a farther connected sector. The
+old code discarded that verified near endpoint and cut to the far candidate;
+the next tick frequently contracted again. This single branch accounted for
+39 of 48 hard cuts and produced visible `near -> far -> near` sequences.
+
+Final revalidation now remains authoritative. Its safe near endpoint is
+published and stored as spring history, and near-pivot hysteresis consumes that
+actual publication radius. No direct candidate is allowed to replace it for
+one frame merely because it lies in another safe radial interval.
+
+The acceptance log after that change contains no old disconnected full-cut
+signature and no large outward radius event. Its remaining recurring room
+contacts repeat at nearly constant angular periods while player-motion
+prediction is inactive. The predictor therefore also extrapolates the current
+source-to-source orbit rotation up to four ticks and 18 degrees. It sweeps that
+future yaw/pitch through the ordinary room solver and reuses the same bounded
+contraction path. Translation-only focus movement is explicitly rejected by
+the angular predictor.
+
+The initial implementation reconstructed that yaw/pitch change from successive
+requested world-space rays. This is not equivalent to control rotation because
+the requested endpoint is centred on the filtered chase focus while collision
+starts at the live player focus. During translation, chase lag alone can rotate
+the measured ray and falsely saturate the angular forecast. Runtime evidence
+shows this path owning 21 of 31 large events in a wall-running segment.
+
+The predictor now receives the actual yaw/pitch deltas integrated by the orbit
+controller and rotates only the current ray by their bounded extrapolation.
+With zero control-angle change it returns no prediction regardless of chase
+focus motion. Thus user rotation and player translation remain separate input
+signals all the way to collision.
+
+Runtime then establishes a second constraint: genuine control rotation does
+not give a future ray authority to select near-pivot mode. In the failing run,
+27 of 38 large events are angular forecasts and nine rapid reversal windows
+occur after predicted clearance repeatedly falls into the `0--140` range.
+Those are hypothetical future angles, while the current ray often retains
+hundreds or more than a thousand units of clearance.
+
+Angular prediction is therefore admitted only when predicted clearance is at
+least the 288-unit near-pivot exit distance, and is suspended for the entire
+time near-pivot mode is active. Exact current-ray collision may still contract
+to zero immediately and remains the sole owner of entering that state. This
+keeps useful ordinary-distance anticipation without allowing look-ahead to
+alternate the close/far topology of the camera.
+
+The first guarded runtime leaves one deterministic current-collision cycle:
+the same room face and `89.5`-unit boundary recur every 22--24 source ticks.
+The generic ten-tick recovery window lets the arm reach roughly 449 units
+between those contacts, creating visible pumping even though each endpoint is
+safe. This is mode hysteresis rather than collision classification.
+
+While near-pivot mode is active, both clear-space and moving-boundary recovery
+now require 30 consecutive supporting ticks before the first outward step.
+Any repeated inward contact remains immediate and resets that evidence. The
+threshold intentionally exceeds the measured corner-orbit recurrence, but a
+player who leaves the constrained space restores the camera after 0.6 seconds
+and then follows the existing 64-unit bounded recovery. Outside near-pivot,
+the established 10/8-tick windows remain unchanged.
+
+The next runtime distinguishes rapid cycling from a slower transition tremor.
+No `camera_radius_oscillation` window remains, but motion forecasts of 12.9,
+52.3 and 17.9 units still override current clearances of 237, 149.8 and 264.4
+units while the player runs beside a wall. This lets translation look-ahead
+select near-pivot even though its current-ray entry condition is not met.
+
+The 288-unit prediction floor is therefore a general topology rule, not an
+angular exception. Both control-angle and future-focus predictions may smooth
+ordinary third-person contraction but may not enter or operate within
+near-pivot. Current exact collision remains unrestricted. Near-pivot recovery
+also uses a dedicated 16-unit step after its 30-tick evidence window, versus
+64 units elsewhere, so a returning current contact has much less outward
+motion to undo.
+
+### Blocked-boundary recovery cushion
+
+Prediction reduces the size of an incoming contraction, but it does not by
+itself stabilize a camera that is already constrained in a tight space. The
+blocked spring previously released by up to 64 units directly to the current
+hard-safe distance. Because room boundaries are sampled from integer game
+state, the next tick could move that distance slightly inward and immediately
+undo the release. Repeating confirmation then produced a rapid low-amplitude
+radial sawtooth even though every individual endpoint was collision-safe.
+
+While a blocker remains present, outward recovery is now limited to
+`hard_safe_distance - 48`. The ordinary eight-tick evidence window and
+64-unit maximum release step still apply. A boundary inside the current arm
+still contracts it immediately to the exact hard-safe distance, so the margin
+does not weaken wall, floor or ceiling closure. It only prevents outward
+recovery from parking on the unstable sampled boundary.
+
+Support diagnostics independently track meaningful radius deltas of at least
+12 units. Three direction reversals within twelve source ticks produce one
+`camera_radius_oscillation` record and reset the window. This records the
+small rapid vibration that the existing 160-unit event threshold intentionally
+omits without restoring heavyweight per-frame development logging.
+
+### User rotation cannot inherit the passive near-pivot hold
+
+The run `deathtrap-native-20260829-220812-638-pid1096.log` disproves
+render-root stabilization as the remaining fix. During the final failure the
+player and focus are stationary and the calculated correction converges to
+zero, while the accepted camera remains at roughly 32--34 units for more than
+160 source ticks. The apparent shake is the view rotating from inside the
+actor.
+
+The cause is policy coupling: the 30-tick hold required for passive
+wall-following was also applied while the user deliberately rotated the orbit.
+Each angular return to the wall reset recovery, so no clear sector could free
+the camera. The rejected render-root compensation is removed completely.
+
+Near-pivot state now consumes current exact direct clearance, not the
+contracted spring publication, for its release evidence. While physical orbit
+input is active and the accepted radius remains below 512 units, two clear
+source ticks permit recovery at a bounded 96 units per tick. A renewed current
+collision remains an immediate hard contraction. With no orbit input, the
+30-tick confirmation and 16-unit step remain unchanged, preserving the stable
+wall-running behavior that motivated them. `camera_near_pivot` records every
+state transition with current direct and published distances.
+
+### Clear-orbit angular invariant
+
+The stationary open-room run
+`deathtrap-native-20260829-221834-764-pid38780.log` exposes a separate,
+long-standing trajectory defect. Player root and camera focus remain fixed,
+and the current room and scene rays are clear, yet the accepted radius drops
+from roughly 1400 to 1200 units at ticks 471, 574, 677, 728 and 780. Every
+event is owned exclusively by the capped 18-degree angular forecast. The
+roughly constant angular period shows that this is the same distant room edge
+being sampled once per revolution, not random input or animation motion.
+
+At a non-zero pitch, shortening a spherical spring arm also lowers its Y
+coordinate. The speculative contraction therefore turns an otherwise exact
+horizontal orbit into a repeating rise/fall wave. A future angle is not
+current collision truth and must not deform a clear user ray.
+
+Angular prediction now has authority only while the exact current ray is
+already obstructed. It may still shape a constrained orbit around a wall or
+corner, while the direct room and scene sweeps remain the immediate safety
+authority. When the current ray is clear, yaw changes preserve the current
+radius and pitch, so a stationary horizontal turn follows one geometric
+circle instead of anticipating distant walls.
+
+That rule removes speculative deformation but does not by itself make an
+orbit larger than the room. The next runtime has real current-room contacts:
+the desired 1400-unit arm contracts to roughly 1144 units in the same sectors
+on successive revolutions, recovers in the intervening clear sector, then
+contracts again. The resulting periodic radial breathing is geometrically
+safe but visibly jerky.
+
+During continuous physical orbit input, an already-contracted arm now holds
+its accepted radius through outward room samples. A closer exact boundary may
+still contract it immediately, so wall safety is unchanged. Once orbit input
+ends, the established confirmed and bounded recovery resumes. The special
+below-512 near-pivot path is excluded from the hold so deliberate rotation can
+still free a camera from inside the character.
+
+The same review exposes a second source of non-uniform motion dating back to
+the original orbit implementation. Controller yaw and pitch were integrated
+with elapsed `GetTickCount64()` time, even though the consumer runs at the
+game's fixed 60 ms source boundary. Scheduler variance therefore produced
+unequal angular source arcs for constant stick input. The three presentation
+samples faithfully subdivided those unequal arcs and preserved their speed
+pulse. Controller integration now uses the deterministic 60 ms source step;
+mouse deltas remain positional and are still consumed exactly once.
+
+### Rejected persistent basis changes and render-only isolation
+
+The bounded stationary-orbit trace in
+`deathtrap-native-20260829-224008-739-pid34824.log` isolates the remaining
+visible stutter from input and ordinary open-room collision. Across 159
+consecutive samples the focus and control pitch are fixed, accepted radius
+stays within 2.6 units around 1400, and full-stick yaw step has a standard
+deviation of approximately `0.00004` radians.
+
+Rebuilding each synthetic pose through Dungeon's look-at routine is rejected:
+it preserves the broad visual wave and adds fine vibration. The follow-up
+trace shows why. With control pitch fixed at exactly `0.30479`, Dungeon emits
+integer pitch values from `-969` through `-976` and changes between them 60
+times in 118 steady samples. Applying that coarse Euler grid three times per
+source tick exposes more quantization boundaries.
+
+Publishing a continuous basis as persistent camera state is also rejected and
+fully removed. Although the world basis itself is geometrically valid, the
+controller still owns quantized angle and local-matrix fields. On the next
+source tick Dungeon rebuilds one representation from the other, causing severe
+whole-frame vibration from startup. Stable installed state was restored to the
+pre-experiment build before continuing.
+
+The next validation is deliberately narrower. Only while the character focus
+is stationary and the user continuously rotates an ordinary camera farther
+than 512 units, the raster call receives a continuous right/up/forward world
+basis derived from the already accepted camera position and phase focus. The
+camera node and separately published matrix are backed up immediately before
+the renderer and restored immediately afterward. Controller position/history,
+integer angles, local matrix, collision, movement, near-pivot view, custom head
+view and authored cameras are never changed. The accepted validation run,
+`deathtrap-native-20260829-230724-598-pid39748.log`, recorded all 30 bounded
+`camera_render_basis` samples with no restore failure, invalid owned-camera
+publication, hybrid fallback or native-pivot guard. The accepted build removes
+the successful-path trace and retains only the restore-failure diagnostic.

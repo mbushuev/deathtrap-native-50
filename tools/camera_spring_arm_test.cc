@@ -25,6 +25,161 @@ void ExpectTicks(uint32_t actual, uint32_t expected, const char* label) {
 }  // namespace
 
 int main() {
+  const std::array<CameraConvexPlane, 6> convex_box{{
+      {{{100.0, 0.0, 0.0}}, {{1.0, 0.0, 0.0}}},
+      {{{-100.0, 0.0, 0.0}}, {{-1.0, 0.0, 0.0}}},
+      {{{0.0, 100.0, 0.0}}, {{0.0, 1.0, 0.0}}},
+      {{{0.0, -100.0, 0.0}}, {{0.0, -1.0, 0.0}}},
+      {{{0.0, 0.0, 100.0}}, {{0.0, 0.0, 1.0}}},
+      {{{0.0, 0.0, -100.0}}, {{0.0, 0.0, -1.0}}},
+  }};
+  const CameraConvexSweep convex_entry =
+      SweepCameraSphereAgainstConvexVolume(
+          {-300.0, 0.0, 0.0}, {2.0, 0.0, 0.0}, 10.0, 500.0,
+          convex_box.data(), convex_box.size());
+  ExpectTicks(convex_entry.valid ? 1u : 0u, 1u,
+              "convex entry valid");
+  ExpectTicks(convex_entry.hit ? 1u : 0u, 1u,
+              "convex entry hit");
+  ExpectTicks(convex_entry.initial_overlap ? 1u : 0u, 0u,
+              "convex entry outside");
+  ExpectNear(convex_entry.distance, 190.0,
+             "convex sphere expanded entry");
+  ExpectNear(convex_entry.exit_distance, 410.0,
+             "convex sphere expanded exit");
+
+  const CameraConvexSweep convex_miss =
+      SweepCameraSphereAgainstConvexVolume(
+          {-300.0, 150.0, 0.0}, {1.0, 0.0, 0.0}, 10.0, 500.0,
+          convex_box.data(), convex_box.size());
+  ExpectTicks(convex_miss.valid ? 1u : 0u, 1u,
+              "convex miss valid");
+  ExpectTicks(convex_miss.hit ? 1u : 0u, 0u,
+              "convex parallel miss");
+
+  const CameraConvexSweep convex_tangent =
+      SweepCameraSphereAgainstConvexVolume(
+          {-300.0, 110.0, 0.0}, {1.0, 0.0, 0.0}, 10.0, 500.0,
+          convex_box.data(), convex_box.size());
+  ExpectTicks(convex_tangent.hit ? 1u : 0u, 1u,
+              "convex expanded tangent hit");
+  ExpectNear(convex_tangent.distance, 190.0,
+             "convex expanded tangent distance");
+
+  const CameraConvexSweep convex_inside =
+      SweepCameraSphereAgainstConvexVolume(
+          {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, 10.0, 500.0,
+          convex_box.data(), convex_box.size());
+  ExpectTicks(convex_inside.hit ? 1u : 0u, 1u,
+              "convex initial overlap reports contact");
+  ExpectTicks(convex_inside.initial_overlap ? 1u : 0u, 1u,
+              "convex initial overlap classified");
+  ExpectNear(convex_inside.distance, 0.0,
+             "convex initial overlap contact distance");
+  ExpectNear(convex_inside.exit_distance, 110.0,
+             "convex initial overlap exit distance");
+
+  const CameraConvexSweep convex_inside_exit =
+      SweepCameraSphereAgainstConvexVolume(
+          {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, 10.0, 500.0,
+          convex_box.data(), convex_box.size(), true);
+  ExpectTicks(convex_inside_exit.valid ? 1u : 0u, 1u,
+              "convex allowed exit valid");
+  ExpectTicks(convex_inside_exit.hit ? 1u : 0u, 0u,
+              "convex allowed exit clear");
+  ExpectTicks(convex_inside_exit.initial_overlap ? 1u : 0u, 1u,
+              "convex allowed exit classified");
+  ExpectNear(convex_inside_exit.exit_distance, 110.0,
+             "convex allowed exit distance");
+
+  const CameraConvexSweep convex_inside_short_arm =
+      SweepCameraSphereAgainstConvexVolume(
+          {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, 10.0, 50.0,
+          convex_box.data(), convex_box.size(), true);
+  ExpectTicks(convex_inside_short_arm.hit ? 1u : 0u, 1u,
+              "convex endpoint inside volume remains blocked");
+  ExpectTicks(convex_inside_short_arm.initial_overlap ? 1u : 0u, 1u,
+              "convex short arm overlap classified");
+  ExpectNear(convex_inside_short_arm.exit_distance, 110.0,
+             "convex short arm preserves real exit distance");
+
+  const CameraConvexSweep convex_repeat =
+      SweepCameraSphereAgainstConvexVolume(
+          {-300.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, 10.0, 500.0,
+          convex_box.data(), convex_box.size());
+  ExpectNear(convex_repeat.distance, convex_entry.distance,
+             "convex accepted boundary idempotent");
+  ExpectNear(convex_repeat.exit_distance, convex_entry.exit_distance,
+             "convex exit idempotent");
+
+  const CameraConvexSweep convex_point =
+      SweepCameraSphereAgainstConvexVolume(
+          {-300.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, 0.0, 500.0,
+          convex_box.data(), convex_box.size());
+  ExpectNear(convex_point.distance, 200.0,
+             "convex zero-radius entry");
+
+  const CameraCapsuleClearance capsule_side =
+      MeasureCameraCapsuleClearance(
+          {5.0, 5.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 10.0, 0.0}, 2.0);
+  ExpectTicks(capsule_side.valid ? 1u : 0u, 1u,
+              "capsule side valid");
+  ExpectTicks(capsule_side.inside ? 1u : 0u, 0u,
+              "capsule side outside");
+  ExpectNear(capsule_side.segment_parameter, 0.5,
+             "capsule side segment parameter");
+  ExpectNear(capsule_side.centerline_distance, 5.0,
+             "capsule side centerline distance");
+  ExpectNear(capsule_side.clearance, 3.0, "capsule side clearance");
+
+  const CameraCapsuleClearance capsule_cap =
+      MeasureCameraCapsuleClearance(
+          {0.0, 13.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 10.0, 0.0}, 4.0);
+  ExpectTicks(capsule_cap.inside ? 1u : 0u, 1u,
+              "capsule cap inside");
+  ExpectNear(capsule_cap.segment_parameter, 1.0,
+             "capsule cap segment parameter");
+  ExpectNear(capsule_cap.clearance, -1.0, "capsule cap clearance");
+
+  const CameraCapsuleClearance capsule_degenerate =
+      MeasureCameraCapsuleClearance(
+          {1.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, 2.0);
+  ExpectTicks(capsule_degenerate.valid ? 1u : 0u, 0u,
+              "capsule degenerate invalid");
+
+  CameraCharacterFadeStep character_fade = StepCameraCharacterFade(
+      false, true, 20.0, 0u, 0.0, 64.0, 3u);
+  ExpectTicks(character_fade.active ? 1u : 0u, 0u,
+              "character fade outside remains opaque");
+  character_fade = StepCameraCharacterFade(
+      character_fade.active, true, -1.0, character_fade.clear_ticks,
+      0.0, 64.0, 3u);
+  ExpectTicks(character_fade.active ? 1u : 0u, 1u,
+              "character fade enters capsule");
+  ExpectTicks(character_fade.changed ? 1u : 0u, 1u,
+              "character fade enter transition");
+  character_fade = StepCameraCharacterFade(
+      character_fade.active, true, 32.0, character_fade.clear_ticks,
+      0.0, 64.0, 3u);
+  ExpectTicks(character_fade.active ? 1u : 0u, 1u,
+              "character fade hysteresis retains near boundary");
+  for (uint32_t tick = 0; tick < 2u; ++tick) {
+    character_fade = StepCameraCharacterFade(
+        character_fade.active, true, 80.0, character_fade.clear_ticks,
+        0.0, 64.0, 3u);
+  }
+  ExpectTicks(character_fade.active ? 1u : 0u, 1u,
+              "character fade waits for sustained clearance");
+  character_fade = StepCameraCharacterFade(
+      character_fade.active, true, 80.0, character_fade.clear_ticks,
+      0.0, 64.0, 3u);
+  ExpectTicks(character_fade.active ? 1u : 0u, 0u,
+              "character fade releases after sustained clearance");
+  character_fade = StepCameraCharacterFade(
+      true, false, 0.0, 2u, 0.0, 64.0, 3u);
+  ExpectTicks(character_fade.active ? 1u : 0u, 0u,
+              "character fade invalid snapshot fails open");
+
   const CameraOrbitStickInput third_person_orbit =
       CameraOrbitModeInput(0.5, 0.25, false, false, false, 1.4);
   ExpectNear(third_person_orbit.x, 0.7,
@@ -163,6 +318,22 @@ int main() {
   if (!near_pivot.active || near_pivot.changed ||
       near_pivot.direct_clear_ticks != 0u) {
     std::cerr << "near-pivot direct-clear evidence survived a relapse\n";
+    return 1;
+  }
+  CameraNearPivotModeStep rotating_near_pivot =
+      StepCameraNearPivotMode(
+          true, 500.0, 0u, 120.0, 288.0, 2u);
+  if (!rotating_near_pivot.active ||
+      rotating_near_pivot.direct_clear_ticks != 1u) {
+    std::cerr << "rotating near-pivot exit lost first clear ray\n";
+    return 1;
+  }
+  rotating_near_pivot = StepCameraNearPivotMode(
+      rotating_near_pivot.active, 500.0,
+      rotating_near_pivot.direct_clear_ticks,
+      120.0, 288.0, 2u);
+  if (rotating_near_pivot.active || !rotating_near_pivot.changed) {
+    std::cerr << "rotating near-pivot view remained latched\n";
     return 1;
   }
   const CameraRelativeHeadingStep aligned_steering =
@@ -423,6 +594,53 @@ int main() {
     std::cerr << "large block was not classified as a blocker\n";
     return 1;
   }
+  if (!CameraMeshExtentsAreSoftObstacle(
+          {309.0, 1036.0, 309.0}, 192.0, 384.0) ||
+      CameraMeshExtentsAreSoftObstacle(
+          {24.0, 900.0, 1200.0}, 192.0, 384.0) ||
+      CameraMeshExtentsAreSoftObstacle(
+          {420.0, 520.0, 1200.0}, 192.0, 384.0)) {
+    std::cerr << "soft obstacle geometry classification failed\n";
+    return 1;
+  }
+  if (!CameraMeshExtentsAreThinSheet(
+          {21.0, 1071.0, 676.0}, 48.0, 384.0) ||
+      CameraMeshExtentsAreThinSheet(
+          {208.0, 526.0, 208.0}, 48.0, 384.0) ||
+      CameraMeshExtentsAreThinSheet(
+          {420.0, 520.0, 1200.0}, 48.0, 384.0)) {
+    std::cerr << "thin render-sheet classification failed\n";
+    return 1;
+  }
+
+  auto soft_gate = StepCameraSoftObstacleGate(
+      0u, 0u, 0u, 42u, 100u, 3u);
+  ExpectTicks(soft_gate.accepted ? 1u : 0u, 0u,
+              "first soft contact remains provisional");
+  ExpectTicks(soft_gate.consecutive_ticks, 1u,
+              "first soft contact evidence");
+  soft_gate = StepCameraSoftObstacleGate(
+      soft_gate.blocker_key, soft_gate.last_source_tick,
+      soft_gate.consecutive_ticks, 42u, 100u, 3u);
+  ExpectTicks(soft_gate.consecutive_ticks, 1u,
+              "same-tick revalidation is not temporal evidence");
+  soft_gate = StepCameraSoftObstacleGate(
+      soft_gate.blocker_key, soft_gate.last_source_tick,
+      soft_gate.consecutive_ticks, 42u, 101u, 3u);
+  ExpectTicks(soft_gate.accepted ? 1u : 0u, 0u,
+              "second soft contact remains provisional");
+  soft_gate = StepCameraSoftObstacleGate(
+      soft_gate.blocker_key, soft_gate.last_source_tick,
+      soft_gate.consecutive_ticks, 42u, 102u, 3u);
+  ExpectTicks(soft_gate.accepted ? 1u : 0u, 1u,
+              "persistent soft contact becomes authoritative");
+  soft_gate = StepCameraSoftObstacleGate(
+      soft_gate.blocker_key, soft_gate.last_source_tick,
+      soft_gate.consecutive_ticks, 77u, 103u, 3u);
+  ExpectTicks(soft_gate.accepted ? 1u : 0u, 0u,
+              "changed soft blocker restarts evidence");
+  ExpectTicks(soft_gate.consecutive_ticks, 1u,
+              "changed soft blocker evidence reset");
   std::array<double, 3> pushed{};
   size_t pushed_axis = 3;
   if (!PushCameraOutOfExpandedBox(
@@ -785,6 +1003,138 @@ int main() {
   ExpectNear(step.radius, 764.0,
              "owned moving boundary releases after confirmation");
 
+  // Once a blocked boundary has supplied enough evidence to release, retain
+  // a small radial cushion. Advancing exactly onto the moving safe sample
+  // makes the next quantized sample contract the arm again and creates a
+  // rapid release/contract loop in tight spaces.
+  step = StepCameraSpringArm(
+      1400.0, 760.0, 700.0, true, 0, 0, 700.0,
+      kMeshBlocker, kMeshBlocker, 10u, 1u, 64.0, false,
+      std::numeric_limits<double>::quiet_NaN(), 0.0, 48.0);
+  ExpectNear(step.radius, 712.0,
+             "blocked recovery retains boundary cushion");
+  step = StepCameraSpringArm(
+      1400.0, 745.0, step.radius, true, step.clear_ticks,
+      step.blocked_release_ticks, step.blocked_candidate_distance,
+      step.blocker_key, kMeshBlocker, 10u, 1u, 64.0, false,
+      std::numeric_limits<double>::quiet_NaN(), 0.0, 48.0);
+  ExpectNear(step.radius, 712.0,
+             "boundary cushion prevents immediate reverse step");
+  step = StepCameraSpringArm(
+      1400.0, 820.0, step.radius, true, step.clear_ticks,
+      step.blocked_release_ticks, step.blocked_candidate_distance,
+      step.blocker_key, kMeshBlocker, 10u, 1u, 64.0, false,
+      std::numeric_limits<double>::quiet_NaN(), 0.0, 48.0);
+  ExpectNear(step.radius, 772.0,
+             "blocked recovery stops before buffered boundary");
+
+  step = StepCameraSpringArm(
+      1400.0, 1400.0, 900.0, false, 12u, 0u, 900.0, 0u, 0u,
+      10u, 8u, 64.0, false,
+      std::numeric_limits<double>::quiet_NaN(), 0.0, 48.0, true);
+  ExpectNear(step.radius, 900.0,
+             "active orbit holds clear-sector radius");
+  step = StepCameraSpringArm(
+      1400.0, 1200.0, step.radius, true, step.clear_ticks,
+      step.blocked_release_ticks, step.blocked_candidate_distance,
+      step.blocker_key, kWallBlocker, 10u, 8u, 64.0, false,
+      std::numeric_limits<double>::quiet_NaN(), 0.0, 48.0, true);
+  ExpectNear(step.radius, 900.0,
+             "active orbit holds outward blocked sample");
+  step = StepCameraSpringArm(
+      1400.0, 700.0, step.radius, true, step.clear_ticks,
+      step.blocked_release_ticks, step.blocked_candidate_distance,
+      step.blocker_key, kWallBlocker, 10u, 8u, 64.0, false,
+      std::numeric_limits<double>::quiet_NaN(), 0.0, 48.0, true);
+  ExpectNear(step.radius, 700.0,
+             "active orbit preserves immediate inward safety");
+  for (uint32_t clear_tick = 0; clear_tick < 10u; ++clear_tick) {
+    step = StepCameraSpringArm(
+        1400.0, 1400.0, step.radius, false, step.clear_ticks,
+        step.blocked_release_ticks, step.blocked_candidate_distance,
+        step.blocker_key, 0u, 10u, 8u, 64.0, false,
+        std::numeric_limits<double>::quiet_NaN(), 0.0, 48.0, false);
+  }
+  ExpectNear(step.radius, 764.0,
+             "orbit radius recovers after input release");
+
+  // Near-pivot recovery must outlast the repeating 22--24 tick wall-contact
+  // interval observed while orbiting inside a tight corner. Otherwise the
+  // arm grows by several 64-unit steps and the same face immediately snaps it
+  // back to the close radius on every revolution.
+  step = StepCameraSpringArm(
+      1400.0, 1400.0, 90.0, false, 0, 0, 90.0, kWallBlocker, 0u,
+      30u, 30u, 16.0, false);
+  for (uint32_t clear_tick = 1; clear_tick < 24u; ++clear_tick) {
+    ExpectNear(step.radius, 90.0,
+               "near-pivot recovery holds between repeated contacts");
+    step = StepCameraSpringArm(
+        1400.0, 1400.0, step.radius, false, step.clear_ticks,
+        step.blocked_release_ticks, step.blocked_candidate_distance,
+        step.blocker_key, 0u, 30u, 30u, 16.0, false);
+  }
+  ExpectNear(step.radius, 90.0,
+             "near-pivot recovery outlasts wall orbit period");
+  step = StepCameraSpringArm(
+      1400.0, 90.0, step.radius, true, step.clear_ticks,
+      step.blocked_release_ticks, step.blocked_candidate_distance,
+      step.blocker_key, kWallBlocker, 30u, 30u, 16.0, false);
+  ExpectNear(step.radius, 90.0,
+             "repeated near-pivot contact remains idempotent");
+  for (uint32_t clear_tick = 0; clear_tick < 30u; ++clear_tick) {
+    step = StepCameraSpringArm(
+        1400.0, 1400.0, step.radius, false, step.clear_ticks,
+        step.blocked_release_ticks, step.blocked_candidate_distance,
+        step.blocker_key, 0u, 30u, 30u, 16.0, false);
+  }
+  ExpectNear(step.radius, 106.0,
+             "near-pivot recovery resumes after stable clearance");
+
+  // Explicit orbit input is a request to search for a different current ray.
+  // A close camera must not require the stationary-wall 30-tick hold on every
+  // angle and remain trapped inside the actor for a complete rotation.
+  step = StepCameraSpringArm(
+      1400.0, 1400.0, 33.0, false, 0u, 0u, 33.0, 0u, 0u,
+      2u, 2u, 96.0, false);
+  ExpectNear(step.radius, 33.0,
+             "orbit close recovery confirms first clear ray");
+  step = StepCameraSpringArm(
+      1400.0, 1400.0, step.radius, false, step.clear_ticks,
+      step.blocked_release_ticks, step.blocked_candidate_distance,
+      step.blocker_key, 0u, 2u, 2u, 96.0, false);
+  ExpectNear(step.radius, 129.0,
+             "orbit close recovery exits actor after confirmation");
+  step = StepCameraSpringArm(
+      1400.0, 34.0, step.radius, true, step.clear_ticks,
+      step.blocked_release_ticks, step.blocked_candidate_distance,
+      step.blocker_key, kWallBlocker, 2u, 2u, 96.0, false);
+  ExpectNear(step.radius, 34.0,
+             "orbit close recovery keeps immediate wall contraction");
+
+  step = StepCameraSpringArm(
+      1400.0, 1400.0, 1400.0, false, 0, 0, 1400.0, 0u, 0u,
+      10u, 8u, 64.0, false, 200.0, 256.0);
+  ExpectNear(step.radius, 1144.0,
+             "predictive doorway contraction starts before contact");
+  step = StepCameraSpringArm(
+      1400.0, 1400.0, step.radius, false, step.clear_ticks,
+      step.blocked_release_ticks, step.blocked_candidate_distance,
+      step.blocker_key, 0u, 10u, 8u, 64.0, false, 200.0, 256.0);
+  ExpectNear(step.radius, 888.0,
+             "predictive doorway contraction remains rate limited");
+  step = StepCameraSpringArm(
+      1400.0, 600.0, step.radius, true, step.clear_ticks,
+      step.blocked_release_ticks, step.blocked_candidate_distance,
+      step.blocker_key, kWallBlocker, 10u, 8u, 64.0, false,
+      200.0, 256.0);
+  ExpectNear(step.radius, 600.0,
+             "current hard boundary overrides insufficient prediction");
+  step = StepCameraSpringArm(
+      1400.0, 1400.0, 1400.0, false, 0, 0, 1400.0, 0u, 0u,
+      10u, 8u, 64.0, false);
+  ExpectNear(step.radius, 1400.0,
+             "missing doorway prediction preserves clear arm");
+
   // A direct room boundary can move non-monotonically as the player crosses a
   // convex corner while still leaving a large margin beyond the contracted
   // arm. Owned direct-path recovery must count that sustained margin instead
@@ -942,6 +1292,129 @@ int main() {
        std::cos(-wrap_angle) * 1000.0}, 0.5);
   if (!pivot_camera.valid || pivot_camera.position[2] > -999.0) {
     std::cerr << "pivot-relative yaw did not take shortest wrap path\n";
+    return 1;
+  }
+
+  constexpr double kPredictionDegrees =
+      3.14159265358979323846 / 180.0;
+  const CameraOrbitAngularPrediction angular_prediction =
+      PredictCameraOrbitAngularMotion(
+          {0.0, 0.0, 0.0}, {0.0, 0.0, 1000.0},
+          {0.0, 0.0, 0.0},
+          {std::sin(5.0 * kPredictionDegrees) * 1000.0, 0.0,
+           std::cos(5.0 * kPredictionDegrees) * 1000.0},
+          4.0, 18.0 * kPredictionDegrees);
+  if (!angular_prediction.valid) {
+    std::cerr << "angular camera prediction was invalid\n";
+    return 1;
+  }
+  ExpectNear(
+      std::atan2(angular_prediction.position[0],
+                 angular_prediction.position[2]) /
+          kPredictionDegrees,
+      23.0, "angular camera prediction cap");
+  ExpectNear(angular_prediction.angular_distance / kPredictionDegrees,
+             18.0, "angular camera prediction distance");
+
+  const CameraOrbitAngularPrediction stationary_prediction =
+      PredictCameraOrbitAngularMotion(
+          {0.0, 0.0, 0.0}, {0.0, 0.0, 1000.0},
+          {10.0, 0.0, 0.0}, {10.0, 0.0, 1000.0},
+          4.0, 18.0 * kPredictionDegrees);
+  if (stationary_prediction.valid) {
+    std::cerr << "translation-only motion became angular prediction\n";
+    return 1;
+  }
+
+  const CameraOrbitAngularPrediction control_prediction =
+      PredictCameraOrbitControlMotion(
+          {10.0, 0.0, 0.0},
+          {10.0 + std::sin(5.0 * kPredictionDegrees) * 1000.0, 0.0,
+           std::cos(5.0 * kPredictionDegrees) * 1000.0},
+          5.0 * kPredictionDegrees, 0.0, 4.0,
+          18.0 * kPredictionDegrees);
+  if (!control_prediction.valid) {
+    std::cerr << "control-angle camera prediction was invalid\n";
+    return 1;
+  }
+  ExpectNear(
+      std::atan2(control_prediction.position[0] - 10.0,
+                 control_prediction.position[2]) /
+          kPredictionDegrees,
+      23.0, "control-angle camera prediction cap");
+  ExpectNear(control_prediction.angular_distance / kPredictionDegrees,
+             18.0, "control-angle prediction distance");
+  const CameraOrbitAngularPrediction no_control_prediction =
+      PredictCameraOrbitControlMotion(
+          {0.0, 0.0, 0.0}, {0.0, 0.0, 1000.0},
+          0.0, 0.0, 4.0, 18.0 * kPredictionDegrees);
+  if (no_control_prediction.valid) {
+    std::cerr << "stationary controls became angular prediction\n";
+    return 1;
+  }
+  if (!CameraPredictionMayContractWithoutNearPivot(
+          false, 288.0, 288.0) ||
+      CameraPredictionMayContractWithoutNearPivot(
+          false, 287.0, 288.0) ||
+      CameraPredictionMayContractWithoutNearPivot(
+          true, 900.0, 288.0)) {
+    std::cerr << "near-pivot prediction policy failed\n";
+    return 1;
+  }
+  if (CameraAngularPredictionMayContract(
+          false, false, 900.0, 288.0) ||
+      !CameraAngularPredictionMayContract(
+          true, false, 900.0, 288.0) ||
+      CameraAngularPredictionMayContract(
+          true, true, 900.0, 288.0) ||
+      CameraAngularPredictionMayContract(
+          true, false, 287.0, 288.0)) {
+    std::cerr << "clear-ray angular prediction policy failed\n";
+    return 1;
+  }
+
+  const CameraContinuousLookAtBasis rear_look_at =
+      BuildCameraContinuousLookAtBasis(
+          {0.0, 0.0, 10.0}, {0.0, 0.0, 0.0});
+  if (!rear_look_at.valid) {
+    std::cerr << "rear look-at basis was invalid\n";
+    return 1;
+  }
+  ExpectNear(rear_look_at.rows[0][0], -1.0,
+             "rear look-at right X");
+  ExpectNear(rear_look_at.rows[1][1], 1.0,
+             "rear look-at up Y");
+  ExpectNear(rear_look_at.rows[2][2], -1.0,
+             "rear look-at forward Z");
+  const CameraContinuousLookAtBasis vertical_look_at =
+      BuildCameraContinuousLookAtBasis(
+          {0.0, -10.0, 0.0}, {0.0, 0.0, 0.0});
+  const CameraContinuousLookAtBasis degenerate_look_at =
+      BuildCameraContinuousLookAtBasis(
+          {1.0, 2.0, 3.0}, {1.0, 2.0, 3.0});
+  if (!vertical_look_at.valid || degenerate_look_at.valid) {
+    std::cerr << "look-at singularity handling failed\n";
+    return 1;
+  }
+
+  CameraRadiusOscillationStep oscillation;
+  const std::array<double, 4> oscillating_deltas = {
+      64.0, -40.0, 52.0, -36.0};
+  for (size_t index = 0; index < oscillating_deltas.size(); ++index) {
+    oscillation = StepCameraRadiusOscillationDetector(
+        oscillation.previous_meaningful_delta,
+        oscillation.window_start_tick, oscillation.reversal_count,
+        static_cast<uint64_t>(index + 1u), oscillating_deltas[index]);
+  }
+  if (!oscillation.detected) {
+    std::cerr << "rapid radius reversal was not detected\n";
+    return 1;
+  }
+  oscillation = StepCameraRadiusOscillationDetector(
+      -36.0, 4u, 2u, 30u, 48.0);
+  if (oscillation.detected || oscillation.reversal_count != 1u ||
+      oscillation.window_start_tick != 30u) {
+    std::cerr << "expired radius reversal window was not reset\n";
     return 1;
   }
 

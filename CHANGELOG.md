@@ -8,6 +8,106 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.222 — native collision and close-camera transparency
+
+- Removes the rejected post-collision vertical camera offset that could place
+  the view inside the animated player model at a fully contracted spring arm.
+- Adds a stable analytic player capsule built from the live root and
+  structurally resolved head instead of animated body/weapon triangles.
+- Keeps one exact user-controlled yaw/pitch ray for world collision. The
+  player capsule can no longer choose another angle or camera mode.
+- Makes the complete player subtree half-transparent when the modern
+  third-person camera volume enters it, using Dungeon's own alpha-blended
+  render packets and release hysteresis rather than body collision.
+- Keeps the complete body, arms and weapon opaque in the custom immersive
+  first-person view, retail first person and scripted camera reveals.
+- Uses the game's transformed, closed convex collision volumes for moving
+  gameplay blocks and gives each such volume ownership over its matching
+  render subtree. Static room planes and props without a gameplay volume keep
+  their existing collision paths.
+- Lets an orbit ray that starts inside a moving volume leave it once, while
+  still rejecting an endpoint that remains inside or a later re-entry. Stable
+  gameplay-object identity makes repeated boundary results idempotent.
+- Keeps third-person collision in third person. Only the explicit F10/SELECT
+  and retail Tab/R3 controls may select a first-person camera.
+- Preserves user yaw, pitch and radius across large focus teleports instead of
+  re-seeding from a delayed retail-camera point; old-room collision history is
+  discarded before one validated presentation cut.
+- Treats narrow render-only props as visual clutter, so flags, posts and small
+  housings no longer contract the camera even when they remain on the orbit
+  ray. A hard room or scene obstacle behind them still blocks normally.
+- Applies the render-only rule to thin sheets as well as narrow poles. The
+  measured flag mesh (`21x1071x676`) no longer becomes a wall merely because
+  its height and width are large; no resource ID is special-cased.
+- Keeps narrow objects with a real gameplay collision volume provisional: the
+  same object must obstruct the orbit for three consecutive source ticks
+  before it may contract the spring arm. Room, wall and large-block collision
+  remains immediate.
+- Applies the same temporal decision to every internal revalidation in a
+  source tick, so repeated solver passes cannot turn one visual contact into
+  false persistence. Thin persistent obstacles still become authoritative.
+- Grows the room-collision sphere over the first 288 units of the spring arm.
+  A player pivot inside the final camera margin can now produce a continuous
+  positive wall distance around the tangent instead of alternating a full arm
+  and a zero-radius cut. The camera centre still cannot cross a room plane.
+- Predicts the player's connected room path before narrow door transitions.
+  When the future spring arm is shorter, the camera begins approaching in
+  bounded source-tick steps instead of waiting for one large doorway snap.
+  The current exact room sweep remains an absolute safety limit.
+- Keeps the revalidated near endpoint when an intermediate radius stops before
+  a portal instead of cutting to a distant candidate for one frame. This
+  removes the repeated close/far/close loop seen in narrow connected rooms.
+- Drives near-pivot hysteresis from the final revalidated publication radius,
+  so its state cannot disagree with the camera that is actually displayed.
+- Predicts up to four source ticks of current orbit rotation, capped at 18
+  degrees, only while the exact current ray is already constrained. A clear
+  orbit can no longer shorten at the same distant wall sector on every turn,
+  which removes the repeating rise/fall wave in open rooms. Translation-only
+  motion cannot activate this path.
+- Integrates right-stick yaw and pitch with Dungeon's fixed 60 ms source tick
+  instead of the jittering Windows wall clock. Constant stick input therefore
+  produces equal source arcs before native-frame interpolation.
+- Removes the remaining stationary-orbit wave without changing persistent
+  camera state. For ordinary distant third-person rotation, the raster call
+  temporarily rebuilds its basis from the accepted camera-to-focus vector and
+  immediately restores the native matrices afterward; movement, collision,
+  close views and authored cameras keep their existing owners.
+- Holds an already-contracted ordinary third-person radius during continuous
+  manual rotation. The camera may still contract immediately at a closer
+  wall, but it no longer extends in every clear sector only to snap inward at
+  the same wall sector on the next revolution. Distance recovery resumes when
+  rotation stops; close-camera escape remains responsive.
+- Derives that rotation exclusively from the user-controlled yaw/pitch state.
+  Chase-focus lag while running can no longer masquerade as an 18-degree
+  orbit turn and repeatedly pull the camera into a nearby wall.
+- Restricts angular look-ahead to ordinary third-person distance. A predicted
+  future ray cannot speculatively collapse the spring into the near-pivot
+  state, and prediction stays disabled until current collision leaves it.
+- Applies the same near-pivot guard to player-motion prediction. Running along
+  a wall can no longer use a hypothetical future focus to force the current
+  camera inside the character while the current ray still has usable room.
+- Requires 30 consecutive clear source ticks before a near-pivot spring begins
+  recovering. Repeated contact with the same wall every 22--24 ticks now holds
+  one close radius instead of pumping between roughly 90 and 450 units.
+- Slows only near-pivot recovery from 64 to 16 units per source tick, reducing
+  the visible amplitude if a real wall contact returns during the exit.
+- Keeps that long near-pivot hold only for passive wall-following. Active
+  mouse/right-stick rotation confirms a newly clear current ray in two source
+  ticks and recovers at up to 96 units per tick until the camera leaves the
+  player volume; renewed wall contact still contracts immediately.
+- Drives near-pivot release evidence from current direct clearance rather than
+  the already-contracted published radius, preventing the hold from proving
+  itself blocked and trapping a rotating camera inside the character.
+- Keeps a 48-unit collision cushion while a blocked spring arm recovers. A
+  moving or quantized boundary can no longer pull the camera exactly onto
+  itself and then contract it again on the following source tick.
+- Adds bounded `camera_character_fade`, `camera_character_probe` and
+  `camera_native_contact` and `camera_near_pivot` diagnostics, plus a compact
+  `camera_soft_obstacle` decision record, automatic large-radius event records,
+  a rapid radius-reversal detector and player/camera presentation-coherence
+  samples, with deterministic fade, capsule, convex-sweep, spring and
+  temporal-gate tests.
+
 ## 0.0.221 — directional combat and controller camera
 
 - Corrects only the third-person right-stick vertical convention while

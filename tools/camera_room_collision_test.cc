@@ -119,6 +119,38 @@ int main() {
       return 1;
     }
     ExpectNear(deeper.position.x, 9.5, "overlap pin");
+
+    // The owned camera grows its room-collision volume away from the player
+    // pivot. Starting within the final one-unit margin must therefore produce
+    // a positive, continuous contact distance instead of a binary full/zero
+    // arm as the orbit crosses the wall tangent.
+    const auto tapered_toward = SweepSphereThroughRooms(
+        sectors, 0, {9.5, 0, 0}, {12, 0, 0}, 1.0, 0.0, 16u, 2.0);
+    if (!tapered_toward.valid || !tapered_toward.blocked ||
+        tapered_toward.started_overlapping) {
+      std::cerr << "tapered near-pivot wall contact failed\n";
+      return 1;
+    }
+    ExpectNear(tapered_toward.position.x, 9.8333333333,
+               "tapered inward contact distance");
+
+    const auto tapered_tangent = SweepSphereThroughRooms(
+        sectors, 0, {9.5, 0, 0}, {9.5, 0, 5}, 1.0, 0.0, 16u, 2.0);
+    if (!tapered_tangent.valid || !tapered_tangent.blocked ||
+        tapered_tangent.started_overlapping) {
+      std::cerr << "tapered tangent contact failed\n";
+      return 1;
+    }
+    ExpectNear(tapered_tangent.position.z, 1.0,
+               "tapered tangent distance");
+
+    const auto tapered_repeat = SweepSphereThroughRooms(
+        sectors, 0, {9.5, 0, 0}, tapered_tangent.position,
+        1.0, 0.0, 16u, 2.0);
+    if (!tapered_repeat.valid || tapered_repeat.blocked) {
+      std::cerr << "tapered accepted boundary was not idempotent\n";
+      return 1;
+    }
   }
 
   {

@@ -177,6 +177,7 @@ Subframes=3
 DebugLog=0
 CameraProbe=0
 HeadJointProbe=0
+NativeCollisionProbe=0
 ```
 
 `Subframes=3` produces two render-only phases plus the real endpoint, or about
@@ -212,6 +213,12 @@ input, collision, transition, error and periodic summary records remain, while
 a representative 6.05 MB session loses about 5.21 MB of probe-only data. Set
 one probe to `1` only for a specifically requested capture; no DLL rebuild is
 required.
+
+`NativeCollisionProbe` is a bounded, visibility-neutral comparison between
+the modern camera's render-mesh sweep and Deathtrap's native sector object
+lists/collision resources. Leave it disabled for normal play. When requested,
+enable it without enabling `DebugLog`; the compact records are written to the
+same per-launch file under `logs` and never alter the accepted camera pose.
 
 During gameplay, `F11` toggles only the native render-rate modification. This
 provides a direct visual A/B test without restarting the game.
@@ -469,6 +476,24 @@ probes are disabled in the installed production preset.
 The layout follows two established conventions: the right stick acts as a
 pointer in menus and as camera look in gameplay, while hold, select and release
 matches the standard radial-menu interaction.
+
+## Close-camera transparency run (0.0.222)
+
+The rejected final-position lowering experiment is disabled. Version 0.0.222
+keeps one exact requested yaw/pitch ray. The analytic player capsule does not
+participate in collision or choose another shot. It only makes the player
+subtree half-transparent while the accepted modern third-person camera volume
+intersects the character; three clear source ticks prevent flicker on exit.
+`camera_character_fade` and bounded `camera_character_probe` records identify
+the presentation transition.
+
+For one short run, back into a flat wall and rotate the camera through a full
+circle. Then stand in a two-wall corner and rotate for several seconds. If the
+camera contracts through the character, verify that the character becomes
+transparent and returns to opaque after leaving the corner. Toggle the custom
+F10/SELECT head view while close to a wall and confirm that body, arms and
+weapon remain fully visible. The resulting per-process file in `logs` is
+sufficient; no debug option or deep camera probe needs to be enabled.
 
 ## 7. Common failures
 

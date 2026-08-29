@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current development version: **0.0.221**
+Current development version: **0.0.222**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>

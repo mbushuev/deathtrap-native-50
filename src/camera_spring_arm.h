@@ -15,6 +15,20 @@ struct CameraSpringArmStep {
   uint64_t blocker_key = 0;
 };
 
+struct CameraRadiusOscillationStep {
+  double previous_meaningful_delta = 0.0;
+  uint64_t window_start_tick = 0;
+  uint32_t reversal_count = 0;
+  bool detected = false;
+};
+
+struct CameraSoftObstacleGateStep {
+  uint64_t blocker_key = 0;
+  uint64_t last_source_tick = 0;
+  uint32_t consecutive_ticks = 0;
+  bool accepted = false;
+};
+
 inline bool CameraPreHistoryMeshVetoMayApply(
     bool modern_configure_scope_active, bool controller_matches,
     bool position_history_ring_matches, bool scene_mesh_contact,
@@ -99,6 +113,69 @@ struct CameraPivotRelativeInterpolation {
   bool valid = false;
 };
 
+struct CameraContinuousLookAtBasis {
+  std::array<std::array<double, 3>, 3> rows{};
+  bool valid = false;
+};
+
+inline CameraContinuousLookAtBasis BuildCameraContinuousLookAtBasis(
+    const std::array<double, 3>& position,
+    const std::array<double, 3>& focus) {
+  CameraContinuousLookAtBasis result;
+  std::array<double, 3> forward = {
+      focus[0] - position[0], focus[1] - position[1],
+      focus[2] - position[2]};
+  for (size_t axis = 0; axis < 3u; ++axis) {
+    if (!std::isfinite(position[axis]) || !std::isfinite(focus[axis])) {
+      return result;
+    }
+  }
+  const auto normalize = [](std::array<double, 3>* value) {
+    const double length_squared = (*value)[0] * (*value)[0] +
+                                  (*value)[1] * (*value)[1] +
+                                  (*value)[2] * (*value)[2];
+    if (!std::isfinite(length_squared) || length_squared <= 1.0e-12) {
+      return false;
+    }
+    const double inverse_length = 1.0 / std::sqrt(length_squared);
+    for (double& component : *value) {
+      component *= inverse_length;
+    }
+    return true;
+  };
+  const auto cross = [](const std::array<double, 3>& a,
+                        const std::array<double, 3>& b) {
+    return std::array<double, 3>{
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0]};
+  };
+  if (!normalize(&forward)) {
+    return result;
+  }
+  const std::array<double, 3> world_up =
+      std::abs(forward[1]) < 0.999
+          ? std::array<double, 3>{0.0, 1.0, 0.0}
+          : std::array<double, 3>{0.0, 0.0, 1.0};
+  std::array<double, 3> right = cross(world_up, forward);
+  if (!normalize(&right)) {
+    return result;
+  }
+  std::array<double, 3> up = cross(forward, right);
+  if (!normalize(&up)) {
+    return result;
+  }
+  result.rows = {right, up, forward};
+  result.valid = true;
+  return result;
+}
+
+struct CameraOrbitAngularPrediction {
+  std::array<double, 3> position{};
+  double angular_distance = 0.0;
+  bool valid = false;
+};
+
 struct CameraFloorLimit {
   int32_t minimum_y = 0;
   bool player_root_used = false;
@@ -130,6 +207,231 @@ struct CameraNearPivotModeStep {
   bool active = false;
   bool changed = false;
 };
+
+struct CameraCapsuleClearance {
+  bool valid = false;
+  bool inside = false;
+  double segment_parameter = 0.0;
+  double centerline_distance = 0.0;
+  double clearance = 0.0;
+};
+
+struct CameraCharacterFadeStep {
+  uint32_t clear_ticks = 0;
+  bool active = false;
+  bool changed = false;
+};
+
+// Presentation-only hysteresis for a third-person camera entering the player
+// volume. Collision never consumes this state: the requested orbit remains
+// the sole angular camera owner, while the renderer may mark the character's
+// draw packets as half-transparent. Invalid measurements fail open so a
+// missing skeleton snapshot cannot leave the character faded indefinitely.
+inline CameraCharacterFadeStep StepCameraCharacterFade(
+    bool active, bool clearance_valid, double clearance,
+    uint32_t clear_ticks, double enter_clearance,
+    double release_clearance, uint32_t release_ticks) {
+  CameraCharacterFadeStep result;
+  result.active = active;
+  if (!clearance_valid || !std::isfinite(clearance) ||
+      !std::isfinite(enter_clearance) ||
+      !std::isfinite(release_clearance) ||
+      release_clearance < enter_clearance || release_ticks == 0u) {
+    result.changed = active;
+    result.active = false;
+    return result;
+  }
+  if (!active) {
+    result.active = clearance <= enter_clearance;
+    result.changed = result.active;
+    return result;
+  }
+  if (clearance < release_clearance) {
+    result.clear_ticks = 0u;
+    return result;
+  }
+  result.clear_ticks = std::min(clear_ticks + 1u, release_ticks);
+  if (result.clear_ticks >= release_ticks) {
+    result.active = false;
+    result.clear_ticks = 0u;
+    result.changed = true;
+  }
+  return result;
+}
+
+struct CameraConvexPlane {
+  std::array<double, 3> point{};
+  std::array<double, 3> outward_normal{};
+};
+
+struct CameraConvexSweep {
+  bool valid = false;
+  bool hit = false;
+  bool initial_overlap = false;
+  double distance = std::numeric_limits<double>::infinity();
+  double entry_distance = 0.0;
+  double exit_distance = 0.0;
+};
+
+inline CameraConvexSweep SweepCameraSphereAgainstConvexVolume(
+    const std::array<double, 3>& origin,
+    const std::array<double, 3>& direction, double radius,
+    double maximum_distance, const CameraConvexPlane* planes,
+    size_t plane_count, bool ignore_initial_overlap = false) {
+  CameraConvexSweep result;
+  if (!planes || plane_count < 4u || !std::isfinite(radius) ||
+      radius < 0.0 || !std::isfinite(maximum_distance) ||
+      maximum_distance < 0.0) {
+    return result;
+  }
+
+  double direction_length_squared = 0.0;
+  for (size_t axis = 0; axis < 3u; ++axis) {
+    if (!std::isfinite(origin[axis]) ||
+        !std::isfinite(direction[axis])) {
+      return result;
+    }
+    direction_length_squared += direction[axis] * direction[axis];
+  }
+  if (!std::isfinite(direction_length_squared) ||
+      direction_length_squared < 1.0e-12) {
+    return result;
+  }
+  const double inverse_direction_length =
+      1.0 / std::sqrt(direction_length_squared);
+  std::array<double, 3> unit_direction{};
+  for (size_t axis = 0; axis < 3u; ++axis) {
+    unit_direction[axis] =
+        direction[axis] * inverse_direction_length;
+  }
+
+  constexpr double kParallelEpsilon = 1.0e-9;
+  constexpr double kInsideEpsilon = 1.0e-7;
+  double entry_distance = 0.0;
+  double exit_distance = std::numeric_limits<double>::infinity();
+  bool origin_inside = true;
+  for (size_t plane_index = 0; plane_index < plane_count;
+       ++plane_index) {
+    const CameraConvexPlane& plane = planes[plane_index];
+    double normal_length_squared = 0.0;
+    double expanded_origin = 0.0;
+    double denominator = 0.0;
+    for (size_t axis = 0; axis < 3u; ++axis) {
+      if (!std::isfinite(plane.point[axis]) ||
+          !std::isfinite(plane.outward_normal[axis])) {
+        return result;
+      }
+      const double normal = plane.outward_normal[axis];
+      normal_length_squared += normal * normal;
+      expanded_origin +=
+          (origin[axis] - plane.point[axis]) * normal;
+      denominator += unit_direction[axis] * normal;
+    }
+    if (!std::isfinite(normal_length_squared) ||
+        normal_length_squared < 1.0e-12) {
+      return result;
+    }
+    expanded_origin -= radius * std::sqrt(normal_length_squared);
+    if (expanded_origin > kInsideEpsilon) {
+      origin_inside = false;
+    }
+    if (std::abs(denominator) <= kParallelEpsilon) {
+      if (expanded_origin > kInsideEpsilon) {
+        result.valid = true;
+        return result;
+      }
+      continue;
+    }
+    const double boundary_distance = -expanded_origin / denominator;
+    if (denominator < 0.0) {
+      entry_distance = std::max(entry_distance, boundary_distance);
+    } else {
+      exit_distance = std::min(exit_distance, boundary_distance);
+    }
+    if (entry_distance > exit_distance + kInsideEpsilon) {
+      result.valid = true;
+      result.initial_overlap = origin_inside;
+      result.entry_distance = entry_distance;
+      result.exit_distance = exit_distance;
+      return result;
+    }
+  }
+
+  result.valid = true;
+  result.initial_overlap = origin_inside;
+  result.entry_distance = entry_distance;
+  result.exit_distance = exit_distance;
+  if (origin_inside && ignore_initial_overlap) {
+    // A ray that begins inside one convex interval can only leave it once.
+    // Treat that outward interval as clear instead of re-creating the same
+    // zero-distance collision on every camera tick. The requested segment
+    // must actually reach the exit; accepting an endpoint still inside the
+    // expanded volume would put the camera back into the blocker.
+    if (exit_distance <= maximum_distance + kInsideEpsilon) {
+      return result;
+    }
+    result.hit = true;
+    result.distance = 0.0;
+    return result;
+  }
+  if (exit_distance < -kInsideEpsilon ||
+      entry_distance > maximum_distance + kInsideEpsilon) {
+    return result;
+  }
+  result.hit = true;
+  result.distance = origin_inside ? 0.0 : std::max(0.0, entry_distance);
+  return result;
+}
+
+inline CameraCapsuleClearance MeasureCameraCapsuleClearance(
+    const std::array<double, 3>& point,
+    const std::array<double, 3>& endpoint_a,
+    const std::array<double, 3>& endpoint_b,
+    double radius) {
+  CameraCapsuleClearance result;
+  if (!std::isfinite(radius) || radius < 0.0) {
+    return result;
+  }
+  for (size_t axis = 0; axis < 3u; ++axis) {
+    if (!std::isfinite(point[axis]) ||
+        !std::isfinite(endpoint_a[axis]) ||
+        !std::isfinite(endpoint_b[axis])) {
+      return result;
+    }
+  }
+
+  std::array<double, 3> segment{};
+  std::array<double, 3> from_a{};
+  double segment_length_squared = 0.0;
+  double projection = 0.0;
+  for (size_t axis = 0; axis < 3u; ++axis) {
+    segment[axis] = endpoint_b[axis] - endpoint_a[axis];
+    from_a[axis] = point[axis] - endpoint_a[axis];
+    segment_length_squared += segment[axis] * segment[axis];
+    projection += from_a[axis] * segment[axis];
+  }
+  if (!std::isfinite(segment_length_squared) ||
+      segment_length_squared < 1.0e-9) {
+    return result;
+  }
+  result.segment_parameter = std::clamp(
+      projection / segment_length_squared, 0.0, 1.0);
+  double distance_squared = 0.0;
+  for (size_t axis = 0; axis < 3u; ++axis) {
+    const double nearest = endpoint_a[axis] +
+        segment[axis] * result.segment_parameter;
+    const double delta = point[axis] - nearest;
+    distance_squared += delta * delta;
+  }
+  if (!std::isfinite(distance_squared) || distance_squared < 0.0) {
+    return result;
+  }
+  result.centerline_distance = std::sqrt(distance_squared);
+  result.clearance = result.centerline_distance - radius;
+  result.inside = result.clearance < 0.0;
+  result.valid = true;
+  return result;
+}
 
 struct CameraOrbitStickInput {
   double x = 0.0;
@@ -561,6 +863,75 @@ inline bool CameraMeshExtentsBlockVolume(
   return sorted[1] >= minimum_two_axis_span;
 }
 
+inline bool CameraMeshExtentsAreSoftObstacle(
+    const std::array<double, 3>& extents,
+    double minimum_blocking_two_axis_span,
+    double hard_blocking_two_axis_span) {
+  if (!std::isfinite(hard_blocking_two_axis_span) ||
+      hard_blocking_two_axis_span < minimum_blocking_two_axis_span) {
+    return false;
+  }
+  return CameraMeshExtentsBlockVolume(
+             extents, minimum_blocking_two_axis_span) &&
+         !CameraMeshExtentsBlockVolume(
+             extents, hard_blocking_two_axis_span);
+}
+
+inline bool CameraMeshExtentsAreThinSheet(
+    const std::array<double, 3>& extents,
+    double maximum_sheet_thickness,
+    double minimum_sheet_span) {
+  if (!std::isfinite(maximum_sheet_thickness) ||
+      maximum_sheet_thickness < 0.0 ||
+      !std::isfinite(minimum_sheet_span) || minimum_sheet_span <= 0.0) {
+    return false;
+  }
+  std::array<double, 3> sorted = extents;
+  for (double extent : sorted) {
+    if (!std::isfinite(extent) || extent < 0.0) {
+      return false;
+    }
+  }
+  std::sort(sorted.begin(), sorted.end());
+  return sorted[0] <= maximum_sheet_thickness &&
+         sorted[1] >= minimum_sheet_span;
+}
+
+inline CameraSoftObstacleGateStep StepCameraSoftObstacleGate(
+    uint64_t previous_blocker_key, uint64_t previous_source_tick,
+    uint32_t previous_consecutive_ticks, uint64_t blocker_key,
+    uint64_t source_tick, uint32_t ticks_before_acceptance) {
+  CameraSoftObstacleGateStep result{
+      previous_blocker_key, previous_source_tick,
+      previous_consecutive_ticks, false};
+  ticks_before_acceptance = std::max(ticks_before_acceptance, 1u);
+  if (blocker_key == 0u || source_tick == 0u) {
+    return result;
+  }
+
+  // A complete camera solve can query the same ray several times during one
+  // source tick. Revalidation must reuse the first decision instead of
+  // counting those internal queries as temporal evidence.
+  if (source_tick == previous_source_tick) {
+    result.accepted = blocker_key == previous_blocker_key &&
+                      previous_consecutive_ticks >=
+                          ticks_before_acceptance;
+    return result;
+  }
+
+  const bool consecutive = blocker_key == previous_blocker_key &&
+      previous_source_tick != 0u &&
+      source_tick == previous_source_tick + 1u;
+  result.blocker_key = blocker_key;
+  result.last_source_tick = source_tick;
+  result.consecutive_ticks = consecutive
+      ? std::min(previous_consecutive_ticks + 1u, 120u)
+      : 1u;
+  result.accepted =
+      result.consecutive_ticks >= ticks_before_acceptance;
+  return result;
+}
+
 inline bool PushCameraOutOfExpandedBox(
     const std::array<double, 3>& point,
     const std::array<double, 3>& reference,
@@ -975,7 +1346,12 @@ inline CameraSpringArmStep StepCameraSpringArm(
     uint32_t clear_ticks_before_release = 4u,
     uint32_t blocked_ticks_before_release = 3u,
     double release_step = 64.0,
-    bool require_monotonic_blocked_candidate = true) {
+    bool require_monotonic_blocked_candidate = true,
+    double predictive_safe_distance =
+        std::numeric_limits<double>::quiet_NaN(),
+    double predictive_contraction_step = 0.0,
+    double blocked_release_margin = 0.0,
+    bool hold_outward_recovery = false) {
   CameraSpringArmStep result;
   if (!std::isfinite(desired_distance) || desired_distance <= 0.0) {
     return result;
@@ -990,14 +1366,40 @@ inline CameraSpringArmStep StepCameraSpringArm(
   if (!std::isfinite(release_step) || release_step <= 0.0) {
     release_step = 64.0;
   }
+  if (!std::isfinite(blocked_release_margin) ||
+      blocked_release_margin < 0.0) {
+    blocked_release_margin = 0.0;
+  }
 
-  if (safe + 0.5 < previous) {
+  double contraction_target = safe;
+  const bool predictive_contraction =
+      std::isfinite(predictive_safe_distance) &&
+      std::isfinite(predictive_contraction_step) &&
+      predictive_contraction_step > 0.0 &&
+      predictive_safe_distance + 0.5 < previous &&
+      predictive_safe_distance + 0.5 < safe;
+  if (predictive_contraction) {
+    // The current exact ray is still clear, but a verified future focus along
+    // the player's connected room path has less radial clearance. Start the
+    // pull-in early at a bounded rate. The current hard-safe distance remains
+    // the final clamp, so prediction can never carry the camera through a
+    // wall if the available lead time is shorter than expected.
+    contraction_target = std::min(
+        safe, std::max(std::clamp(predictive_safe_distance, 0.0,
+                                  desired_distance),
+                       previous - predictive_contraction_step));
+  }
+
+  if (contraction_target + 0.5 < previous) {
     // Pull-in is hard and immediate. No submitted camera point may cross the
-    // current complete-ray query.
-    result.radius = safe;
+    // current complete-ray query. A predictive target can make the same safe
+    // contraction earlier, before the boundary reaches the current focus.
+    result.radius = contraction_target;
     result.clear_ticks = 0;
     result.blocked_release_ticks = 0;
-    result.blocked_candidate_distance = safe;
+    result.blocked_candidate_distance = predictive_contraction
+        ? std::clamp(predictive_safe_distance, 0.0, desired_distance)
+        : safe;
     result.blocker_key = obstruction_present ? current_blocker_key : 0;
   } else if (obstruction_present) {
     // A boolean native volume boundary can alternate between adjacent portal
@@ -1007,7 +1409,10 @@ inline CameraSpringArmStep StepCameraSpringArm(
     // at the bounded rate after confirmation.
     const bool same_blocker = current_blocker_key != 0 &&
                               current_blocker_key == previous_blocker_key;
-    const bool outward_space = safe > previous + 0.5;
+    const double buffered_release_limit =
+        std::max(0.0, safe - blocked_release_margin);
+    const bool outward_space =
+        buffered_release_limit > previous + 0.5;
     const bool candidate_monotonic =
         !require_monotonic_blocked_candidate ||
         previous_blocked_release_ticks == 0u ||
@@ -1020,8 +1425,10 @@ inline CameraSpringArmStep StepCameraSpringArm(
               : 1u;
     }
     result.radius = previous;
-    if (result.blocked_release_ticks >= blocked_ticks_before_release) {
-      result.radius = std::min(safe, previous + release_step);
+    if (!hold_outward_recovery &&
+        result.blocked_release_ticks >= blocked_ticks_before_release) {
+      result.radius = std::min(
+          buffered_release_limit, previous + release_step);
     }
     result.clear_ticks = 0;
     result.blocked_candidate_distance = safe;
@@ -1034,7 +1441,8 @@ inline CameraSpringArmStep StepCameraSpringArm(
     result.clear_ticks = std::min(previous_clear_ticks + 1u, 120u);
     result.blocked_release_ticks = 0;
     result.radius = previous;
-    if (result.clear_ticks >= clear_ticks_before_release) {
+    if (!hold_outward_recovery &&
+        result.clear_ticks >= clear_ticks_before_release) {
       result.radius = std::min(desired_distance, previous + release_step);
     }
     result.blocked_candidate_distance =
@@ -1046,6 +1454,48 @@ inline CameraSpringArmStep StepCameraSpringArm(
       result.radius + 0.5 >= desired_distance) {
     result.blocked_candidate_distance = desired_distance;
     result.blocker_key = 0;
+  }
+  return result;
+}
+
+inline CameraRadiusOscillationStep StepCameraRadiusOscillationDetector(
+    double previous_meaningful_delta, uint64_t previous_window_start_tick,
+    uint32_t previous_reversal_count, uint64_t source_tick,
+    double radius_delta, double minimum_delta = 12.0,
+    uint64_t window_ticks = 12u, uint32_t reversals_to_detect = 3u) {
+  CameraRadiusOscillationStep result;
+  result.previous_meaningful_delta = previous_meaningful_delta;
+  result.window_start_tick = previous_window_start_tick;
+  result.reversal_count = previous_reversal_count;
+  if (!std::isfinite(radius_delta) || !std::isfinite(minimum_delta) ||
+      minimum_delta <= 0.0 || window_ticks == 0u ||
+      reversals_to_detect == 0u || std::abs(radius_delta) < minimum_delta) {
+    return result;
+  }
+
+  const bool previous_valid =
+      std::isfinite(previous_meaningful_delta) &&
+      std::abs(previous_meaningful_delta) >= minimum_delta;
+  const bool reversed = previous_valid &&
+      ((radius_delta < 0.0) != (previous_meaningful_delta < 0.0));
+  result.previous_meaningful_delta = radius_delta;
+  if (!reversed) {
+    return result;
+  }
+
+  if (previous_window_start_tick == 0u ||
+      source_tick < previous_window_start_tick ||
+      source_tick - previous_window_start_tick > window_ticks) {
+    result.window_start_tick = source_tick;
+    result.reversal_count = 1u;
+  } else {
+    result.reversal_count =
+        std::min(previous_reversal_count + 1u, 120u);
+  }
+  if (result.reversal_count >= reversals_to_detect) {
+    result.detected = true;
+    result.window_start_tick = source_tick;
+    result.reversal_count = 0u;
   }
   return result;
 }
@@ -1112,4 +1562,162 @@ inline CameraPivotRelativeInterpolation InterpolateCameraPivotRelative(
                  std::isfinite(result.position[1]) &&
                  std::isfinite(result.position[2]);
   return result;
+}
+
+inline CameraOrbitAngularPrediction PredictCameraOrbitAngularMotion(
+    const std::array<double, 3>& previous_focus,
+    const std::array<double, 3>& previous_position,
+    const std::array<double, 3>& current_focus,
+    const std::array<double, 3>& current_position,
+    double prediction_ticks, double maximum_angular_distance) {
+  CameraOrbitAngularPrediction result;
+  if (!std::isfinite(prediction_ticks) || prediction_ticks <= 0.0 ||
+      !std::isfinite(maximum_angular_distance) ||
+      maximum_angular_distance <= 0.0) {
+    return result;
+  }
+  std::array<double, 3> previous_offset{};
+  std::array<double, 3> current_offset{};
+  for (size_t axis = 0; axis < 3u; ++axis) {
+    if (!std::isfinite(previous_focus[axis]) ||
+        !std::isfinite(previous_position[axis]) ||
+        !std::isfinite(current_focus[axis]) ||
+        !std::isfinite(current_position[axis])) {
+      return result;
+    }
+    previous_offset[axis] = previous_position[axis] - previous_focus[axis];
+    current_offset[axis] = current_position[axis] - current_focus[axis];
+  }
+  const double previous_horizontal =
+      std::hypot(previous_offset[0], previous_offset[2]);
+  const double current_horizontal =
+      std::hypot(current_offset[0], current_offset[2]);
+  const double previous_radius =
+      std::hypot(previous_horizontal, previous_offset[1]);
+  const double current_radius =
+      std::hypot(current_horizontal, current_offset[1]);
+  if (!std::isfinite(previous_radius) || !std::isfinite(current_radius) ||
+      previous_radius < 1.0 || current_radius < 1.0) {
+    return result;
+  }
+  constexpr double kPi = 3.14159265358979323846;
+  constexpr double kTwoPi = 2.0 * kPi;
+  const double previous_yaw =
+      std::atan2(previous_offset[0], previous_offset[2]);
+  const double current_yaw =
+      std::atan2(current_offset[0], current_offset[2]);
+  const double previous_pitch =
+      std::atan2(previous_offset[1], previous_horizontal);
+  const double current_pitch =
+      std::atan2(current_offset[1], current_horizontal);
+  const double yaw_step = std::remainder(
+      current_yaw - previous_yaw, kTwoPi);
+  const double pitch_step = current_pitch - previous_pitch;
+  const double angular_step = std::hypot(yaw_step, pitch_step);
+  if (!std::isfinite(angular_step) || angular_step < 1.0e-6 ||
+      angular_step > kPi / 4.0) {
+    return result;
+  }
+  const double prediction_scale = std::min(
+      prediction_ticks, maximum_angular_distance / angular_step);
+  const double predicted_yaw = current_yaw + yaw_step * prediction_scale;
+  const double predicted_pitch = std::clamp(
+      current_pitch + pitch_step * prediction_scale,
+      -kPi * 0.495, kPi * 0.495);
+  result.angular_distance = angular_step * prediction_scale;
+  const double predicted_horizontal =
+      std::cos(predicted_pitch) * current_radius;
+  result.position = {
+      current_focus[0] + std::sin(predicted_yaw) * predicted_horizontal,
+      current_focus[1] + std::sin(predicted_pitch) * current_radius,
+      current_focus[2] + std::cos(predicted_yaw) * predicted_horizontal};
+  result.valid = std::isfinite(result.position[0]) &&
+                 std::isfinite(result.position[1]) &&
+                 std::isfinite(result.position[2]);
+  return result;
+}
+
+inline CameraOrbitAngularPrediction PredictCameraOrbitControlMotion(
+    const std::array<double, 3>& current_focus,
+    const std::array<double, 3>& current_position,
+    double yaw_delta, double pitch_delta, double prediction_scale,
+    double maximum_angular_distance) {
+  CameraOrbitAngularPrediction result;
+  if (!std::isfinite(yaw_delta) || !std::isfinite(pitch_delta) ||
+      !std::isfinite(prediction_scale) || prediction_scale <= 0.0 ||
+      !std::isfinite(maximum_angular_distance) ||
+      maximum_angular_distance <= 0.0) {
+    return result;
+  }
+  std::array<double, 3> offset{};
+  for (size_t axis = 0; axis < offset.size(); ++axis) {
+    if (!std::isfinite(current_focus[axis]) ||
+        !std::isfinite(current_position[axis])) {
+      return result;
+    }
+    offset[axis] = current_position[axis] - current_focus[axis];
+  }
+  const double horizontal = std::hypot(offset[0], offset[2]);
+  const double radius = std::hypot(horizontal, offset[1]);
+  if (!std::isfinite(radius) || radius <= 1.0) {
+    return result;
+  }
+
+  double predicted_yaw_delta = yaw_delta * prediction_scale;
+  double predicted_pitch_delta = pitch_delta * prediction_scale;
+  double angular_distance = std::hypot(
+      predicted_yaw_delta, predicted_pitch_delta);
+  if (!std::isfinite(angular_distance) || angular_distance <= 1.0e-6) {
+    return result;
+  }
+  if (angular_distance > maximum_angular_distance) {
+    const double scale = maximum_angular_distance / angular_distance;
+    predicted_yaw_delta *= scale;
+    predicted_pitch_delta *= scale;
+    angular_distance = maximum_angular_distance;
+  }
+
+  constexpr double kHalfPi = 1.57079632679489661923;
+  const double yaw = std::atan2(offset[0], offset[2]);
+  const double pitch = std::atan2(offset[1], std::max(horizontal, 1.0));
+  const double predicted_yaw = yaw + predicted_yaw_delta;
+  const double predicted_pitch = std::clamp(
+      pitch + predicted_pitch_delta, -kHalfPi + 1.0e-4,
+      kHalfPi - 1.0e-4);
+  const double predicted_horizontal = radius * std::cos(predicted_pitch);
+  result.position = {
+      current_focus[0] + std::sin(predicted_yaw) * predicted_horizontal,
+      current_focus[1] + std::sin(predicted_pitch) * radius,
+      current_focus[2] + std::cos(predicted_yaw) * predicted_horizontal};
+  result.angular_distance = angular_distance;
+  result.valid = true;
+  return result;
+}
+
+inline bool CameraPredictionMayContractWithoutNearPivot(
+    bool near_pivot_active, double predicted_safe_distance,
+    double near_pivot_exit_distance) {
+  // Look-ahead is presentation anticipation, not current collision truth. It
+  // may soften an approaching wall at ordinary third-person distance, but it
+  // must never speculate the camera into the special near-pivot state. Only a
+  // collision on the current user ray may do that.
+  return !near_pivot_active &&
+      std::isfinite(predicted_safe_distance) &&
+      std::isfinite(near_pivot_exit_distance) &&
+      near_pivot_exit_distance > 0.0 &&
+      predicted_safe_distance + 0.5 >= near_pivot_exit_distance;
+}
+
+inline bool CameraAngularPredictionMayContract(
+    bool current_ray_obstructed, bool near_pivot_active,
+    double predicted_safe_distance, double near_pivot_exit_distance) {
+  // A future orbit angle is useful only for shaping recovery while the exact
+  // current user ray is already constrained. Giving a speculative angle
+  // authority over a clear current ray makes the spring radius depend on
+  // distant room geometry: every revolution then repeats the same radial and
+  // vertical wave even though the camera's present path is unobstructed.
+  return current_ray_obstructed &&
+      CameraPredictionMayContractWithoutNearPivot(
+          near_pivot_active, predicted_safe_distance,
+          near_pivot_exit_distance);
 }

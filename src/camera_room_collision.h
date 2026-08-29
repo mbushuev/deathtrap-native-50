@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -111,13 +112,15 @@ inline bool SphereFitsSector(const RoomSector& sector, const RoomVec3& point,
 inline RoomSweepResult SweepSphereThroughRooms(
     const std::vector<RoomSector>& sectors, size_t start_sector,
     const RoomVec3& start, const RoomVec3& desired, double radius,
-    double contact_backoff = 1.0, size_t maximum_portal_transitions = 16) {
+    double contact_backoff = 1.0, size_t maximum_portal_transitions = 16,
+    double radius_ramp_distance = 0.0) {
   RoomSweepResult result;
   result.position = start;
   result.sector = start_sector;
   if (start_sector >= sectors.size() || !std::isfinite(radius) ||
       radius < 0.0 || !std::isfinite(contact_backoff) ||
-      contact_backoff < 0.0) {
+      contact_backoff < 0.0 || !std::isfinite(radius_ramp_distance) ||
+      radius_ramp_distance < 0.0) {
     return result;
   }
 
@@ -136,6 +139,77 @@ inline RoomSweepResult SweepSphereThroughRooms(
 
   double current_fraction = 0.0;
   size_t current_sector = start_sector;
+  const auto radius_at_fraction = [&](double fraction) {
+    if (radius_ramp_distance <= detail::kRoomSweepEpsilon) {
+      return radius;
+    }
+    return radius * std::clamp(
+        sweep_length * fraction / radius_ramp_distance, 0.0, 1.0);
+  };
+  const auto plane_contact_fraction = [&](
+      double start_distance, double end_distance,
+      double from_fraction, bool* started_overlapping,
+      double* hit_fraction) {
+    if (!started_overlapping || !hit_fraction) {
+      return false;
+    }
+    *started_overlapping = false;
+    *hit_fraction = std::numeric_limits<double>::infinity();
+    const double ramp_fraction = radius_ramp_distance >
+            detail::kRoomSweepEpsilon
+        ? std::clamp(radius_ramp_distance / sweep_length, 0.0, 1.0)
+        : 0.0;
+    std::array<double, 3> boundaries{
+        from_fraction,
+        std::clamp(ramp_fraction, from_fraction, 1.0),
+        1.0};
+    size_t segment_count = 2u;
+    if (boundaries[1] <= boundaries[0] + detail::kRoomSweepEpsilon ||
+        boundaries[1] >= 1.0 - detail::kRoomSweepEpsilon) {
+      boundaries[1] = 1.0;
+      segment_count = 1u;
+    }
+    const auto signed_at = [&](double fraction) {
+      return start_distance +
+          (end_distance - start_distance) * fraction;
+    };
+    for (size_t segment = 0; segment < segment_count; ++segment) {
+      const double a = boundaries[segment];
+      const double b = boundaries[segment + 1u];
+      if (b <= a + detail::kRoomSweepEpsilon) {
+        continue;
+      }
+      const double clearance_a =
+          signed_at(a) - radius_at_fraction(a);
+      const double clearance_b =
+          signed_at(b) - radius_at_fraction(b);
+      if (segment == 0u &&
+          clearance_a < -detail::kRoomSweepEpsilon) {
+        *started_overlapping = true;
+        // Preserve the established depenetration rule. Once clearance is
+        // increasing, the radius ramp becomes no steeper after its endpoint,
+        // so this plane cannot become a later blocker on the same ray.
+        if (clearance_b >
+            clearance_a + detail::kRoomSweepEpsilon) {
+          return false;
+        }
+        *hit_fraction = a;
+        return true;
+      }
+      if (clearance_b >= -detail::kRoomSweepEpsilon ||
+          clearance_b >= clearance_a) {
+        continue;
+      }
+      const double denominator = clearance_a - clearance_b;
+      if (denominator <= detail::kRoomSweepEpsilon) {
+        continue;
+      }
+      *hit_fraction = std::clamp(
+          a + (b - a) * clearance_a / denominator, a, b);
+      return true;
+    }
+    return false;
+  };
   for (size_t transition = 0;
        transition <= maximum_portal_transitions; ++transition) {
     if (current_sector >= sectors.size()) {
@@ -151,33 +225,16 @@ inline RoomSweepResult SweepSphereThroughRooms(
       const RoomPlane& plane = sector.solid_planes[plane_index];
       const double start_distance = SignedDistance(plane, start);
       const double end_distance = SignedDistance(plane, desired);
-      const double current_distance =
-          start_distance + (end_distance - start_distance) * current_fraction;
-      if (current_distance + detail::kRoomSweepEpsilon < radius) {
-        result.started_overlapping = true;
-        // A focus can legitimately begin inside the camera sphere's margin.
-        // If the requested orbit moves away from that plane, let the arm leave
-        // the overlap instead of pinning it to the pivot forever.
-        if (end_distance > current_distance + detail::kRoomSweepEpsilon) {
-          continue;
-        }
-        earliest_solid = current_fraction;
-        solid_key = sector.key ^ (0x9E3779B97F4A7C15ull + plane_index);
-        break;
-      }
-      if (end_distance + detail::kRoomSweepEpsilon >= radius ||
-          end_distance >= current_distance) {
-        continue;
-      }
-      const double denominator = start_distance - end_distance;
-      if (denominator <= detail::kRoomSweepEpsilon) {
-        continue;
-      }
-      const double hit_fraction =
-          (start_distance - radius) / denominator;
-      if (hit_fraction + detail::kRoomSweepEpsilon >= current_fraction &&
+      bool started_overlapping = false;
+      double hit_fraction = std::numeric_limits<double>::infinity();
+      const bool plane_hit = plane_contact_fraction(
+          start_distance, end_distance, current_fraction,
+          &started_overlapping, &hit_fraction);
+      result.started_overlapping =
+          result.started_overlapping || started_overlapping;
+      if (plane_hit &&
           hit_fraction < earliest_solid) {
-        earliest_solid = std::clamp(hit_fraction, current_fraction, 1.0);
+        earliest_solid = hit_fraction;
         solid_key = sector.key ^ (0x9E3779B97F4A7C15ull + plane_index);
       }
     }
@@ -188,30 +245,16 @@ inline RoomSweepResult SweepSphereThroughRooms(
       }
       const double start_distance = SignedDistance(portal.plane, start);
       const double end_distance = SignedDistance(portal.plane, desired);
-      const double current_distance =
-          start_distance + (end_distance - start_distance) * current_fraction;
-      if (current_distance + detail::kRoomSweepEpsilon < radius) {
-        result.started_overlapping = true;
-        if (end_distance > current_distance + detail::kRoomSweepEpsilon) {
-          continue;
-        }
-        earliest_solid = current_fraction;
-        solid_key = portal.key;
-        break;
-      }
-      if (end_distance + detail::kRoomSweepEpsilon >= radius ||
-          end_distance >= current_distance) {
-        continue;
-      }
-      const double denominator = start_distance - end_distance;
-      if (denominator <= detail::kRoomSweepEpsilon) {
-        continue;
-      }
-      const double hit_fraction =
-          (start_distance - radius) / denominator;
-      if (hit_fraction + detail::kRoomSweepEpsilon >= current_fraction &&
+      bool started_overlapping = false;
+      double hit_fraction = std::numeric_limits<double>::infinity();
+      const bool portal_hit = plane_contact_fraction(
+          start_distance, end_distance, current_fraction,
+          &started_overlapping, &hit_fraction);
+      result.started_overlapping =
+          result.started_overlapping || started_overlapping;
+      if (portal_hit &&
           hit_fraction < earliest_solid) {
-        earliest_solid = std::clamp(hit_fraction, current_fraction, 1.0);
+        earliest_solid = hit_fraction;
         solid_key = portal.key;
       }
     }
@@ -246,10 +289,12 @@ inline RoomSweepResult SweepSphereThroughRooms(
     if (selected_portal &&
         earliest_portal <= earliest_solid + detail::kRoomSweepEpsilon) {
       const RoomVec3 crossing = start + delta * earliest_portal;
+      const double crossing_radius =
+          radius_at_fraction(earliest_portal);
       const bool fits_current =
-          detail::SphereFitsSector(sector, crossing, radius);
+          detail::SphereFitsSector(sector, crossing, crossing_radius);
       const bool fits_neighbor = detail::SphereFitsSector(
-          sectors[selected_portal->neighbor], crossing, radius);
+          sectors[selected_portal->neighbor], crossing, crossing_radius);
       if (!fits_current || !fits_neighbor) {
         // The centre can see through the portal but the camera sphere does not
         // fit through its convex aperture. Treat the portal face as the
@@ -351,7 +396,8 @@ inline RoomOrbitPlan SelectRoomOrbitPlan(
     double switch_hysteresis_distance = 0.0,
     double contact_backoff = 1.0,
     size_t maximum_portal_transitions = 16,
-    bool allow_direct_early_exit = true) {
+    bool allow_direct_early_exit = true,
+    double radius_ramp_distance = 0.0) {
   RoomOrbitPlan plan;
   if (offsets.empty() || !std::isfinite(preferred_useful_distance) ||
       preferred_useful_distance < 0.0 ||
@@ -370,7 +416,8 @@ inline RoomOrbitPlan SelectRoomOrbitPlan(
     candidate.requested = RotateRoomOrbit(focus, requested, offsets[index]);
     candidate.sweep = SweepSphereThroughRooms(
         sectors, start_sector, focus, candidate.requested, sphere_radius,
-        contact_backoff, maximum_portal_transitions);
+        contact_backoff, maximum_portal_transitions,
+        radius_ramp_distance);
     candidate.safe_distance = candidate.sweep.valid
         ? Length(candidate.sweep.position - focus)
         : 0.0;
