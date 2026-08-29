@@ -185,6 +185,16 @@ function Add-NativeBinding {
     return $Text.Insert($insertAt, $newline + $line)
 }
 
+function Remove-NativeLeftMouseCombatBindings {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text
+    )
+
+    $pattern = '(?m)^\s*define\s+ACTION_(?:ATTACK_[A-Z0-9_]+|PARRY)' +
+        '\s+DOWN\s+MOUSE_LBUTTON(?:\s*\+[^\r\n]*)?\s*\r?\n?'
+    return [regex]::Replace($Text, $pattern, '')
+}
+
 function Set-NativeKeyboardBinding {
     param(
         [Parameter(Mandatory = $true)][string]$Text,
@@ -366,6 +376,10 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
         $keyText = Set-NativeKeyboardBinding -Text $keyText `
             -Action $binding[0] -Trigger $binding[1] -Expression $binding[2]
     }
+    # Mouse combat is translated to the verified F+direction grammar at the
+    # DirectInput keyboard boundary. Remove every older left-button combat
+    # experiment, including both WASD and retail-arrow variants, on upgrade.
+    $keyText = Remove-NativeLeftMouseCombatBindings -Text $keyText
     foreach ($binding in @(
         @('ACTION_TURN_LEFT', 'MOUSE_HORIZ_LEFT'),
         @('ACTION_TURN_RIGHT', 'MOUSE_HORIZ_RIGHT'),
@@ -385,7 +399,6 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
         @('ACTION_JUMP_RIGHT', 'KEY_SPACE + JOY_HORIZ_RIGHT'),
         @('ACTION_JUMP_LEFT', 'KEY_SPACE + KEY_J'),
         @('ACTION_JUMP_RIGHT', 'KEY_SPACE + KEY_K'),
-        @('ACTION_ATTACK_1', 'MOUSE_LBUTTON'),
         @('ACTION_PARRY', 'MOUSE_RBUTTON'),
         @('ACTION_1ST_PERSON_VIEW', 'KEY_TAB'),
         @('ACTION_LEFT_SIDESTEP', 'KEY_J'),

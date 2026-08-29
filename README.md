@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current development version: **0.0.220**
+Current development version: **0.0.221**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -206,7 +206,7 @@ Detailed requirements, first-run verification and rollback instructions are in
 | Input | Action |
 |---|---|
 | Mouse movement | Rotate the modern camera; look around in first person |
-| Left mouse button | Primary attack |
+| Left mouse button | Attack; hold `A` / `D` for left/right attacks or `S` for the turning attack |
 | Right mouse button | Block/parry |
 | Mouse wheel | Previous/next available melee weapon |
 | `W` / `S` | Walk forward/backward |
@@ -220,6 +220,7 @@ Detailed requirements, first-run verification and rollback instructions are in
 | `Space` + direction | Directional jump |
 | `F` | Ranged attack / original combat modifier |
 | `F` + `W` / `A` / `D` | Original directional melee attacks |
+| `F` + `A` + `D` | Original turning/back attack |
 | `F` + `S` | Original parry |
 | `Q` | Cast/use the selected spell |
 | `E` | Operate or interact |
@@ -246,7 +247,7 @@ the running speed.
 | `B` | — | Back |
 | `X` | Operate/interact | Alternate skip on supported screens |
 | `Y` | Unassigned | Unassigned |
-| `RT` | Primary attack | — |
+| `RT` | Attack; combine with the left stick for directional attacks | — |
 | `LT` | Block/parry | — |
 | `RB` | Cast/use contextual spell action | — |
 | Hold `LB` + left stick | Original side-step movement | — |
@@ -321,6 +322,8 @@ See [Publishing releases](docs/RELEASING.md) for the exact procedure.
 Thanks to the community members who helped test public builds:
 
 - `dbdk422a`
+- `517342` — for testing and identifying the directional-control problems
+  fixed in version 0.0.221.
 
 ## Licence
 

@@ -2437,3 +2437,19 @@ parent. This preserves Red Lotus's animated braid child and Chaindog's leaf
 head while excluding independently rendered projectile attachments. The
 radius, depth, resource-free neck and three-branch chest constraints remain
 unchanged; no pointer latch or projectile-specific resource ID is used.
+
+## 0.0.221: mode-local controller orbit transform
+
+The accepted horizontal third-person orbit is not changed. Only its vertical
+controller boundary is corrected: Dungeon's trailing mode-3 endpoint consumes
+pitch with the opposite sign from the custom head endpoint. The transform is
+now selected after stick filtering, where the active camera mode is known,
+instead of forcing both modes through one shared sign. This leaves physical
+mouse input and the accepted immersive head view untouched.
+
+Third-person right-stick orbit receives a configurable 140% speed scalar on
+both axes. The custom head view intentionally stays at 100%, and mouse
+sensitivity keeps its existing per-pixel settings. The shipped cardinal-axis
+lock is disabled so diagonal input remains continuous rather than sticking to
+one axis near the four cardinal directions. Pure tests cover horizontal
+preservation, third-person vertical polarity and complete head-view isolation.

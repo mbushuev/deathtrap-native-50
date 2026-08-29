@@ -6,15 +6,20 @@
 - Feed relative horizontal mouse motion into the original character-turn
   actions.
 - Keep the original follow camera and all collision logic.
-- Map left click to the original primary melee attack.
+- Make left click attack immediately, with movement directions acting as
+  modern attack modifiers: `A`/`D` select side attacks and `S` selects the
+  original turning attack. Keep block/parry on right click.
 - Verify sensitivity, inversion, focus changes and native-50 compatibility.
 
 Version 0.0.18 proved the native bindings. Direct heading and live action-table
 experiments in 0.0.19 through 0.0.22 were rejected because combat and menu
-transitions could deadlock. Version 0.0.23 installs only static retail-format
-bindings in `ASYLUM/keys.cfg` and had no input hook. Shift plus horizontal
-mouse motion selects the game's own fast-turn action while running. Version
-0.0.24 adds the separate observation-only wheel path described below.
+transitions could deadlock. Version 0.0.23 installed only static retail-format
+bindings in `ASYLUM/keys.cfg` and had no combat-input hook. Shift plus
+horizontal mouse motion selects the game's own fast-turn action while running.
+Version 0.0.24 added the separate observation-only wheel path described below.
+Version 0.0.221 adds a narrowly gated DirectInput keyboard-state translator for
+the modern directional mouse-combat scheme without modifying the live action
+table.
 
 ## Phase 2: wheel weapon selection (implemented in 0.0.24)
 
@@ -64,6 +69,20 @@ the overlay deliberately does not take cursor ownership.
 - Require explicit A confirmation for ranged items and consumables, and allow
   B/release cancel.
 - Add remapping only after this layout is gameplay-tested.
+
+## Phase 7: indirect XInput remapping (planned)
+
+- Do not expose hard-coded XInput buttons as the permanent public layout.
+- Add a configurable translation layer from physical controller inputs to
+  patch-owned virtual commands, then route those commands through the existing
+  native keyboard, mouse, joystick and selector boundaries.
+- Keep menu ownership, radial-selector capture and gameplay mappings as
+  separate contexts so one remapped button cannot trigger both layers.
+- Use the already validated Crime Cities remapping architecture as the design
+  reference before implementing this layer; do not graft bindings directly
+  onto Deathtrap's live action table.
+- Include defaults equivalent to the accepted current layout and allow users
+  to restore those defaults without editing configuration text manually.
 
 ## Phase 6: XInput vibration (implemented in 0.0.39)
 

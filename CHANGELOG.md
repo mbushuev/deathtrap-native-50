@@ -5,6 +5,30 @@
 Thanks to the community members who helped test public builds:
 
 - `dbdk422a`
+- `517342` — for testing and identifying the directional-control problems
+  fixed in version 0.0.221.
+
+## 0.0.221 — directional combat and controller camera
+
+- Corrects only the third-person right-stick vertical convention while
+  preserving the accepted horizontal direction and immersive head view.
+- Speeds up third-person controller orbit by 40% and disables the old
+  cardinal-axis lock, removing the slow, sticky response on diagonal turns.
+- Makes left mouse attack immediately while using movement directions as
+  modern attack modifiers: `A`/`D` select the side attacks and `S` selects the
+  original turning attack. Right mouse remains block/parry.
+- Gives `RT` the same behavior on XInput controllers: it attacks immediately,
+  while the left-stick sector selects forward, side or turning attacks.
+- Resolves the stick continuously through dominant-axis sectors while `RT` is
+  held, matching keyboard/mouse chord changes without interrupting the active
+  attack.
+- Keeps the native joystick override active with centered axes throughout
+  combat. This prevents the same physical pad leaking through the original
+  DirectInput poll and moving the character while the stick selects an attack.
+- Removes the old direct left-mouse `ACTION_ATTACK_1` binding that forced every
+  mouse attack to the overhead swing before directional intent was resolved.
+- Preserves those physical direction keys while attacking in immersive first
+  person so its custom strafe path cannot replace the selected attack.
 
 ## 0.0.220 — self-contained dgVoodoo installation
 

@@ -13,6 +13,7 @@
 #include <unordered_map>
 
 #include "deathtrap_native_render_patch.h"
+#include "mouse_combat_routing.h"
 #include "native_d3d11_present_guard.h"
 
 namespace {
@@ -80,12 +81,15 @@ std::atomic<uint64_t> g_suppressed_page_restores{0};
 std::atomic<int32_t> g_xinput_mouse_delta_x{0};
 std::atomic<int32_t> g_xinput_mouse_delta_y{0};
 std::atomic<uint8_t> g_xinput_mouse_buttons{0};
+std::atomic<uint8_t> g_xinput_combat_state{0};
 std::atomic<int32_t> g_xinput_buffered_mouse_delta_x{0};
 std::atomic<int32_t> g_xinput_buffered_mouse_delta_y{0};
 std::atomic<uint8_t> g_xinput_buffered_mouse_buttons{0};
 std::atomic<uint8_t> g_xinput_buffered_mouse_buttons_delivered{0};
 std::atomic<uint32_t> g_xinput_buffered_mouse_sequence{1};
 std::atomic<bool> g_physical_operate_key_down{false};
+std::atomic<bool> g_physical_left_button_down{false};
+std::atomic<bool> g_physical_left_button_press_pending{false};
 std::atomic<uint64_t> g_last_physical_cursor_activity_ms{0};
 std::atomic<uint64_t> g_last_controller_cursor_activity_ms{0};
 std::atomic<IDirectInputDeviceA*> g_support_mouse_device{nullptr};
@@ -100,6 +104,7 @@ std::atomic<int64_t> g_support_mouse_delta_y{0};
 std::atomic<uint64_t> g_support_last_summary_ms{0};
 std::atomic<int32_t> g_support_last_camera_owner{-1};
 std::atomic<int32_t> g_support_last_clip_mismatch{-1};
+std::atomic<int32_t> g_support_last_mouse_combat_route{-1};
 
 extern "C" {
 FARPROC g_target_DirectInputCreateA = nullptr;
@@ -162,6 +167,20 @@ bool ControllerCursorAxesOwnInput() {
              std::memory_order_acquire) >
          g_last_physical_cursor_activity_ms.load(
              std::memory_order_acquire);
+}
+
+void PublishPhysicalLeftButtonState(bool down) {
+  const bool previous =
+      g_physical_left_button_down.exchange(down, std::memory_order_acq_rel);
+  if (down != previous) {
+    if (down) {
+      g_physical_left_button_press_pending.store(true,
+                                                  std::memory_order_release);
+    }
+    AppendDeathtrapSupportLog("mouse_combat physical_left=%u camera=%u",
+                              down ? 1u : 0u,
+                              DeathtrapModernCameraConsumesMouse() ? 1u : 0u);
+  }
 }
 
 bool IsCurrentProcessWindow(HWND window) {
@@ -367,31 +386,75 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     if (operate_down && !was_down) {
       NotifyDeathtrapOperateInput();
     }
-    if (DeathtrapImmersiveFirstPersonActive() &&
-        DeathtrapImmersiveVectorLocomotionActive()) {
-      const bool forward = (keyboard[DIK_W] & 0x80u) != 0u;
-      const bool backward = (keyboard[DIK_S] & 0x80u) != 0u;
-      const bool left = (keyboard[DIK_A] & 0x80u) != 0u;
-      const bool right = (keyboard[DIK_D] & 0x80u) != 0u;
+    bool forward = (keyboard[DIK_W] & 0x80u) != 0u;
+    bool backward = (keyboard[DIK_S] & 0x80u) != 0u;
+    bool left = (keyboard[DIK_A] & 0x80u) != 0u;
+    bool right = (keyboard[DIK_D] & 0x80u) != 0u;
+    const bool immersive_vector = DeathtrapImmersiveFirstPersonActive() &&
+        DeathtrapImmersiveVectorLocomotionActive();
+    const bool physical_left_button =
+        g_physical_left_button_down.load(std::memory_order_acquire) ||
+        g_physical_left_button_press_pending.exchange(
+            false, std::memory_order_acq_rel);
+    const uint8_t controller_combat =
+        g_xinput_combat_state.load(std::memory_order_acquire);
+    const bool controller_attack = (controller_combat & 0x01u) != 0u;
+    if (!physical_left_button && controller_attack) {
+      forward = (controller_combat & 0x02u) != 0u;
+      backward = (controller_combat & 0x04u) != 0u;
+      left = (controller_combat & 0x08u) != 0u;
+      right = (controller_combat & 0x10u) != 0u;
+    }
+    const bool attack_button = physical_left_button || controller_attack;
+    const bool gameplay_accepts_combat =
+        DeathtrapGameplayAcceptsMouseCombat();
+    const auto combat_plan =
+        deathtrap::input::ResolveMouseCombatKeyboardPlan(
+            attack_button, gameplay_accepts_combat, immersive_vector,
+            forward, backward, left, right);
+    if (combat_plan.submit_immersive_movement) {
       const int32_t lateral = static_cast<int32_t>(right) -
           static_cast<int32_t>(left);
       const int32_t longitudinal = static_cast<int32_t>(forward) -
           static_cast<int32_t>(backward);
       SubmitDeathtrapImmersiveKeyboardMovement(lateral, longitudinal);
-      keyboard[DIK_A] &= static_cast<uint8_t>(~0x80u);
-      keyboard[DIK_D] &= static_cast<uint8_t>(~0x80u);
-      // Dungeon's retail side-step states are mutually exclusive with W/S,
-      // so they cannot represent a diagonal. Any purely lateral request uses
-      // the ordinary forward state as its native root-motion driver; the three
-      // verified player root-motion callsites rotate its local displacement
-      // into the requested world direction before native collision runs.
-      if (lateral != 0 && longitudinal == 0) {
-        keyboard[DIK_W] |= 0x80u;
-      }
-      keyboard[DIK_J] &= static_cast<uint8_t>(~0x80u);
-      keyboard[DIK_K] &= static_cast<uint8_t>(~0x80u);
     } else {
       SubmitDeathtrapImmersiveKeyboardMovement(0, 0);
+    }
+    if (combat_plan.modifier_down ||
+        combat_plan.rewrite_immersive_movement) {
+      keyboard[DIK_W] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_S] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_A] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_D] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_J] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_K] &= static_cast<uint8_t>(~0x80u);
+      if (combat_plan.key_w) {
+        keyboard[DIK_W] |= 0x80u;
+      }
+      if (combat_plan.key_a) {
+        keyboard[DIK_A] |= 0x80u;
+      }
+      if (combat_plan.key_s) {
+        keyboard[DIK_S] |= 0x80u;
+      }
+      if (combat_plan.key_d) {
+        keyboard[DIK_D] |= 0x80u;
+      }
+    }
+    if (combat_plan.modifier_down) {
+      keyboard[DIK_F] |= 0x80u;
+    }
+    const int32_t route = static_cast<int32_t>(combat_plan.attack);
+    if (g_support_last_mouse_combat_route.exchange(
+            route, std::memory_order_acq_rel) != route) {
+      AppendDeathtrapSupportLog(
+          "mouse_combat route=%d source=%u input=%u%u%u%u immersive=%u "
+          "gameplay=%u",
+          route, physical_left_button ? 1u : (controller_attack ? 2u : 0u),
+          forward ? 1u : 0u, backward ? 1u : 0u, left ? 1u : 0u,
+          right ? 1u : 0u, immersive_vector ? 1u : 0u,
+          gameplay_accepts_combat ? 1u : 0u);
     }
   }
   // Deathtrap uses the standard relative mouse state. Preserve the physical
@@ -403,6 +466,7 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
        data_size == sizeof(DIMOUSESTATE2))) {
     g_support_mouse_state_calls.fetch_add(1, std::memory_order_relaxed);
     auto* mouse = static_cast<DIMOUSESTATE*>(data);
+    PublishPhysicalLeftButtonState((mouse->rgbButtons[0] & 0x80u) != 0u);
     AccumulateSupportMouseDelta(mouse->lX, mouse->lY);
     NotePhysicalCursorActivity(mouse->lX, mouse->lY);
     const bool camera_consumes = DeathtrapModernCameraConsumesMouse();
@@ -487,6 +551,11 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetData(
         observed_physical_y = std::clamp(
             observed_physical_y + static_cast<int32_t>(event.dwData),
             -8192, 8192);
+      } else if (!peek &&
+                 device ==
+                     g_support_mouse_device.load(std::memory_order_acquire) &&
+                 event.dwOfs == DIMOFS_BUTTON0) {
+        PublishPhysicalLeftButtonState((event.dwData & 0x80u) != 0u);
       }
     }
     if (!peek) {
@@ -1072,6 +1141,23 @@ void SubmitDeathtrapXInputMouseState(int32_t delta_x, int32_t delta_y,
                                      bool left_button, bool right_button) {
   SubmitDeathtrapXInputMouseStateInternal(delta_x, delta_y, left_button,
                                           right_button);
+}
+
+void SubmitDeathtrapXInputCombatState(bool attack, bool forward, bool backward,
+                                      bool left, bool right) {
+  const uint8_t state = static_cast<uint8_t>(
+      attack ? 0x01u | (forward ? 0x02u : 0u) |
+                   (backward ? 0x04u : 0u) | (left ? 0x08u : 0u) |
+                   (right ? 0x10u : 0u)
+             : 0u);
+  const uint8_t previous =
+      g_xinput_combat_state.exchange(state, std::memory_order_acq_rel);
+  if (state != previous) {
+    AppendDeathtrapSupportLog(
+        "xinput_combat attack=%u input=%u%u%u%u",
+        attack ? 1u : 0u, forward ? 1u : 0u, backward ? 1u : 0u,
+        left ? 1u : 0u, right ? 1u : 0u);
+  }
 }
 
 void SetDeathtrapNativePageRestorePresentSuppressed(bool suppressed) {

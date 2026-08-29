@@ -25,6 +25,25 @@ void ExpectTicks(uint32_t actual, uint32_t expected, const char* label) {
 }  // namespace
 
 int main() {
+  const CameraOrbitStickInput third_person_orbit =
+      CameraOrbitModeInput(0.5, 0.25, false, false, false, 1.4);
+  ExpectNear(third_person_orbit.x, 0.7,
+             "third-person horizontal direction and speed");
+  ExpectNear(third_person_orbit.y, -0.35,
+             "third-person vertical convention and speed");
+  const CameraOrbitStickInput immersive_orbit =
+      CameraOrbitModeInput(0.5, 0.25, true, false, false, 1.4);
+  ExpectNear(immersive_orbit.x, 0.5,
+             "immersive horizontal convention unchanged");
+  ExpectNear(immersive_orbit.y, 0.25,
+             "immersive vertical convention unchanged");
+  const CameraOrbitStickInput inverted_third_person_orbit =
+      CameraOrbitModeInput(0.5, 0.25, false, true, true, 1.4);
+  ExpectNear(inverted_third_person_orbit.x, -0.7,
+             "third-person horizontal inversion");
+  ExpectNear(inverted_third_person_orbit.y, 0.35,
+             "third-person vertical inversion");
+
   const CameraOrbitStickInput horizontal_axis =
       CameraOrbitAxisLock(-1.0, -0.136, 0.25);
   ExpectNear(horizontal_axis.x, -1.0, "axis lock horizontal primary");

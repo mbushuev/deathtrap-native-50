@@ -33,6 +33,7 @@
 #include "camera_room_collision.h"
 #include "deathtrap_music_route.h"
 #include "immersive_first_person.h"
+#include "mouse_combat_routing.h"
 
 namespace {
 
@@ -623,6 +624,7 @@ bool g_third_person_orbit_invert_x = false;
 bool g_third_person_orbit_invert_y = false;
 double g_third_person_orbit_horizontal_radians = 0.0;
 double g_third_person_orbit_vertical_radians = 0.0;
+double g_third_person_stick_speed_scale = 1.4;
 double g_third_person_orbit_min_pitch_radians = 0.0;
 double g_third_person_orbit_max_pitch_radians = 0.0;
 double g_custom_head_min_pitch_radians = 0.0;
@@ -3601,25 +3603,18 @@ bool BuildThirdPersonOrbitPosition(void* controller,
       g_third_person_orbit_state.filtered_input_y +=
           (input_y - g_third_person_orbit_state.filtered_input_y) * response;
     }
-    // XInput reports right/up as positive. Keep the default preset aligned
-    // with modern third-person controls; the INI flags reverse each axis only
-    // when explicitly requested.
-    const double horizontal_sign = g_third_person_orbit_invert_x ? -1.0 : 1.0;
-    // The immersive endpoint now publishes Dungeon's true camera-forward
-    // convention. It therefore uses the same physical right-stick vertical
-    // direction as the approved third-person orbit; the old mode-specific
-    // reversal made stick-up look down after the v0.0.195 orientation fix.
-    const double vertical_sign =
-        g_third_person_orbit_invert_y ? -1.0 : 1.0;
+    const CameraOrbitStickInput mode_input = CameraOrbitModeInput(
+        g_third_person_orbit_state.filtered_input_x,
+        g_third_person_orbit_state.filtered_input_y, custom_head_view,
+        g_third_person_orbit_invert_x, g_third_person_orbit_invert_y,
+        g_third_person_stick_speed_scale);
     g_third_person_orbit_state.yaw +=
-        g_third_person_orbit_state.filtered_input_x * horizontal_sign *
-        g_third_person_orbit_horizontal_radians *
+        mode_input.x * g_third_person_orbit_horizontal_radians *
         (elapsed_seconds * 1000.0 /
          static_cast<double>(kOriginalPeriodMilliseconds));
     g_third_person_orbit_state.pitch = std::clamp(
         g_third_person_orbit_state.pitch +
-            g_third_person_orbit_state.filtered_input_y * vertical_sign *
-                g_third_person_orbit_vertical_radians *
+            mode_input.y * g_third_person_orbit_vertical_radians *
                 (elapsed_seconds * 1000.0 /
                  static_cast<double>(kOriginalPeriodMilliseconds)),
         active_minimum_pitch, active_maximum_pitch);
@@ -9127,6 +9122,7 @@ void ReleaseInjectedControllerInput() {
   InjectMouseLeft(false);
   InjectMouseRight(false);
   SubmitDeathtrapXInputMouseState(0, 0, false, false);
+  SubmitDeathtrapXInputCombatState(false, false, false, false, false);
   g_xinput_first_person_toggled = false;
   g_xinput_run_active = false;
   g_xinput_menu_mode.store(true, std::memory_order_release);
@@ -10302,12 +10298,24 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     const bool first_person_movement =
         g_xinput_first_person_toggled.load(std::memory_order_acquire) ||
         RetailFirstPersonActive() || custom_head_movement;
+    const bool controller_attack =
+        !selector_captures_controls &&
+        pad.bRightTrigger >= g_xinput_trigger_threshold;
+    const auto observed_attack_direction =
+        deathtrap::input::ResolveControllerCombatDirection(
+            movement_stick.x, movement_stick.y,
+            g_xinput_movement_threshold);
+    const bool controller_combat_owns_stick = controller_attack;
     int32_t desired_heading = 0;
     int32_t current_heading = 0;
     uintptr_t current_controller = 0;
     const bool native_joystick_available =
         g_native_joystick_hooks_installed.load(std::memory_order_acquire);
+    // While RT is held, the stick is a combat selector rather than a second
+    // simultaneous locomotion source. Letting the native joystick keep moving
+    // while F+direction was synthesized made side attacks stall and slide.
     const bool movement_requested =
+        !controller_combat_owns_stick &&
         movement_stick.magnitude > g_xinput_movement_threshold;
     g_immersive_xinput_movement_x_milli.store(
         custom_head_movement && !selector_captures_controls &&
@@ -10343,6 +10351,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         (!custom_head_movement ||
          g_immersive_root_motion_hooks_installed.load(
              std::memory_order_acquire)) &&
+        !controller_combat_owns_stick &&
         !selector_captures_controls && !strafe_modifier &&
         (!first_person_movement || custom_head_movement) &&
         CustomCameraOwnsMode3() &&
@@ -10405,10 +10414,18 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
       PublishCameraRelativeMovementIntent(false, desired_heading,
                                           movement_stick.magnitude);
       const bool side_step = strafe_modifier || first_person_movement;
+      const auto joystick_movement =
+          deathtrap::input::ResolveControllerJoystickMovement(
+              native_joystick_available, selector_captures_controls,
+              controller_combat_owns_stick, side_step, movement_stick.x,
+              movement_stick.y);
       if (native_joystick_available) {
+        // Keep the hook authoritative while combat owns the stick. Passing
+        // active=false falls through to the game's original DirectInput poll,
+        // where the same physical pad is still visible and would move Lara.
         PublishNativeJoystickMovement(
-            !selector_captures_controls,
-            side_step ? 0.0 : movement_stick.x, movement_stick.y);
+            joystick_movement.override_active, joystick_movement.x,
+            joystick_movement.y);
         InjectVirtualKey(InjectedKey::kW, false);
         InjectVirtualKey(InjectedKey::kS, false);
         InjectVirtualKey(InjectedKey::kA, false);
@@ -10418,29 +10435,33 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         // mapping as a closed fallback instead of dropping movement.
         PublishNativeJoystickMovement(false, 0.0, 0.0);
         InjectVirtualKey(InjectedKey::kW,
-                         left_y > g_xinput_movement_threshold);
+                         !controller_combat_owns_stick &&
+                             left_y > g_xinput_movement_threshold);
         InjectVirtualKey(InjectedKey::kS,
-                         left_y < -g_xinput_movement_threshold);
+                         !controller_combat_owns_stick &&
+                             left_y < -g_xinput_movement_threshold);
         InjectVirtualKey(InjectedKey::kA,
-                         !side_step &&
+                         !controller_combat_owns_stick && !side_step &&
                              left_x < -g_xinput_movement_threshold);
         InjectVirtualKey(InjectedKey::kD,
-                         !side_step &&
+                         !controller_combat_owns_stick && !side_step &&
                              left_x > g_xinput_movement_threshold);
       }
       // First person and LB retain the explicit side-step actions because the
       // retail joystick owns only one horizontal axis.
       InjectVirtualKey(InjectedKey::kJ,
-                       side_step &&
+                       !controller_combat_owns_stick && side_step &&
                            left_x < -g_xinput_movement_threshold);
       InjectVirtualKey(InjectedKey::kK,
-                       side_step &&
+                       !controller_combat_owns_stick && side_step &&
                            left_x > g_xinput_movement_threshold);
     }
     // In the head view the full two-axis stick selects walk/run. The former
     // abs(Y) test made a fully deflected pure strafe permanently walk.
     const double run_magnitude =
-        custom_head_movement || camera_relative_available
+        controller_combat_owns_stick
+            ? 0.0
+            : custom_head_movement || camera_relative_available
             ? movement_stick.magnitude
             : std::abs(left_y);
     if (run_magnitude >= g_xinput_run_threshold) {
@@ -10480,8 +10501,16 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         g_xinput_first_person_toggled.load(std::memory_order_acquire);
     InjectVirtualKey(InjectedKey::kTab,
                      !selector_captures_controls && first_person_requested);
-    InjectMouseLeft(!selector_captures_controls &&
-                    pad.bRightTrigger >= g_xinput_trigger_threshold);
+    SubmitDeathtrapXInputCombatState(
+        controller_attack,
+        observed_attack_direction.forward,
+        observed_attack_direction.backward,
+        observed_attack_direction.left,
+        observed_attack_direction.right);
+    // RT now publishes a virtual combat command instead of masquerading as a
+    // physical mouse click. Mouse and controller still converge in the same
+    // DirectInput F+direction translator.
+    InjectMouseLeft(false);
     InjectMouseRight(!selector_captures_controls &&
                      pad.bLeftTrigger >= g_xinput_trigger_threshold);
     SubmitDeathtrapXInputMouseState(0, 0, false, false);
@@ -10530,6 +10559,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     InjectVirtualKey(InjectedKey::kQ, false);
     InjectVirtualKey(InjectedKey::kC, false);
     InjectVirtualKey(InjectedKey::kTab, false);
+    SubmitDeathtrapXInputCombatState(false, false, false, false, false);
     InjectMouseLeft(false);
     InjectMouseRight(false);
     InjectVirtualKey(InjectedKey::kUp,
@@ -10662,6 +10692,7 @@ void PollFrontendXInputInternal() {
   LogSupportControllerPresence(connected);
   if (!connected || !IsGameForeground()) {
     SubmitDeathtrapXInputMouseState(0, 0, false, false);
+    SubmitDeathtrapXInputCombatState(false, false, false, false, false);
     return;
   }
 
@@ -15010,8 +15041,12 @@ void InitializePatchState() {
       100, 250)) / 100.0;
   g_xinput_right_stick_axis_lock_ratio =
       static_cast<double>(std::clamp(
-          ConfiguredInteger(L"XInput", L"RightStickAxisLockPercent", 25),
+          ConfiguredInteger(L"XInput", L"RightStickAxisLockPercent", 0),
           0, 50)) / 100.0;
+  g_third_person_stick_speed_scale =
+      static_cast<double>(std::clamp(
+          ConfiguredInteger(L"XInput", L"ThirdPersonOrbitSpeedPercent", 140),
+          50, 300)) / 100.0;
   g_xinput_invert_right_y =
       ConfiguredInteger(L"XInput", L"InvertRightY", 0) != 0;
   g_third_person_orbit_enabled =
@@ -15237,6 +15272,7 @@ void InitializePatchState() {
       "are observation-only and commit through Dungeon.dll+0x90610 once per "
       "real gameplay tick (enabled=%u invert=%u); XInput controller=%u "
       "base_bindings=%u hold_ms=%u deadzones=%d/%d axis_lock=%u%% "
+      "third_person_stick_speed=%u%% "
       "radial=%d center_y=%d "
       "camera_relative_movement=%u invert_y=%u turn=%.0fdeg "
       "vibration=%u/%u%% action=%u/%u/%u/%ums event=%u/%u/%u/%u/%u/"
@@ -15254,6 +15290,8 @@ void InitializePatchState() {
       g_xinput_right_deadzone,
       static_cast<unsigned>(std::lround(
           g_xinput_right_stick_axis_lock_ratio * 100.0)),
+      static_cast<unsigned>(std::lround(
+          g_third_person_stick_speed_scale * 100.0)),
       g_xinput_selector_radius,
       g_xinput_selector_center_y,
       g_xinput_camera_relative_movement ? 1u : 0u,
@@ -15468,6 +15506,22 @@ bool DeathtrapModernCameraConsumesMouse() {
   // mouse controlled Lara until plugging a pad happened to clear the flag.
   // Ignore that controller-owned override when no controller is present; the
   // native gameplay test still releases the mouse in movies and main menus.
+  return !g_xinput_controller_present.load(std::memory_order_acquire) ||
+         !g_xinput_menu_mode.load(std::memory_order_acquire);
+}
+
+bool DeathtrapGameplayAcceptsMouseCombat() {
+  if (!IsGameForeground() ||
+      (g_controller_selector_overlay.load(std::memory_order_acquire) & 1u) !=
+          0u ||
+      !DeathtrapGameplayReady(true)) {
+    return false;
+  }
+  CURSORINFO cursor = {};
+  cursor.cbSize = sizeof(cursor);
+  if (GetCursorInfo(&cursor) && (cursor.flags & CURSOR_SHOWING) != 0u) {
+    return false;
+  }
   return !g_xinput_controller_present.load(std::memory_order_acquire) ||
          !g_xinput_menu_mode.load(std::memory_order_acquire);
 }

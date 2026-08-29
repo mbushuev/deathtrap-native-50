@@ -104,6 +104,13 @@ target_include_directories(music_track_routing_test PRIVATE src)
 target_compile_options(music_track_routing_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
 
+add_executable(mouse_combat_routing_test
+  tools/mouse_combat_routing_test.cc)
+target_compile_features(mouse_combat_routing_test PRIVATE cxx_std_17)
+target_include_directories(mouse_combat_routing_test PRIVATE src)
+target_compile_options(mouse_combat_routing_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
+
 add_executable(music_redbook_probe
   tools/music_redbook_probe.cc)
 target_compile_features(music_redbook_probe PRIVATE cxx_std_17)

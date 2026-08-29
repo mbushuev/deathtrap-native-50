@@ -61,7 +61,7 @@ files may be partially or completely incompatible.
 MOUSE AND KEYBOARD
 
 Mouse movement     Rotate modern camera / first-person look
-Left mouse         Primary attack
+Left mouse         Attack; A/D choose a side and S selects the turning attack
 Right mouse        Block or parry
 Mouse wheel        Previous/next available melee weapon
 W / S              Walk forward/backward
@@ -98,7 +98,7 @@ A                  Jump or climb / confirm / skip supported screens
 B                  Back in menus
 X                  Operate or interact / alternate screen skip
 Y                  Unassigned
-RT                 Primary attack
+RT                 Attack; left stick selects directional attacks
 LT                 Block or parry
 RB                 Cast/use contextual spell action
 LB + left stick    Original side-step movement

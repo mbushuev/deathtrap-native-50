@@ -101,13 +101,38 @@ to `ACTION_TURN_LEFT/RIGHT`; Shift plus horizontal motion maps to
 proxy instead consumes only the physical X/Y deltas for camera orbit or the
 immersive first-person view, while
 buttons and wheel remain on their native paths. Menus, the selector and retail
-first person always retain the original mouse stream. Left and right buttons
-map to `ACTION_ATTACK_1` and `ACTION_PARRY`.
+first person always retain the original mouse stream.
 
-The DLL deliberately contains no runtime action-table hook. Earlier experiments
-that rewrote the live action table were stable during gameplay but could
-deadlock combat or the transition back to menus. Static bindings let the
-retail parser, controller and menu lifecycle own turning, attacks and parry.
+During active gameplay, the DirectInput proxy translates left mouse combat at
+the keyboard-state boundary into the verified retail `F+direction` grammar.
+A directionless click and `LMB+W` emit `F+W` for the normal attack, `LMB+A/D`
+emit the two side attacks, and `LMB+S` emits `F+A+D` for the original turning
+attack. The translator is gated out of menus and selectors and never mutates
+the live action table. Right mouse remains a static `ACTION_PARRY` binding in
+`keys.cfg`.
+
+XInput publishes `RT` and the coherent left-stick sector into this same
+translator. It does not inject a fake left click: this preserves the native
+joystick movement path while giving controller attacks exactly the same
+direction-selection grammar as mouse combat. Physical mouse input takes
+precedence only if both devices attack simultaneously.
+
+The controller direction is classified continuously into one dominant-axis
+cardinal sector while `RT` remains held. Sector changes update the retail chord
+without releasing the attack modifier, matching the accepted keyboard/mouse
+path. Native joystick locomotion, camera-relative heading and run state remain
+suspended throughout, so the stick cannot both select an attack and drive root
+motion in the same frame.
+
+Suspension deliberately keeps the native joystick hook active and publishes
+centered axes. Marking that override inactive would fall through to the retail
+DirectInput poll, where the same physical XInput-compatible pad may also be
+visible as a legacy joystick and leak movement back into combat.
+
+Earlier experiments that rewrote the live action table could deadlock combat
+or the transition back to menus. The current translator changes only the
+keyboard state returned by an existing DirectInput poll and leaves the retail
+parser, controller and menu lifecycle in ownership of the actions.
 
 ## Mouse-wheel inventory bridge
 
@@ -301,3 +326,21 @@ to 27 ticks. Version 0.0.38 adds this entire ring, including its read/write
 indices, to the synthetic-render transaction. It also applies the same
 configured percentage to the validated 27-tick creation immediate (81 ticks
 at 300%). This is the path used by prompts such as `You need the silver key`.
+
+## Third-person controller orbit boundary
+
+Version 0.0.221 keeps raw XInput acquisition, response shaping and camera
+ownership unchanged, but makes the final stick-to-orbit transform explicitly
+mode-aware. Modern third person retains the accepted horizontal handedness,
+uses the opposite vertical sign required by Dungeon's trailing mode-3
+endpoint, and applies `XInput/ThirdPersonOrbitSpeedPercent` to both orbit
+axes. The accepted immersive head view bypasses that scalar and preserves its
+existing axis convention. Physical DirectInput mouse motion remains a
+separate unscaled path.
+
+The production preset disables `RightStickAxisLockPercent`. The response curve
+still supplies center precision, while the complete circular stick vector now
+reaches the orbit without a cardinal cone suppressing its secondary axis.
+`camera_spring_arm_test` fixes these mode boundaries deterministically so a
+future input change cannot silently reverse horizontal orbit or alter the
+immersive view.

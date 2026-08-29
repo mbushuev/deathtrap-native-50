@@ -49,11 +49,18 @@ try {
         'define    ACTION_TURN_FAST_LEFT     DOWN      KEY_A + KEY_LEFT',
         'define    ACTION_TURN_FAST_RIGHT    DOWN      KEY_A + KEY_RIGHT',
         'define    ACTION_ATTACK_RANGED      DOWN      KEY_CAPS',
+        'define    ACTION_ATTACK_RANGED      DOWN      MOUSE_LBUTTON',
         'define    ACTION_ATTACK_1           DOWN      KEY_CAPS + KEY_UP',
+        'define    ACTION_ATTACK_1           DOWN      MOUSE_LBUTTON',
+        'define    ACTION_ATTACK_1           DOWN      MOUSE_LBUTTON + KEY_UP',
         'define    ACTION_ATTACK_2           DOWN      KEY_CAPS + KEY_LEFT',
+        'define    ACTION_ATTACK_2           DOWN      MOUSE_LBUTTON + KEY_LEFT',
         'define    ACTION_ATTACK_3           DOWN      KEY_CAPS + KEY_RIGHT',
+        'define    ACTION_ATTACK_3           DOWN      MOUSE_LBUTTON + KEY_D',
         'define    ACTION_ATTACK_BACK        DOWN      KEY_CAPS + KEY_LEFT + KEY_RIGHT',
+        'define    ACTION_ATTACK_BACK        DOWN      MOUSE_LBUTTON + KEY_A + KEY_D',
         'define    ACTION_PARRY              DOWN      KEY_CAPS + KEY_DOWN',
+        'define    ACTION_PARRY              DOWN      MOUSE_LBUTTON + KEY_S',
         'define    ACTION_CAST_SPELL         DOWN      KEY_S',
         'define    ACTION_JUMP_CLIMB         DOWN      KEY_ENTER',
         'define    ACTION_JUMP_LEFT          DOWN      KEY_ENTER + KEY_LEFT',
@@ -152,7 +159,6 @@ try {
     }
     foreach ($binding in @(
         @('ACTION_TURN_LEFT', 'MOUSE_HORIZ_LEFT'),
-        @('ACTION_ATTACK_1', 'MOUSE_LBUTTON'),
         @('ACTION_1ST_PERSON_VIEW', 'KEY_TAB'),
         @('ACTION_LEFT_SIDESTEP', 'KEY_J'),
         @('ACTION_RIGHT_SIDESTEP', 'KEY_K')
@@ -162,6 +168,10 @@ try {
         if ([regex]::Matches($installedKeys, $pattern).Count -ne 1) {
             throw "Expected one installed binding for $($binding[0]) / $($binding[1])."
         }
+    }
+    if ($installedKeys -match
+            '(?m)^\s*define\s+ACTION_(?:ATTACK_[A-Z0-9_]+|PARRY)\s+DOWN\s+MOUSE_LBUTTON(?:\s|$)') {
+        throw 'Installer retained an obsolete direct left-mouse combat binding.'
     }
     foreach ($binding in @(
         @('ACTION_WALK_FORWARD', 'DOWN', 'KEY_W'),

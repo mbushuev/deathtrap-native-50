@@ -229,9 +229,16 @@ attached to the interpolated render root during forward and reverse movement.
 The installer updates `ASYLUM/keys.cfg` before launch. Horizontal mouse motion
 uses the game's original normal turn actions. Holding Shift adds the retail
 fast-turn actions, so running with Shift+W no longer leaves mouse turning at
-the slow walking rate. Left click invokes the native primary attack and right
-click invokes parry. The DLL never writes action-table memory and leaves menu
-pointer/click handling on the original game path.
+the slow walking rate. Left click invokes the normal attack immediately;
+holding A or D with it selects the corresponding side attack, while holding S
+selects the original turning attack. Right click invokes parry. The DLL never
+writes action-table memory and leaves menu pointer/click handling on the
+original game path.
+
+The XInput `RT` command enters the same translator. `RT` alone performs the
+normal attack; combining it with the left stick selects the matching forward,
+side or turning attack. The stick remains on the native joystick movement path
+and is not converted into persistent keyboard movement.
 
 The same installer adds native joystick equivalents for running, fast turning
 and all four directional jump actions. This is required because camera-relative
@@ -338,16 +345,19 @@ ownership changes. The camera watchdog then transfers the controller only
 after the game actually leaves its gameplay camera; this prevents Start from
 being consumed by the bridge without opening the pause menu.
 The right stick and physical mouse rotate that rig on both axes. Version
-`0.0.62` uses conventional directions by default; set `Camera/InvertX=1` or
-`Camera/InvertY=1` only to reverse an axis. `Camera/PreferredRadius=1400`
-sets the unobstructed spring-arm distance. Mouse X/Y sensitivity uses
+`0.0.221` keeps the accepted third-person horizontal direction and corrects
+only its controller vertical convention. `Camera/InvertX=1` or
+`Camera/InvertY=1` reverses the corresponding configured axis.
+`Camera/PreferredRadius=1400` sets the unobstructed spring-arm distance. Mouse
+X/Y sensitivity uses
 `MouseHorizontalMilliDegreesPerPixel` and
 `MouseVerticalMilliDegreesPerPixel`.
 `RightStickPixelsPerTick=12` and `RightStickResponseCurvePercent=135` provide a
 slower precision response near stick center without adding temporal latency.
-`RightStickAxisLockPercent=25` removes cross-axis leakage near horizontal and
-vertical third-person orbit gestures. Set it to `0` to disable the lock; true
-diagonal input remains two-axis.
+`ThirdPersonOrbitSpeedPercent=140` makes only the third-person controller
+orbit faster; it does not alter mouse sensitivity or the accepted immersive
+head view. `RightStickAxisLockPercent=0` keeps the complete circular stick
+vector instead of suppressing the secondary component near cardinal axes.
 
 Lever, door and reveal cameras receive temporary priority only after an
 explicit X/operate input (including a physical `E`) and independently moving
@@ -430,9 +440,11 @@ branch while the camera log records the selected node and head centre.
 
 In v0.0.196 the head resolver accepts the neck translation produced by
 sideways/backward locomotion; it must no longer switch to third person during
-those animations. The right stick now uses the same vertical convention in
-custom head and modern third person. With the default `InvertY=0`, physical
-stick-up looks up in both; setting `InvertY=1` reverses both.
+those animations. Version 0.0.221 later separates only the controller pitch
+sign at the two camera-mode boundaries: the already accepted custom head view
+is unchanged, while modern third person uses its corrected trailing-orbit
+vertical convention. Physical mouse signs remain on their independently
+verified path.
 
 Version 0.0.206 gives the F10/SELECT head view a complete movement vector.
 Keyboard W/S+A/D combinations and diagonals work simultaneously; pure A/D

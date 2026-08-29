@@ -70,12 +70,21 @@ void QueueDeathtrapWeaponWheelDelta(int32_t delta);
 void SubmitDeathtrapXInputMouseState(int32_t delta_x, int32_t delta_y,
                                      bool left_button, bool right_button);
 
+// Publishes the controller's virtual attack command and its left-stick sector
+// to the shared DirectInput combat translator. The four direction flags are a
+// coherent snapshot, not independent synthetic keyboard inputs.
+void SubmitDeathtrapXInputCombatState(bool attack, bool forward, bool backward,
+                                      bool left, bool right);
+
 // Routes physical relative DirectInput mouse motion to the modern third-
 // person camera. The proxy calls this only when the render patch explicitly
 // owns mouse-look, so menus and the retail first-person mode still receive the
 // original mouse stream unchanged.
 void SubmitDeathtrapPhysicalMouseDelta(int32_t delta_x, int32_t delta_y);
 bool DeathtrapModernCameraConsumesMouse();
+
+// Frontend-safe gate for the DirectInput mouse-to-retail-combat translator.
+bool DeathtrapGameplayAcceptsMouseCombat();
 
 // True only while the overlay-owned body-visible first-person camera is the
 // active gameplay view.

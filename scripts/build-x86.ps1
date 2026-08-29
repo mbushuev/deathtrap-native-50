@@ -22,12 +22,14 @@ $cameraSpring = Join-Path $buildPath "$Configuration\camera_spring_arm_test.exe"
 $cameraRoom = Join-Path $buildPath "$Configuration\camera_room_collision_test.exe"
 $immersiveFirstPerson = Join-Path $buildPath "$Configuration\immersive_first_person_test.exe"
 $musicRouting = Join-Path $buildPath "$Configuration\music_track_routing_test.exe"
+$mouseCombat = Join-Path $buildPath "$Configuration\mouse_combat_routing_test.exe"
 if (-not (Test-Path -LiteralPath $dll)) { throw "Missing build output: $dll" }
 if (-not (Test-Path -LiteralPath $smoke)) { throw "Missing smoke test: $smoke" }
 if (-not (Test-Path -LiteralPath $cameraSpring)) { throw "Missing camera spring test: $cameraSpring" }
 if (-not (Test-Path -LiteralPath $cameraRoom)) { throw "Missing camera room test: $cameraRoom" }
 if (-not (Test-Path -LiteralPath $immersiveFirstPerson)) { throw "Missing immersive first-person test: $immersiveFirstPerson" }
 if (-not (Test-Path -LiteralPath $musicRouting)) { throw "Missing music routing test: $musicRouting" }
+if (-not (Test-Path -LiteralPath $mouseCombat)) { throw "Missing mouse combat test: $mouseCombat" }
 
 & $smoke $dll
 if ($LASTEXITCODE -ne 0) { throw 'DirectInput forwarding smoke test failed.' }
@@ -43,6 +45,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Immersive first-person test failed.' }
 
 & $musicRouting
 if ($LASTEXITCODE -ne 0) { throw 'Music track routing test failed.' }
+
+& $mouseCombat
+if ($LASTEXITCODE -ne 0) { throw 'Mouse combat routing test failed.' }
 
 & (Join-Path $PSScriptRoot 'test-install-crlf.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Installer CRLF binding test failed.' }

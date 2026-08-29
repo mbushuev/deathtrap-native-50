@@ -136,6 +136,32 @@ struct CameraOrbitStickInput {
   double y = 0.0;
 };
 
+inline CameraOrbitStickInput CameraOrbitModeInput(
+    double x, double y, bool custom_head_view, bool invert_x,
+    bool invert_y, double third_person_speed_scale) {
+  CameraOrbitStickInput result;
+  if (!std::isfinite(x) || !std::isfinite(y) ||
+      !std::isfinite(third_person_speed_scale) ||
+      third_person_speed_scale <= 0.0) {
+    return result;
+  }
+
+  // The accepted immersive head view already has the expected XInput
+  // convention. Dungeon's trailing mode-3 orbit consumes pitch with the
+  // opposite sign at its endpoint boundary, even though horizontal orbit has
+  // the same handedness. Keep that distinction local to controller input;
+  // physical mouse input has its own verified publication convention.
+  const double speed = custom_head_view ? 1.0 : third_person_speed_scale;
+  const double horizontal_sign = invert_x ? -1.0 : 1.0;
+  const double configured_vertical_sign = invert_y ? -1.0 : 1.0;
+  const double vertical_sign = custom_head_view
+      ? configured_vertical_sign
+      : -configured_vertical_sign;
+  result.x = x * horizontal_sign * speed;
+  result.y = y * vertical_sign * speed;
+  return result;
+}
+
 inline CameraOrbitStickInput CameraOrbitAxisLock(
     double x, double y, double lock_ratio) {
   CameraOrbitStickInput result;
