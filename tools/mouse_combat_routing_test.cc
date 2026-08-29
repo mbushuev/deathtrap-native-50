@@ -120,15 +120,22 @@ int main() {
 
   const auto immersive_forward = ResolveMouseCombatKeyboardPlan(
       false, true, true, true, false, false, false);
-  Require(immersive_forward.submit_immersive_movement &&
-              immersive_forward.key_w && !immersive_forward.key_s,
-          "ordinary immersive forward movement must preserve W root motion");
+  Require(!immersive_forward.submit_immersive_movement &&
+              !immersive_forward.rewrite_immersive_movement,
+          "pure immersive forward movement must retain the exact native W path");
 
   const auto immersive_backward = ResolveMouseCombatKeyboardPlan(
       false, true, true, false, true, false, false);
-  Require(immersive_backward.submit_immersive_movement &&
-              immersive_backward.key_s && !immersive_backward.key_w,
-          "ordinary immersive backward movement must preserve S root motion");
+  Require(!immersive_backward.submit_immersive_movement &&
+              !immersive_backward.rewrite_immersive_movement,
+          "pure immersive backward movement must retain the exact native S path");
+
+  const auto immersive_diagonal = ResolveMouseCombatKeyboardPlan(
+      false, true, true, true, false, false, true);
+  Require(immersive_diagonal.submit_immersive_movement &&
+              immersive_diagonal.rewrite_immersive_movement &&
+              immersive_diagonal.key_w,
+          "immersive diagonals must retain vector locomotion");
 
   const auto immersive_attack = ResolveMouseCombatKeyboardPlan(
       true, true, true, false, false, true, false);

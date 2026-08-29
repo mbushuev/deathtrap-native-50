@@ -10,6 +10,11 @@ Thanks to the community members who helped test public builds:
 
 ## 0.0.222 — native collision and close-camera transparency
 
+- Keeps pure forward/back movement in immersive first person on Dungeon's
+  unmodified W/S locomotion path, including native step-up, airborne movement
+  and edge collision. A small longitudinal stick cone absorbs axial noise.
+- Retains the custom full-speed vector transaction only for deliberate
+  lateral and diagonal movement, preserving the accepted first-person strafe.
 - Removes the rejected post-collision vertical camera offset that could place
   the view inside the animated player model at a fully contracted spring arm.
 - Adds a stable analytic player capsule built from the live root and

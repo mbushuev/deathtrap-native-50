@@ -98,13 +98,15 @@ constexpr MouseCombatKeyboardPlan ResolveMouseCombatKeyboardPlan(
   const int longitudinal =
       static_cast<int>(forward) - static_cast<int>(backward);
   const bool pure_lateral = lateral != 0 && longitudinal == 0;
+  const bool vector_movement =
+      immersive_vector_locomotion && lateral != 0;
   return {MouseCombatAttack::kNone,
           false,
-          immersive_vector_locomotion,
-          immersive_vector_locomotion,
-          immersive_vector_locomotion && (forward || pure_lateral),
+          vector_movement,
+          vector_movement,
+          vector_movement && (forward || pure_lateral),
           false,
-          immersive_vector_locomotion && backward,
+          vector_movement && backward,
           false};
 }
 

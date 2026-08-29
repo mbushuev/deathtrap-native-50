@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -23,6 +24,24 @@ struct ImmersiveRootMotionInput {
   int32_t local_z = 0;
   bool active = false;
 };
+
+// Straight forward/back movement needs no vector redirection: Dungeon's own
+// W/S path already owns animation root motion, step-up and airborne collision.
+// Keep a small longitudinal cone for real controller sticks so harmless axial
+// noise cannot opt a nominally straight jump into the custom strafe path.
+inline bool ImmersiveLocomotionRequiresVectorRouting(
+    double lateral, double longitudinal,
+    double longitudinal_cone_ratio = 0.20) {
+  if (!std::isfinite(lateral) || !std::isfinite(longitudinal) ||
+      !std::isfinite(longitudinal_cone_ratio) ||
+      longitudinal_cone_ratio < 0.0) {
+    return false;
+  }
+  constexpr double kMinimumLateral = 1.0e-6;
+  return std::abs(lateral) >
+      std::max(kMinimumLateral,
+               std::abs(longitudinal) * longitudinal_cone_ratio);
+}
 
 // Convert Dungeon's actor-visible course to the radial yaw shared by the
 // third-person orbit.  The camera sits behind the actor, so radial yaw is one

@@ -64,6 +64,18 @@ int main() {
               std::numeric_limits<double>::quiet_NaN())),
           "invalid immersive yaw must fail closed");
 
+  Require(!ImmersiveLocomotionRequiresVectorRouting(0.0, 1.0) &&
+              !ImmersiveLocomotionRequiresVectorRouting(0.10, 1.0) &&
+              !ImmersiveLocomotionRequiresVectorRouting(-0.10, -1.0),
+          "straight longitudinal movement and axial stick noise must stay native");
+  Require(ImmersiveLocomotionRequiresVectorRouting(0.21, 1.0) &&
+              ImmersiveLocomotionRequiresVectorRouting(1.0, 1.0) &&
+              ImmersiveLocomotionRequiresVectorRouting(1.0, 0.0),
+          "deliberate diagonal and lateral movement must retain vector routing");
+  Require(!ImmersiveLocomotionRequiresVectorRouting(
+              std::numeric_limits<double>::quiet_NaN(), 1.0),
+          "invalid immersive movement input must fail closed");
+
   const ImmersiveLocomotionPlan forward_motion =
       BuildImmersiveLocomotionPlan(512, false, 0.75, 1024);
   Require(forward_motion.active && forward_motion.motion_heading == 512 &&

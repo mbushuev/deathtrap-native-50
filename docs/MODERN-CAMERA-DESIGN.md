@@ -2815,3 +2815,20 @@ view and authored cameras are never changed. The accepted validation run,
 `camera_render_basis` samples with no restore failure, invalid owned-camera
 publication, hybrid fallback or native-pivot guard. The accepted build removes
 the successful-path trace and retains only the restore-failure diagnostic.
+
+### Longitudinal traversal remains fully native
+
+The accepted immersive vector transaction was unnecessarily entered for
+every W/S movement request even when the requested world course had no lateral
+component. That transaction temporarily changes the actor/collision heading
+and redirects every animation-root contribution, including the early scene
+cache publication. It is required for full-speed strafe, but on a straight
+approach it replaces Dungeon's proven step-up and airborne collision path for
+no behavioral benefit.
+
+Pure forward/back keyboard input now passes through unchanged. A controller
+request inside a 20 percent longitudinal cone likewise stays on the native
+joystick path, preventing harmless physical X-axis noise from changing jump
+or step behavior. Only deliberate lateral and diagonal input enters the
+heading/root transaction. Camera placement, body-to-eye alignment and all
+third-person movement are unchanged.

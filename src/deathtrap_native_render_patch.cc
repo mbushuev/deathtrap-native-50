@@ -11306,6 +11306,9 @@ bool ResolveImmersiveLocomotionPlan(ImmersiveLocomotionPlan* plan) {
     native_backward =
         longitudinal < -g_xinput_movement_threshold;
   }
+  if (!ImmersiveLocomotionRequiresVectorRouting(lateral, longitudinal)) {
+    return false;
+  }
   const double magnitude = std::min(1.0, std::hypot(lateral, longitudinal));
   if (magnitude <= 0.000001) {
     return false;
