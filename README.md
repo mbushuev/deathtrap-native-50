@@ -8,7 +8,7 @@ Current development version: **0.0.222**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.221.png" alt="Deathtrap Native 50 v0.0.221" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.222.png" alt="Deathtrap Native 50 v0.0.222" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
