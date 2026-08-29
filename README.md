@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current development version: **0.0.222**
+Current development version: **0.0.223**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -8,7 +8,7 @@ Current development version: **0.0.222**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.222.png" alt="Deathtrap Native 50 v0.0.222" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.223.png" alt="Deathtrap Native 50 v0.0.223" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -54,6 +54,8 @@ game, under dgVoodoo's published redistribution terms.
 - Physical-mouse camera control, mouse attack/parry and mouse-wheel melee
   weapon selection.
 - Correct routing for all fifteen music tracks shipped with the Steam release.
+- Safe saving at stable grounded positions through the original menu, slots
+  and save-file format; the original authored save points remain available.
 - Longer gameplay prompts and safe automatic per-launch support logs.
 
 See the [user-facing changelog](CHANGELOG.md) for the complete consolidated
@@ -118,6 +120,7 @@ LICENSE.txt
 payload/
   DINPUT.dll
   deathtrap_native.ini
+  keys.cfg
   dgVoodoo.conf
   dgVoodoo/
     DDraw.dll                dgVoodoo 2.86.2 x86
@@ -187,8 +190,9 @@ supported by the native rendering path.
   `dgVoodoo.conf`, `ASYLUM/keys.cfg` and `ASYLUM/config.dat` before changing
   them;
 - installs the tested dgVoodoo 2.86.2 x86 runtime and high-quality profile;
-- applies the verified keyboard profile while preserving mouse, joystick and
-  unrelated retail bindings;
+- replaces `ASYLUM/keys.cfg` with the exact keyboard, mouse and joystick
+  profile tested with this DLL; the previous file remains in the rollback
+  directory;
 - normalizes the required game rendering values, including hardware D3D,
   mipmapping and subtractive shadows;
 - replaces `dgVoodoo.conf` with the tested profile after preserving the old
@@ -230,12 +234,15 @@ Detailed requirements, first-run verification and rollback instructions are in
 | `F10` | Toggle body-visible immersive first person |
 | `F11` | Toggle the higher native render rate |
 | `I` | Inventory screen |
-| `Esc` | Open or leave the menu |
-| `O` / `P` | Save/load game |
+| `Esc` | Open or leave the menu; save and load through the retail menu |
 
 In immersive first person, `A` and `D` become full-speed pure side movement;
 `W`/`S` can be combined with them for diagonal movement, and `Shift` selects
 the running speed.
+
+The patch enables the retail Save command at safe grounded positions outside
+the original save points. Saving and loading still use the original menu,
+slot screens and save-file format.
 
 ### Xbox-compatible controller
 

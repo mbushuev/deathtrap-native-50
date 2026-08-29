@@ -91,6 +91,8 @@ try {
         -Destination (Join-Path $payload 'DINPUT.dll')
     Copy-Item -LiteralPath (Join-Path $repoRoot 'config\deathtrap_native.ini') `
         -Destination (Join-Path $payload 'deathtrap_native.ini')
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'config\keys.cfg') `
+        -Destination (Join-Path $payload 'keys.cfg')
     $payloadDgVoodoo = Join-Path $payload 'dgVoodoo'
     New-Item -ItemType Directory -Path $payloadDgVoodoo -Force | Out-Null
     foreach ($wrapper in @('DDraw.dll', 'D3DImm.dll')) {
@@ -156,6 +158,15 @@ try {
     $installedKeys = [System.IO.File]::ReadAllText($keys)
     if ($installedKeys.Contains("`r`r`n")) {
         throw 'Installer produced invalid CR-CR-LF line endings.'
+    }
+    $expectedKeys = [regex]::Replace(
+        [System.IO.File]::ReadAllText((Join-Path $payload 'keys.cfg')),
+        "\r?\n", "`r`n")
+    if (-not $expectedKeys.EndsWith("`r`n")) {
+        $expectedKeys += "`r`n"
+    }
+    if ($installedKeys -cne $expectedKeys) {
+        throw 'Upgrade did not replace keys.cfg with the exact bundled profile.'
     }
     foreach ($binding in @(
         @('ACTION_TURN_LEFT', 'MOUSE_HORIZ_LEFT'),

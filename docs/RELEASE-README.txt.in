@@ -84,11 +84,14 @@ Tab                Original retail first-person view
 F10                Body-visible immersive first-person view
 F11                Toggle approximately 50 FPS native presentation
 I                  Inventory
-Esc                Open or leave menu
-O / P              Save/load game
+Esc                Open or leave menu; save and load through the retail menu
 
 Immersive first person uses A/D for pure full-speed side movement. Combine
 W/S with A/D for diagonals and hold Shift to run.
+
+The patch enables the retail Save command at safe grounded positions outside
+the original save points. Saving and loading still use the original menu,
+slot screens and save-file format.
 
 XBOX-COMPATIBLE CONTROLLER
 
@@ -138,8 +141,9 @@ Thanks to the community members who helped test public builds:
 
 The installer creates a timestamped backup of existing patch files,
 DDraw.dll, D3DImm.dll, dgVoodoo.conf, ASYLUM\keys.cfg and ASYLUM\config.dat
-under the game's back directory before applying the verified setup. Do not
-copy a complete keys.cfg from another installation.
+under the game's back directory before applying the verified setup. It then
+installs the exact keys.cfg shipped with this DLL; do not copy a control file
+from another installation over it.
 
 HELP AND BUG REPORTS
 

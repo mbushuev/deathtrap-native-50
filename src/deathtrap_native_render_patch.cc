@@ -34,6 +34,7 @@
 #include "deathtrap_music_route.h"
 #include "immersive_first_person.h"
 #include "mouse_combat_routing.h"
+#include "safe_save.h"
 
 namespace {
 
@@ -179,6 +180,11 @@ constexpr uintptr_t kUseConsumableRva = 0x0007B9C0u;
 constexpr uintptr_t kUseChalkRva = 0x000458B0u;
 constexpr uintptr_t kInventorySlotDrawRva = 0x000772A0u;
 constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
+// Preserve the retail save UI and file format. This leaf is the native
+// eligibility check used by the menu before it opens the save screen.
+constexpr uintptr_t kSavePointQueryRva = 0x0001BA90u;
+constexpr uintptr_t kSaveAvailableFlagRva = 0x000C0830u;
+constexpr uintptr_t kActiveSaveTriggerRva = 0x000C0834u;
 // The live gameplay entity owns its movement controller at +0x114. Native
 // locomotion callbacks receive that controller, not the outer entity. Both
 // the lean-producing 0x44EA0 wrapper and the simpler 0x44E90 locomotion
@@ -652,6 +658,7 @@ std::atomic<bool> g_combat_impact_hook_installed{false};
 std::atomic<bool> g_spell_cast_hook_installed{false};
 std::atomic<bool> g_ranged_weapon_hook_installed{false};
 std::atomic<bool> g_consumable_hook_installed{false};
+std::atomic<bool> g_safe_save_hook_installed{false};
 std::atomic<bool> g_camera_orbit_hook_installed{false};
 std::atomic<bool> g_music_track_fix_installed{false};
 std::atomic<bool> g_movement_stage_probes_installed{false};
@@ -673,6 +680,11 @@ SceneSnapshot g_older_snapshot;
 LARGE_INTEGER g_qpc_frequency{};
 bool g_debug_log = false;
 bool g_music_track_fix_enabled = true;
+bool g_safe_save_anywhere_enabled = true;
+std::mutex g_safe_save_mutex;
+deathtrap_save::SafeSaveTracker g_safe_save_tracker;
+std::atomic<int32_t> g_safe_save_last_log_code{-1};
+std::atomic<uint64_t> g_safe_save_last_log_ms{0};
 std::mutex g_native_log_mutex;
 HANDLE g_native_log_file = INVALID_HANDLE_VALUE;
 bool g_camera_probe_enabled = false;
@@ -1048,6 +1060,7 @@ using RangedWeaponLaunchFn = void*(__cdecl*)(void* actor,
                                              void* launch_context,
                                              void* launch_output);
 using UseConsumableFn = void(__cdecl*)(int32_t item_id);
+using SavePointQueryFn = int(__cdecl*)(int32_t* gold_cost);
 using PlayerTurnFn = void(__cdecl*)(void* player);
 using PlayerLocomotionFn = void(__cdecl*)(void* controller);
 using PlayerStateDispatcherFn = void(__cdecl*)(void* outer_player);
@@ -1094,6 +1107,7 @@ SuccessfulBlockImpactFn g_original_successful_block_impact = nullptr;
 OffensiveSpellLaunchFn g_original_offensive_spell_launch = nullptr;
 RangedWeaponLaunchFn g_original_ranged_weapon_launch = nullptr;
 UseConsumableFn g_original_use_consumable = nullptr;
+SavePointQueryFn g_original_save_point_query = nullptr;
 PlayerTurnFn g_original_player_turn = nullptr;
 PlayerLocomotionFn g_original_player_locomotion = nullptr;
 PlayerTurnFn g_player_turn_writer = nullptr;
@@ -1367,6 +1381,39 @@ bool IsExpectedDungeonImage(uint8_t* base) {
   return std::memcmp(base + kRateConsumerSignatureRva,
                      kRateConsumerSignature.data(),
                      kRateConsumerSignature.size()) == 0;
+}
+
+bool IsExpectedSavePointQuery() {
+  if (!g_dungeon_base) {
+    return false;
+  }
+  std::array<uint8_t, 32> code{};
+  if (!SafeRead(g_dungeon_base + kSavePointQueryRva, code.data(),
+                code.size())) {
+    return false;
+  }
+  const std::array<uint8_t, 24> opcode_positions = {
+      0,  5,  6,  7,  8,  9,  14, 15, 16, 17, 18, 19,
+      20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
+  const std::array<uint8_t, 24> expected_opcodes = {
+      0xA1, 0x85, 0xC0, 0x74, 0x14, 0xA1, 0x8B, 0x54,
+      0x24, 0x04, 0x8B, 0x48, 0x1C, 0xB8, 0x01, 0x00,
+      0x00, 0x00, 0x89, 0x0A, 0xC3, 0x33, 0xC0, 0xC3};
+  for (size_t i = 0; i < opcode_positions.size(); ++i) {
+    if (code[opcode_positions[i]] != expected_opcodes[i]) {
+      return false;
+    }
+  }
+  uint32_t available_address = 0;
+  uint32_t trigger_address = 0;
+  std::memcpy(&available_address, code.data() + 1, sizeof(available_address));
+  std::memcpy(&trigger_address, code.data() + 10, sizeof(trigger_address));
+  return available_address ==
+             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_dungeon_base) +
+                                   kSaveAvailableFlagRva) &&
+         trigger_address ==
+             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_dungeon_base) +
+                                   kActiveSaveTriggerRva);
 }
 
 uint32_t ConfiguredSubframes() {
@@ -13804,6 +13851,124 @@ bool ReadPlayerObject(uintptr_t* player) {
   return true;
 }
 
+bool ReadSafeSaveGroundState(uintptr_t player) {
+  if (!player || !g_dungeon_base) {
+    return false;
+  }
+  uintptr_t controller = 0;
+  uintptr_t dispatcher = 0;
+  return SafeReadValue(
+             reinterpret_cast<const void*>(
+                 player + kPlayerMovementControllerOffset),
+             &controller) &&
+         controller &&
+         SafeReadValue(reinterpret_cast<const void*>(controller + 0x2ECu),
+                       &dispatcher) &&
+         dispatcher == reinterpret_cast<uintptr_t>(g_dungeon_base) +
+                           kPlayerStateDispatcherRva;
+}
+
+void ObserveSafeSaveEligibility(const SceneSnapshot& scene) {
+  if (!g_safe_save_anywhere_enabled) {
+    return;
+  }
+
+  deathtrap_save::SafeSaveObservation observation;
+  observation.scene = scene.root;
+  observation.player = scene.player_object;
+  observation.gameplay = DeathtrapGameplayReady(false);
+  observation.scripted_view =
+      g_scripted_camera_override_active.load(std::memory_order_acquire);
+  observation.ground_state = ReadSafeSaveGroundState(scene.player_object);
+  if (scene.player_cached_position_valid) {
+    observation.vertical_position = scene.player_cached_position[1];
+    observation.position_valid = true;
+  } else if (scene.player_position_valid) {
+    observation.vertical_position = scene.player_position[1];
+    observation.position_valid = true;
+  }
+  int32_t health = 0;
+  observation.alive = scene.player_object &&
+                      ReadEntityHealth(
+                          reinterpret_cast<void*>(scene.player_object),
+                          &health) &&
+                      health > 0;
+
+  std::lock_guard<std::mutex> lock(g_safe_save_mutex);
+  g_safe_save_tracker.Observe(observation);
+}
+
+bool SafeSaveLiveGuard() {
+  if (!DeathtrapGameplayReady(false) ||
+      g_scripted_camera_override_active.load(std::memory_order_acquire)) {
+    return false;
+  }
+  uintptr_t player = 0;
+  int32_t health = 0;
+  return ReadPlayerObject(&player) &&
+         ReadEntityHealth(reinterpret_cast<void*>(player), &health) &&
+         health > 0 && ReadSafeSaveGroundState(player);
+}
+
+void LogSafeSaveQuery(const char* source, bool allowed,
+                      const deathtrap_save::SafeSaveStatus& status,
+                      int32_t cost) {
+  const int32_t code = source[0] == 'n'
+                           ? 1000
+                           : (allowed ? 1001
+                                      : static_cast<int32_t>(status.reason));
+  const uint64_t now = GetTickCount64();
+  const int32_t previous =
+      g_safe_save_last_log_code.exchange(code, std::memory_order_acq_rel);
+  const uint64_t previous_ms =
+      g_safe_save_last_log_ms.load(std::memory_order_relaxed);
+  if (previous == code && previous_ms && now - previous_ms < 5000u) {
+    return;
+  }
+  g_safe_save_last_log_ms.store(now, std::memory_order_relaxed);
+  AppendDeathtrapSupportLog(
+      "support_save source=%s allowed=%u reason=%s stable_ticks=%u cost=%d",
+      source, allowed ? 1u : 0u,
+      deathtrap_save::SafeSaveReasonName(status.reason),
+      status.stable_ticks, cost);
+}
+
+int __cdecl HookSavePointQuery(int32_t* gold_cost) {
+  if (!g_original_save_point_query) {
+    return 0;
+  }
+
+  const int native_allowed = g_original_save_point_query(gold_cost);
+  if (native_allowed) {
+    int32_t cost = 0;
+    if (gold_cost) {
+      SafeReadValue(gold_cost, &cost);
+    }
+    LogSafeSaveQuery("native", true, {}, cost);
+    return native_allowed;
+  }
+
+  deathtrap_save::SafeSaveStatus status;
+  {
+    std::lock_guard<std::mutex> lock(g_safe_save_mutex);
+    status = g_safe_save_tracker.status();
+  }
+  const bool allowed = g_safe_save_anywhere_enabled && status.eligible &&
+                       SafeSaveLiveGuard();
+  if (allowed) {
+    const int32_t free_save = 0;
+    if (!gold_cost ||
+        !SafeWrite(gold_cost, &free_save, sizeof(free_save))) {
+      LogSafeSaveQuery("safe_anywhere", false, status, 0);
+      return 0;
+    }
+    LogSafeSaveQuery("safe_anywhere", true, status, 0);
+    return 1;
+  }
+  LogSafeSaveQuery("safe_anywhere", false, status, 0);
+  return 0;
+}
+
 void LogPlayerProbeTriplet(uint64_t source_tick,
                            const SceneSnapshot& older,
                            const SceneSnapshot& previous,
@@ -16508,6 +16673,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
     // render or gameplay callback is introduced at x1.
     if (context && wait > 0) {
       SceneSnapshot exact = CaptureScene(context);
+      ObserveSafeSaveEligibility(exact);
       // No midpoint exists at x1, but consume the source-transition marker so
       // enabling interpolation later cannot replay a stale cut.
       g_owned_camera_presentation_cut_pending.exchange(
@@ -16536,6 +16702,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   }
 
   SceneSnapshot current = CaptureScene(context);
+  ObserveSafeSaveEligibility(current);
   const bool owned_camera_transition_cut =
       g_owned_camera_presentation_cut_pending.exchange(
           false, std::memory_order_acq_rel);
@@ -16857,6 +17024,8 @@ void InitializePatchState() {
   g_debug_log = ConfiguredDebugLog();
   g_music_track_fix_enabled =
       ConfiguredInteger(L"Audio", L"FixMusicTracks", 1) != 0;
+  g_safe_save_anywhere_enabled =
+      ConfiguredInteger(L"Save", L"SafeAnywhere", 1) != 0;
   g_camera_probe_enabled =
       ConfiguredInteger(L"Diagnostics", L"CameraProbe", 0) != 0;
   g_head_joint_probe_enabled =
@@ -17201,11 +17370,13 @@ void InitializePatchState() {
                 std::memory_order_release);
   AppendDeathtrapSupportLog(
       "support_patch state=active orbit=%u immersive=%u xinput=%u "
-      "xinput_runtime=%u music_fix=%u native_collision_probe=%u",
+      "xinput_runtime=%u music_fix=%u safe_save=%u "
+      "native_collision_probe=%u",
       g_third_person_orbit_enabled ? 1u : 0u,
       g_immersive_first_person_enabled ? 1u : 0u,
       g_xinput_enabled ? 1u : 0u, g_xinput_get_state ? 1u : 0u,
       g_music_track_fix_enabled ? 1u : 0u,
+      g_safe_save_anywhere_enabled ? 1u : 0u,
       g_native_collision_probe_enabled ? 1u : 0u);
 }
 
@@ -17424,6 +17595,55 @@ bool InstallDeathtrapNativeRenderHooks() {
   // Optional and fail-closed: only the exact 25 KiB Steam MP3 wrapper is
   // accepted. Music failure must never disable rendering, input or camera.
   InstallDeathtrapMusicTrackFix();
+
+  // Preserve the retail serializer, slots, screenshots and loader. The hook
+  // replaces only the Savetrig eligibility leaf and only after the exact
+  // native endpoint has remained in a living grounded state for three ticks.
+  if (g_safe_save_anywhere_enabled && IsExpectedSavePointQuery()) {
+    void* const save_query_target = g_dungeon_base + kSavePointQueryRva;
+    const MH_STATUS create_save_query = MH_CreateHook(
+        save_query_target, reinterpret_cast<void*>(&HookSavePointQuery),
+        reinterpret_cast<void**>(&g_original_save_point_query));
+    const bool save_query_created =
+        create_save_query == MH_OK ||
+        create_save_query == MH_ERROR_ALREADY_CREATED;
+    const MH_STATUS enable_save_query =
+        save_query_created ? MH_EnableHook(save_query_target)
+                           : create_save_query;
+    const bool save_query_enabled =
+        enable_save_query == MH_OK ||
+        enable_save_query == MH_ERROR_ENABLED;
+    if (save_query_created && save_query_enabled) {
+      g_safe_save_hook_installed.store(true, std::memory_order_release);
+      AppendNativeLog(
+          "safe_save hook=active rva=%08llX stable_ticks=%u "
+          "vertical_delta=%d native_savepoints=preserved",
+          static_cast<unsigned long long>(kSavePointQueryRva),
+          deathtrap_save::SafeSaveTracker::kRequiredStableTicks,
+          deathtrap_save::SafeSaveTracker::kMaximumVerticalDelta);
+      AppendDeathtrapSupportLog(
+          "support_save hook=active rva=%08llX policy=grounded_stable",
+          static_cast<unsigned long long>(kSavePointQueryRva));
+    } else {
+      AppendNativeLog(
+          "safe_save hook=failed create=%d enable=%d "
+          "fallback=native_savepoints",
+          static_cast<int>(create_save_query),
+          static_cast<int>(enable_save_query));
+      AppendDeathtrapSupportLog(
+          "support_save hook=failed create=%d enable=%d "
+          "fallback=native_savepoints",
+          static_cast<int>(create_save_query),
+          static_cast<int>(enable_save_query));
+    }
+  } else if (g_safe_save_anywhere_enabled) {
+    AppendNativeLog(
+        "safe_save hook=signature_mismatch rva=%08llX "
+        "fallback=native_savepoints",
+        static_cast<unsigned long long>(kSavePointQueryRva));
+    AppendDeathtrapSupportLog(
+        "support_save hook=signature_mismatch fallback=native_savepoints");
+  }
 
   // Optional modern-camera layer. It supplies an orbit candidate at the
   // mode-3 dispatcher, clips the exact spring-arm ray with the native camera

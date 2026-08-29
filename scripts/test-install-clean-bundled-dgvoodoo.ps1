@@ -60,6 +60,8 @@ try {
         -Destination (Join-Path $payload 'DINPUT.dll')
     Copy-Item -LiteralPath (Join-Path $repoRoot 'config\deathtrap_native.ini') `
         -Destination (Join-Path $payload 'deathtrap_native.ini')
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'config\keys.cfg') `
+        -Destination (Join-Path $payload 'keys.cfg')
     Copy-Item -LiteralPath (Join-Path $repoRoot 'config\dgVoodoo-recommended.conf') `
         -Destination (Join-Path $payload 'dgVoodoo.conf')
     foreach ($wrapper in @('DDraw.dll', 'D3DImm.dll')) {
@@ -89,6 +91,17 @@ try {
         (Join-Path $payload 'dgVoodoo.conf') -Algorithm SHA256).Hash
     if ($installedConfig -ne $expectedConfig) {
         throw 'Clean installation produced the wrong dgVoodoo.conf.'
+    }
+    $installedKeys = [System.IO.File]::ReadAllText(
+        (Join-Path $asylum 'keys.cfg'))
+    $expectedKeys = [regex]::Replace(
+        [System.IO.File]::ReadAllText((Join-Path $payload 'keys.cfg')),
+        "\r?\n", "`r`n")
+    if (-not $expectedKeys.EndsWith("`r`n")) {
+        $expectedKeys += "`r`n"
+    }
+    if ($installedKeys -cne $expectedKeys) {
+        throw 'Clean installation did not install the exact bundled keys.cfg.'
     }
     Write-Host 'Clean bundled dgVoodoo installation test passed.'
 }

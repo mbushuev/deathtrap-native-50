@@ -26,7 +26,7 @@ The final relevant game-directory layout is:
 |-- DINPUT.dll                this project
 |-- deathtrap_native.ini      this project
 `-- ASYLUM\
-    `-- keys.cfg              retail file amended by this project's installer
+    `-- keys.cfg              tested profile installed by this project
 ```
 
 Do not copy the x64 dgVoodoo wrappers. `DD_CD.EXE` is a 32-bit process and
@@ -99,6 +99,7 @@ LICENSE.txt
 payload/
   DINPUT.dll
   deathtrap_native.ini
+  keys.cfg
   dgVoodoo.conf
   dgVoodoo/
     DDraw.dll
@@ -126,8 +127,9 @@ The script:
    `ASYLUM\keys.cfg` and `ASYLUM\config.dat` under
    `back\deathtrap-native50-overlay-<timestamp>`;
 4. installs the tested dgVoodoo 2.86.2 runtime/configuration;
-5. applies the verified keyboard profile while preserving mouse, joystick and
-   unrelated retail bindings;
+5. replaces `ASYLUM\keys.cfg` with the exact verified keyboard, mouse and
+   joystick profile shipped with the same build; the previous file is already
+   preserved by step 3;
 6. replaces, de-duplicates or adds the required game rendering values without
    changing progress, volume or other unrelated settings;
 7. replaces `dgVoodoo.conf` only after backing up the previous file.
@@ -135,10 +137,10 @@ The script:
 Use `-WhatIf` to validate the directory without modifying it.
 
 Copying only `DINPUT.dll` is not a complete installation. A fully manual
-installation must copy both runtime files and reproduce the binding merge from
-`install.ps1`. Never distribute or blindly overwrite a complete
-`keys.cfg`: it is a game/user control file and may already contain customized
-bindings.
+installation must copy both runtime files and place the bundled `keys.cfg` at
+`ASYLUM\keys.cfg`. This deliberately replaces custom control bindings because
+the DLL and action profile are tested as one unit; recover the previous file
+from the timestamped rollback directory if needed.
 
 ## 5. Launch the game
 

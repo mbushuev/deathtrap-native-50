@@ -45,9 +45,9 @@ missing primitive is a deliberately simple character exclusion volume.
 
 ## Why SpiderManModernFix behaves better
 
-The local implementation in `D:\games\Spider-Man\SpiderManModernFix` has a
-different ownership boundary. `HookedCameraNormal` writes only the retail
-camera pitch and yaw fields immediately before calling the original
+The SpiderManModernFix reference implementation examined during this research
+has a different ownership boundary. `HookedCameraNormal` writes only the
+retail camera pitch and yaw fields immediately before calling the original
 `CCamera::CM_Normal`. The original game continues to own camera distance,
 position, collision, and special-camera states.
 
@@ -62,15 +62,14 @@ and historically introduced position-ring oscillation. Full gameplay-camera
 ownership is therefore still required. The transferable rule is narrower and
 more important: **one system must own the complete final gameplay pose**.
 
-### What the local Spider-Man decomp actually provides
+### What the Spider-Man decompilation reference actually provides
 
-The checked tree is
-`D:\games\Spider-Man\SpiderManModernFix\build\research\spidey-decomp`.
-Its main `camera.cpp` leaves `CCamera::CM_Normal()` as a stub. The generated
-`thps2-stuff/decls.h` records addresses, local variables and type layout for
-`ReactToCollision`, `MoveToDesiredPos` and `CM_Normal`, but does not contain
-their executable statements. It is useful structural evidence, not a camera
-implementation that can be translated line by line.
+The examined decompilation tree leaves `CCamera::CM_Normal()` as a stub in its
+main `camera.cpp`. The generated `thps2-stuff/decls.h` records addresses, local
+variables and type layout for `ReactToCollision`, `MoveToDesiredPos` and
+`CM_Normal`, but does not contain their executable statements. It is useful
+structural evidence, not a camera implementation that can be translated line
+by line.
 
 The reusable part is the implemented collision architecture in
 `m3dzone.cpp`: Spider-Man builds one `SLineInfo`, traverses the zoned

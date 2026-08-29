@@ -3,6 +3,7 @@ param(
     [string]$GameDirectory = '',
     [string]$DllPath = '',
     [string]$IniPath = '',
+    [string]$KeysPath = '',
     [string]$DgVoodooRuntimeDirectory = '',
     [string]$DgVoodooConfigPath = '',
     [switch]$SkipGameHashCheck
@@ -151,99 +152,22 @@ if (-not $IniPath) {
     }
 }
 $ini = (Resolve-Path -LiteralPath $IniPath).Path
+if (-not $KeysPath) {
+    $payloadKeys = Join-Path $PSScriptRoot 'payload\keys.cfg'
+    $flatKeys = Join-Path $PSScriptRoot 'keys.cfg'
+    $KeysPath = if (Test-Path -LiteralPath $payloadKeys -PathType Leaf) {
+        $payloadKeys
+    } elseif (Test-Path -LiteralPath $flatKeys -PathType Leaf) {
+        $flatKeys
+    } else {
+        Join-Path $repoRoot 'config\keys.cfg'
+    }
+}
+$keysSource = (Resolve-Path -LiteralPath $KeysPath).Path
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $backup = Join-Path $game "back\deathtrap-native50-overlay-$stamp"
 $keys = Join-Path $game 'ASYLUM\keys.cfg'
 $retailConfig = Join-Path $game 'ASYLUM\config.dat'
-
-function Add-NativeBinding {
-    param(
-        [Parameter(Mandatory = $true)][string]$Text,
-        [Parameter(Mandatory = $true)][string]$Action,
-        [Parameter(Mandatory = $true)][string]$Expression
-    )
-
-    $actionPattern = [regex]::Escape($Action)
-    $expressionPattern = [regex]::Escape($Expression)
-    $existingPattern = "(?m)^\s*define\s+$actionPattern\s+DOWN\s+$expressionPattern\s*\r?$"
-    if ([regex]::IsMatch($Text, $existingPattern)) {
-        return $Text
-    }
-
-    $anchorPattern = "(?m)^\s*define\s+$actionPattern\b[^\r\n]*\r?$"
-    $matches = [regex]::Matches($Text, $anchorPattern)
-    if ($matches.Count -eq 0) {
-        throw "Could not locate $Action in $keys"
-    }
-    $anchor = $matches[$matches.Count - 1]
-    $insertAt = $anchor.Index + $anchor.Length
-    if ($insertAt -gt 0 -and $Text[$insertAt - 1] -eq "`r") {
-        --$insertAt
-    }
-    $newline = if ($Text.Contains("`r`n")) { "`r`n" } else { "`n" }
-    $line = "define    $Action    DOWN      $Expression"
-    return $Text.Insert($insertAt, $newline + $line)
-}
-
-function Remove-NativeLeftMouseCombatBindings {
-    param(
-        [Parameter(Mandatory = $true)][string]$Text
-    )
-
-    $pattern = '(?m)^\s*define\s+ACTION_(?:ATTACK_[A-Z0-9_]+|PARRY)' +
-        '\s+DOWN\s+MOUSE_LBUTTON(?:\s*\+[^\r\n]*)?\s*\r?\n?'
-    return [regex]::Replace($Text, $pattern, '')
-}
-
-function Set-NativeKeyboardBinding {
-    param(
-        [Parameter(Mandatory = $true)][string]$Text,
-        [Parameter(Mandatory = $true)][string]$Action,
-        [Parameter(Mandatory = $true)][string]$Trigger,
-        [Parameter(Mandatory = $true)][string]$Expression
-    )
-
-    $newline = if ($Text.Contains("`r`n")) { "`r`n" } else { "`n" }
-    $lines = [System.Collections.Generic.List[string]]::new()
-    foreach ($line in [regex]::Split($Text, "\r?\n")) {
-        $lines.Add($line)
-    }
-    $actionPattern = [regex]::Escape($Action)
-    $triggerPattern = [regex]::Escape($Trigger)
-    $pattern = "^(?<prefix>\s*define\s+$actionPattern\s+$triggerPattern\s+)" +
-        '(?<expression>.*?)\s*$'
-    $rewritten = [System.Collections.Generic.List[string]]::new()
-    $inserted = $false
-    $lastAction = -1
-    foreach ($line in $lines) {
-        $match = [regex]::Match($line, $pattern)
-        if ($match.Success) {
-            $boundExpression = $match.Groups['expression'].Value.Trim()
-            if ($boundExpression -notmatch '\b(?:JOY|MOUSE)_') {
-                if (-not $inserted) {
-                    $rewritten.Add($match.Groups['prefix'].Value + $Expression)
-                    $inserted = $true
-                    $lastAction = $rewritten.Count - 1
-                }
-                continue
-            }
-        }
-        $rewritten.Add($line)
-        if ($line -match "^\s*define\s+$actionPattern\b") {
-            $lastAction = $rewritten.Count - 1
-        }
-    }
-    if (-not $inserted) {
-        if ($lastAction -lt 0) {
-            throw "Could not locate $Action in $keys"
-        }
-        $triggerColumn = if ($Trigger -eq 'PRESS') { 'PRESS     ' } else { 'DOWN      ' }
-        $rewritten.Insert(
-            $lastAction + 1,
-            "define    $Action    $triggerColumn$Expression")
-    }
-    return [string]::Join($newline, $rewritten)
-}
 
 function Set-RetailConfigValue {
     param(
@@ -342,74 +266,19 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
     if (-not (Test-Path -LiteralPath $retailConfig)) {
         throw "Retail rendering configuration was not found: $retailConfig"
     }
-    $keyText = [System.IO.File]::ReadAllText($keys)
-    # The patch's camera-relative input and documented controls require one
-    # deterministic keyboard profile. Preserve mouse and joystick expressions,
-    # but replace each action's keyboard-only expression with the accepted one.
-    foreach ($binding in @(
-        @('ACTION_WALK_FORWARD', 'DOWN', 'KEY_W'),
-        @('ACTION_WALK_BACKWARD', 'DOWN', 'KEY_S'),
-        @('ACTION_RUN_FORWARD', 'DOWN', 'KEY_LSHIFT + KEY_W'),
-        @('ACTION_RUN_BACKWARD', 'DOWN', 'KEY_LSHIFT + KEY_S'),
-        @('ACTION_STEP_FORWARD', 'DOWN', 'KEY_CTRL + KEY_W'),
-        @('ACTION_STEP_BACKWARD', 'DOWN', 'KEY_CTRL + KEY_S'),
-        @('ACTION_LEFT_SIDESTEP', 'DOWN', 'KEY_CTRL + KEY_A'),
-        @('ACTION_RIGHT_SIDESTEP', 'DOWN', 'KEY_CTRL + KEY_D'),
-        @('ACTION_TURN_LEFT', 'DOWN', 'KEY_A'),
-        @('ACTION_TURN_RIGHT', 'DOWN', 'KEY_D'),
-        @('ACTION_TURN_FAST_LEFT', 'DOWN', 'KEY_LSHIFT + KEY_A'),
-        @('ACTION_TURN_FAST_RIGHT', 'DOWN', 'KEY_LSHIFT + KEY_D'),
-        @('ACTION_ATTACK_RANGED', 'DOWN', 'KEY_F'),
-        @('ACTION_ATTACK_1', 'DOWN', 'KEY_F + KEY_W'),
-        @('ACTION_ATTACK_2', 'DOWN', 'KEY_F + KEY_A'),
-        @('ACTION_ATTACK_3', 'DOWN', 'KEY_F + KEY_D'),
-        @('ACTION_ATTACK_BACK', 'DOWN', 'KEY_F + KEY_A + KEY_D'),
-        @('ACTION_PARRY', 'DOWN', 'KEY_F + KEY_S'),
-        @('ACTION_CAST_SPELL', 'DOWN', 'KEY_Q'),
-        @('ACTION_JUMP_CLIMB', 'DOWN', 'KEY_SPACE'),
-        @('ACTION_JUMP_LEFT', 'DOWN', 'KEY_SPACE + KEY_A'),
-        @('ACTION_JUMP_RIGHT', 'DOWN', 'KEY_SPACE + KEY_D'),
-        @('ACTION_JUMP_FORWARD', 'DOWN', 'KEY_SPACE + KEY_W'),
-        @('ACTION_JUMP_BACKWARD', 'DOWN', 'KEY_SPACE + KEY_S'),
-        @('ACTION_OPERATE', 'PRESS', 'KEY_E')
-    )) {
-        $keyText = Set-NativeKeyboardBinding -Text $keyText `
-            -Action $binding[0] -Trigger $binding[1] -Expression $binding[2]
-    }
-    # Mouse combat is translated to the verified F+direction grammar at the
-    # DirectInput keyboard boundary. Remove every older left-button combat
-    # experiment, including both WASD and retail-arrow variants, on upgrade.
-    $keyText = Remove-NativeLeftMouseCombatBindings -Text $keyText
-    foreach ($binding in @(
-        @('ACTION_TURN_LEFT', 'MOUSE_HORIZ_LEFT'),
-        @('ACTION_TURN_RIGHT', 'MOUSE_HORIZ_RIGHT'),
-        @('ACTION_TURN_FAST_LEFT', 'KEY_LSHIFT + MOUSE_HORIZ_LEFT'),
-        @('ACTION_TURN_FAST_RIGHT', 'KEY_LSHIFT + MOUSE_HORIZ_RIGHT'),
-        @('ACTION_WALK_FORWARD', 'JOY_VERT_FORWARDS'),
-        @('ACTION_WALK_BACKWARD', 'JOY_VERT_BACKWARDS'),
-        @('ACTION_RUN_FORWARD', 'KEY_LSHIFT + JOY_VERT_FORWARDS'),
-        @('ACTION_RUN_BACKWARD', 'KEY_LSHIFT + JOY_VERT_BACKWARDS'),
-        @('ACTION_TURN_LEFT', 'JOY_HORIZ_LEFT'),
-        @('ACTION_TURN_RIGHT', 'JOY_HORIZ_RIGHT'),
-        @('ACTION_TURN_FAST_LEFT', 'KEY_LSHIFT + JOY_HORIZ_LEFT'),
-        @('ACTION_TURN_FAST_RIGHT', 'KEY_LSHIFT + JOY_HORIZ_RIGHT'),
-        @('ACTION_JUMP_FORWARD', 'KEY_SPACE + JOY_VERT_FORWARDS'),
-        @('ACTION_JUMP_BACKWARD', 'KEY_SPACE + JOY_VERT_BACKWARDS'),
-        @('ACTION_JUMP_LEFT', 'KEY_SPACE + JOY_HORIZ_LEFT'),
-        @('ACTION_JUMP_RIGHT', 'KEY_SPACE + JOY_HORIZ_RIGHT'),
-        @('ACTION_JUMP_LEFT', 'KEY_SPACE + KEY_J'),
-        @('ACTION_JUMP_RIGHT', 'KEY_SPACE + KEY_K'),
-        @('ACTION_PARRY', 'MOUSE_RBUTTON'),
-        @('ACTION_1ST_PERSON_VIEW', 'KEY_TAB'),
-        @('ACTION_LEFT_SIDESTEP', 'KEY_J'),
-        @('ACTION_RIGHT_SIDESTEP', 'KEY_K')
-    )) {
-        $keyText = Add-NativeBinding -Text $keyText -Action $binding[0] -Expression $binding[1]
+    # The DLL's modern input routing and the action table are one tested unit.
+    # Back up the user's previous file above, then install the exact profile
+    # shipped with this build instead of trying to merge arbitrary remaps.
+    $keyText = [System.IO.File]::ReadAllText($keysSource)
+    $keyText = [regex]::Replace($keyText, "\r?\n", "`r`n")
+    if (-not $keyText.EndsWith("`r`n")) {
+        $keyText += "`r`n"
     }
     if ($keyText.Contains("`r`r`n")) {
-        throw 'Refusing to write ASYLUM/keys.cfg with invalid CR-CR-LF line endings.'
+        throw 'Bundled keys.cfg normalized to invalid CR-CR-LF line endings.'
     }
-    [System.IO.File]::WriteAllText($keys, $keyText, [System.Text.Encoding]::ASCII)
+    [System.IO.File]::WriteAllText(
+        $keys, $keyText, [System.Text.Encoding]::ASCII)
 
     $configText = [System.IO.File]::ReadAllText($retailConfig)
     foreach ($setting in @(

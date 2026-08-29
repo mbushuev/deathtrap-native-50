@@ -97,6 +97,7 @@ New-Item -ItemType Directory -Path $stageRoot | Out-Null
 $releaseFiles = @(
     @{ Source = 'dist\DINPUT.dll'; Destination = 'payload\DINPUT.dll' },
     @{ Source = 'config\deathtrap_native.ini'; Destination = 'payload\deathtrap_native.ini' },
+    @{ Source = 'config\keys.cfg'; Destination = 'payload\keys.cfg' },
     @{ Source = 'third_party\dgVoodoo2-2.86.2\x86\DDraw.dll'; Destination = 'payload\dgVoodoo\DDraw.dll' },
     @{ Source = 'third_party\dgVoodoo2-2.86.2\x86\D3DImm.dll'; Destination = 'payload\dgVoodoo\D3DImm.dll' },
     @{ Source = 'config\dgVoodoo-recommended.conf'; Destination = 'payload\dgVoodoo.conf' },

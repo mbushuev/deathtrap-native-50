@@ -8,6 +8,32 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.223 — safe saving and deterministic control installation
+
+- Enables the retail Save command away from authored save points when the
+  living player has remained in a native grounded movement state on a stable
+  surface. Airborne movement, scripted camera sequences, death and unstable
+  transitions remain ineligible.
+- Keeps the original pause menu, save/load screens, slots, screenshots and
+  save-file format. There are no experimental quick-save or quick-load keys;
+  saving and loading are performed through the retail menu.
+- Preserves every original authored save point and its native cost. The new
+  safe-position path is free and is used only when the original query rejects
+  the current position.
+- Verifies the exact native save-query routine before installing the hook. An
+  unknown executable layout falls back to the untouched retail save-point
+  behavior instead of patching an unverified address.
+- Ships the complete tested `keys.cfg` with the release and installs it as one
+  unit with the DLL after backing up the previous control file. This prevents
+  clean installs and upgrades from retaining incompatible bindings that could
+  turn left mouse attack into forward movement or disable directional combat.
+- Normalizes and validates the bundled control profile during packaging and
+  installation, including the complete keyboard, mouse and original joystick
+  expressions required by the modern input layer.
+- Adds deterministic safe-save eligibility tests and extends clean-install
+  and upgrade tests to compare the installed control profile byte-for-byte
+  with the reviewed release payload.
+
 ## 0.0.222 — native collision and close-camera transparency
 
 - Keeps pure forward/back movement in immersive first person on Dungeon's

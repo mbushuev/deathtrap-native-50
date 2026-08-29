@@ -77,9 +77,11 @@ documentation. Never add:
   unmodified 2.86.2 x86 runtime DLLs and reviewed tested configuration may be
   bundled;
 - save files, logs, crash dumps, backups or local filesystem paths;
-- a complete user `ASYLUM/keys.cfg`.
+- a captured user `ASYLUM/keys.cfg`; only the reviewed project-owned
+  `config/keys.cfg` profile may be packaged as `payload/keys.cfg`.
 
 The release is self-contained: the installer backs up existing patch,
 dgVoodoo, control and rendering files, installs the verified bundled runtime
-and tested profile, applies the keyboard profile, preserves mouse/joystick and
-unrelated bindings, and normalizes the required game rendering values.
+and tested profile, replaces the control file with the matching project-owned
+keyboard/mouse/joystick profile, and normalizes the required game rendering
+values.
