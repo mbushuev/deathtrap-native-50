@@ -8,6 +8,38 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.224 — remappable controls and selector slow motion
+
+- Expands the original Keyboard Setup screen into two pages covering all
+  twenty keyboard actions used by the modern patch, including side-step,
+  selectors, both first-person modes, the native-rate toggle and pause.
+- Adds working `<<` and `>>` page controls, hides unused rows and keeps the
+  existing Keyboard Default control as the single way to restore the complete
+  modern default profile.
+- Supports assigning `F1` through `F12` in the original key-capture screen and
+  redraws changed bindings correctly after page changes and default restore.
+- Keeps the fixed XInput layout in patch-owned command space. Changing a
+  keyboard binding no longer remaps controller buttons, D-pad actions or menu
+  navigation.
+- Restores `Start` and `B` navigation on the controller after entering the
+  rebinding screen. In the root menu, `Esc`, `Start` or `B` returns to an
+  active game instead of selecting Quit; at startup it does nothing, while
+  submenus retain their original back behavior.
+- Maps `P` and controller `View/Back` to gameplay pause and preserves the
+  current music position while paused. Playback resumes from the same point
+  instead of falling silent until the menu is reopened.
+- Adds Quake-style 25% world speed while any `F1`-`F4` selector or held
+  controller radial wheel is open. The slowdown percentage is configurable.
+- Keeps selector polling, closing and category switching responsive at the
+  full presentation rate instead of delaying keyboard releases to the next
+  slowed gameplay tick.
+- Keeps third-person and immersive first-person camera input at full speed
+  during selector slow motion. Physical mouse axes remain owned by the modern
+  camera, so rotating the view no longer turns the character; first person no
+  longer collapses to a stuck 4 FPS view.
+- Adds deterministic coverage for paged rebinding, command isolation,
+  function-key assignments and selector time-dilation state.
+
 ## 0.0.223 — safe saving and deterministic control installation
 
 - Enables the retail Save command away from authored save points when the

@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current development version: **0.0.223**
+Current development version: **0.0.224**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -8,7 +8,7 @@ Current development version: **0.0.223**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.223.png" alt="Deathtrap Native 50 v0.0.223" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.224.png" alt="Deathtrap Native 50 v0.0.224" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -45,6 +45,9 @@ game, under dgVoodoo's published redistribution terms.
   including menu navigation and a right-stick pointer.
 - Radial inventory selector with the game's own icons for melee, ranged,
   spell/shield and potion/charm categories.
+- Quake-style slow motion while keyboard selectors or controller radial wheels
+  are open; camera control and selector input remain responsive at full rate,
+  including in first person.
 - Event-driven controller vibration for attacks, hits, blocking, parries,
   spells, ranged shots, healing, landing, damage, death and radial selection.
 - Original Tab/R3 first-person camera plus a separate body-visible immersive
@@ -57,6 +60,8 @@ game, under dgVoodoo's published redistribution terms.
   pause/resume that preserves the current playback position.
 - Safe saving at stable grounded positions through the original menu, slots
   and save-file format; the original authored save points remain available.
+- Two-page in-game keyboard rebinding for all twenty gameplay and patch
+  actions, with modern defaults and support for the function keys.
 - Longer gameplay prompts and safe automatic per-launch support logs.
 
 See the [user-facing changelog](CHANGELOG.md) for the complete consolidated
@@ -241,6 +246,12 @@ In immersive first person, `A` and `D` become full-speed pure side movement;
 `W`/`S` can be combined with them for diagonal movement, and `Shift` selects
 the running speed.
 
+Opening any `F1`-`F4` selector slows the game world to 25% speed by default.
+The selector, physical mouse, controller and camera continue updating at the
+normal presentation rate. This also applies to the body-visible immersive
+first-person view. The percentage can be changed under `[Selector]` in
+`deathtrap_native.ini`.
+
 The patch enables the retail Save command at safe grounded positions outside
 the original save points. Saving and loading still use the original menu,
 slot screens and save-file format.
@@ -270,8 +281,12 @@ D-pad categories are up for melee weapons, right for ranged items, down for
 spells/shields, and left for potions/charms. Camera input is suppressed while
 the radial selector owns the right stick.
 
-All bindings and sensitivity values can be adjusted in
-`deathtrap_native.ini`.
+Keyboard bindings can be changed through the game's Keyboard Setup screen.
+Use the `<<` and `>>` controls on the right to switch between its two pages;
+the existing Keyboard Default control restores the complete modern profile.
+All twenty actions are remappable, including `F1`-`F12`. Keyboard rebinding
+does not alter the patch-owned controller layout. Controller and camera
+sensitivity values remain available in `deathtrap_native.ini`.
 
 ## Building
 

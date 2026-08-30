@@ -89,6 +89,14 @@ Esc                Open or leave menu; save and load through the retail menu
 Immersive first person uses A/D for pure full-speed side movement. Combine
 W/S with A/D for diagonals and hold Shift to run.
 
+F1-F4 selectors slow the game world to 25% by default while camera and input
+remain full-rate. Change SlowMotionPercent under [Selector] in
+deathtrap_native.ini if desired.
+
+Keyboard Setup has two pages for all twenty actions. Use << and >> on the
+right to switch pages. Keyboard Default restores the complete modern profile.
+Keyboard changes never alter the fixed controller layout.
+
 The patch enables the retail Save command at safe grounded positions outside
 the original save points. Saving and loading still use the original menu,
 slot screens and save-file format.
