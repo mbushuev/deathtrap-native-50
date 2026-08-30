@@ -83,7 +83,7 @@ F1 / F2 / F3 / F4 Melee / ranged / spell-shield / consumable selector
 Tab                Original retail first-person view
 F10                Body-visible immersive first-person view
 F11                Toggle approximately 50 FPS native presentation
-I                  Inventory
+P                  Pause gameplay
 Esc                Open or leave menu; save and load through the retail menu
 
 Immersive first person uses A/D for pure full-speed side movement. Combine
@@ -107,7 +107,8 @@ RB                 Cast/use contextual spell action
 LB + left stick    Original side-step movement
 Start/Menu         Open pause menu / leave menu
 R3                 Original retail first-person view
-View/Back          Body-visible immersive first-person view
+L3                 Body-visible immersive first-person view
+View/Back          Pause/resume gameplay
 D-pad tap          Cycle next item in the selected category
 D-pad hold         Open radial selector; choose with right stick
 

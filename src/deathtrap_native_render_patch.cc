@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include <Xinput.h>
+#include <mmsystem.h>
 
 #include <MinHook.h>
 
@@ -182,6 +183,11 @@ constexpr uintptr_t kUseConsumableRva = 0x0007B9C0u;
 constexpr uintptr_t kUseChalkRva = 0x000458B0u;
 constexpr uintptr_t kInventorySlotDrawRva = 0x000772A0u;
 constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
+// Dungeon.dll+0x17B50 is called only by the root menu at +0xF1E0. The retail
+// routine maps Escape to action 6 (Quit), while action 5 is its own native
+// Return-to-game path. The root context returned by +0x7EF50 is stored here;
+// context+0x834 is non-zero only when a resumable game exists.
+constexpr uintptr_t kRootMenuInputRva = 0x00017B50u;
 // Retail keyboard-definition screen. The engine owns exactly eleven visible
 // rows; the patch pages those rows without extending any retail array.
 constexpr uintptr_t kKeyboardBindingMenuRva = 0x00016260u;
@@ -761,6 +767,11 @@ std::atomic<int32_t> g_third_person_mouse_delta_y{0};
 std::atomic<uint64_t> g_last_controller_interaction_ms{0};
 std::atomic<uint64_t> g_controller_interaction_sequence{0};
 std::atomic<uint64_t> g_last_mode3_source_tick_ms{0};
+// The retail root-menu context does not expose a stable "game in progress"
+// flag: the candidate field remains zero after returning from gameplay. Keep
+// a process-local latch instead. Mode 3 is entered by real gameplay before
+// the player can open the root menu, while the startup menu never calls it.
+std::atomic<bool> g_root_menu_gameplay_seen{false};
 double g_third_person_mouse_horizontal_radians = 0.0;
 double g_third_person_mouse_vertical_radians = 0.0;
 
@@ -1097,6 +1108,7 @@ using RangedWeaponLaunchFn = void*(__cdecl*)(void* actor,
 using UseConsumableFn = void(__cdecl*)(int32_t item_id);
 using SavePointQueryFn = int(__cdecl*)(int32_t* gold_cost);
 using KeyboardBindingMenuFn = void(__cdecl*)();
+using RootMenuInputFn = uint8_t(__cdecl*)();
 using KeyboardBindingInputFn = uint8_t(__cdecl*)();
 using KeyboardBindingAllDefinedFn = int(__cdecl*)();
 using KeyboardBindingDrawKeyFn = void(__cdecl*)(uint16_t key,
@@ -1150,6 +1162,8 @@ using NativeCollisionResourceFn = uintptr_t(__cdecl*)(uintptr_t object);
 using RedbookTracksFn = uint32_t(__stdcall*)(void* handle);
 using RedbookPlayFn = int32_t(__stdcall*)(void* handle, uint32_t start,
                                           uint32_t end);
+using RedbookControlFn = int32_t(__stdcall*)(void* handle);
+using RedbookSetVolumeFn = int32_t(__stdcall*)(void* handle, int32_t volume);
 
 RenderPresentWaitFn g_original_render_present_wait = nullptr;
 RendererFn g_renderer = nullptr;
@@ -1167,6 +1181,7 @@ RangedWeaponLaunchFn g_original_ranged_weapon_launch = nullptr;
 UseConsumableFn g_original_use_consumable = nullptr;
 SavePointQueryFn g_original_save_point_query = nullptr;
 KeyboardBindingMenuFn g_original_keyboard_binding_menu = nullptr;
+RootMenuInputFn g_original_root_menu_input = nullptr;
 KeyboardBindingInputFn g_original_keyboard_binding_input = nullptr;
 KeyboardBindingAllDefinedFn g_original_keyboard_binding_all_defined = nullptr;
 KeyboardBindingDrawKeyFn g_original_keyboard_binding_draw_key = nullptr;
@@ -1185,6 +1200,9 @@ bool g_keyboard_binding_navigation_latched = false;
 uint8_t g_keyboard_binding_repaint_frames = 0;
 bool g_keyboard_bindings_initialized = false;
 size_t g_keyboard_binding_page = 0;
+bool g_keyboard_binding_edit_pending = false;
+size_t g_keyboard_binding_edit_page = 0;
+size_t g_keyboard_binding_edit_row = 0;
 KeyboardBindingValues g_keyboard_binding_backing{};
 KeyboardBindingLabels g_keyboard_binding_original_labels{};
 uintptr_t g_keyboard_navigation_localization_table = 0;
@@ -1196,6 +1214,7 @@ std::array<std::array<char, kKeyboardKeyNameLabelSize>,
            kKeyboardKeyNameReplacementCount>
     g_keyboard_key_name_original_labels{};
 bool g_keyboard_key_name_replacements_installed = false;
+bool g_root_menu_escape_latched = false;
 PlayerTurnFn g_original_player_turn = nullptr;
 PlayerLocomotionFn g_original_player_locomotion = nullptr;
 PlayerTurnFn g_player_turn_writer = nullptr;
@@ -1214,8 +1233,19 @@ CameraHistoryAddFn g_original_camera_history_add = nullptr;
 NativeCollisionResourceFn g_native_collision_resource = nullptr;
 RedbookTracksFn g_original_redbook_tracks = nullptr;
 RedbookPlayFn g_original_redbook_play = nullptr;
+RedbookControlFn g_original_redbook_pause = nullptr;
+RedbookControlFn g_original_redbook_resume = nullptr;
+RedbookControlFn g_original_redbook_stop = nullptr;
+RedbookControlFn g_redbook_status = nullptr;
+RedbookSetVolumeFn g_original_redbook_set_volume = nullptr;
 uint32_t* g_steam_mss_mp3_track_index = nullptr;
 std::atomic<int32_t> g_last_routed_music_track{-1};
+std::atomic<bool> g_music_playback_expected{false};
+std::atomic<bool> g_mci_music_active{false};
+std::atomic<int32_t> g_mci_music_track{-1};
+std::atomic<int32_t> g_mci_music_volume{127};
+std::mutex g_mci_music_mutex;
+constexpr wchar_t kMciMusicAlias[] = L"deathtrap_native_music";
 
 struct CameraLookAtCapture {
   bool active = false;
@@ -1542,36 +1572,73 @@ uint8_t __cdecl HookKeyboardBindingKeyCapture() {
   return 0u;
 }
 
-void CommitVisibleKeyboardBindingPage() {
-  if (!g_keyboard_binding_menu_active) {
+bool RootMenuHasActiveGame() {
+  return g_root_menu_gameplay_seen.load(std::memory_order_acquire);
+}
+
+uint8_t __cdecl HookRootMenuInput() {
+  if (!g_original_root_menu_input || !g_dungeon_base) {
+    return 0u;
+  }
+  const uint8_t retail_action = g_original_root_menu_input();
+  // +0x69890 is an edge-consuming query, so it must remain exclusively owned
+  // by the original routine above. After retail returns Quit (6), distinguish
+  // Escape from a real Quit click with non-consuming level state. SendInput
+  // keeps VK_ESCAPE visible here for controller Start/B; physical Escape is
+  // reported by GetAsyncKeyState directly.
+  const bool escape_down =
+      (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+  if (!escape_down) {
+    g_root_menu_escape_latched = false;
+  }
+  const bool active_game = RootMenuHasActiveGame();
+  const uint8_t resolved = deathtrap::input::ResolveRootMenuEscapeAction(
+      retail_action, escape_down, active_game);
+  if (resolved != retail_action && !g_root_menu_escape_latched) {
+    AppendDeathtrapSupportLog(
+        "support_root_menu_escape active_game=%u retail=%u resolved=%u",
+        active_game ? 1u : 0u, static_cast<unsigned>(retail_action),
+        static_cast<unsigned>(resolved));
+    g_root_menu_escape_latched = true;
+  }
+  return resolved;
+}
+
+void CommitPendingKeyboardBindingEdit() {
+  if (!g_keyboard_binding_menu_active ||
+      !g_keyboard_binding_edit_pending) {
+    return;
+  }
+  const size_t edit_page = g_keyboard_binding_edit_page;
+  const size_t edit_row = g_keyboard_binding_edit_row;
+  g_keyboard_binding_edit_pending = false;
+  if (edit_page != g_keyboard_binding_page) {
     return;
   }
   RetailBindingWindow visible{};
   if (!ReadKeyboardBindingValues(&visible)) {
     return;
   }
-  const KeyboardBindingValues previous = g_keyboard_binding_backing;
-  deathtrap::input::CommitBindingPage(
-      g_keyboard_binding_page, visible, &g_keyboard_binding_backing);
-  // Preserve the retail screen's one-key-per-base-action rule across pages.
-  // Its native duplicate loop can only see the current eleven-row window.
-  for (size_t row = 0;
-       row < deathtrap::input::kRetailBindingActionRowsPerPage; ++row) {
-    const int changed_action =
-        deathtrap::input::BindingActionForRow(g_keyboard_binding_page, row);
-    if (changed_action < 0) {
-      continue;
-    }
-    const size_t changed = static_cast<size_t>(changed_action);
-    const uint16_t value = g_keyboard_binding_backing[changed];
-    if (value != 0u &&
-        !deathtrap::input::IsBindableKeyboardRetailCode(value)) {
-      g_keyboard_binding_backing[changed] = previous[changed];
-      continue;
-    }
-    if (value == 0u || value == previous[changed]) {
-      continue;
-    }
+  const int changed_action =
+      deathtrap::input::BindingActionForRow(edit_page, edit_row);
+  if (changed_action < 0) {
+    return;
+  }
+  const size_t changed = static_cast<size_t>(changed_action);
+  const uint16_t previous = g_keyboard_binding_backing[changed];
+  const uint16_t value = visible[edit_row];
+  if (value != 0u &&
+      !deathtrap::input::IsBindableKeyboardRetailCode(value)) {
+    return;
+  }
+  if (!deathtrap::input::CommitBindingRow(
+          edit_page, edit_row, value, &g_keyboard_binding_backing)) {
+    return;
+  }
+  // Preserve the one-key-per-action rule across both pages. Only the row
+  // explicitly selected by the user is trusted; native redraws and page
+  // transitions are never allowed to bulk-copy the eleven-word window.
+  if (value != 0u && value != previous) {
     for (size_t action = 0; action < g_keyboard_binding_backing.size();
          ++action) {
       if (action != changed && g_keyboard_binding_backing[action] == value) {
@@ -1606,7 +1673,7 @@ bool ApplyVisibleKeyboardBindingPage() {
 }
 
 void ChangeKeyboardBindingPage(size_t page) {
-  CommitVisibleKeyboardBindingPage();
+  CommitPendingKeyboardBindingEdit();
   g_keyboard_binding_page = page;
   if (ApplyVisibleKeyboardBindingPage()) {
     // The retail input function presents near its return. Defer repaint until
@@ -1641,6 +1708,7 @@ void __cdecl HookKeyboardBindingMenu() {
   g_keyboard_binding_original_labels = original_labels;
   InitializeKeyboardBindingStore();
   g_keyboard_binding_page = 0;
+  g_keyboard_binding_edit_pending = false;
   g_keyboard_binding_navigation_latched = false;
   g_keyboard_binding_repaint_frames = 0u;
   g_keyboard_binding_menu_active = true;
@@ -1648,13 +1716,14 @@ void __cdecl HookKeyboardBindingMenu() {
   if (!key_names_installed || !ApplyVisibleKeyboardBindingPage()) {
     RestoreKeyboardKeyNameReplacements();
     g_keyboard_binding_menu_active = false;
+    g_keyboard_binding_edit_pending = false;
     WriteKeyboardBindingValues(original_values);
     WriteKeyboardBindingLabels(original_labels);
     g_original_keyboard_binding_menu();
     return;
   }
   g_original_keyboard_binding_menu();
-  CommitVisibleKeyboardBindingPage();
+  CommitPendingKeyboardBindingEdit();
   SaveKeyboardBindingStore();
   SetDeathtrapKeyboardBindings(g_keyboard_binding_backing.data(),
                                g_keyboard_binding_backing.size());
@@ -1663,6 +1732,7 @@ void __cdecl HookKeyboardBindingMenu() {
   RestoreKeyboardKeyNameReplacements();
   g_keyboard_binding_navigation_latched = false;
   g_keyboard_binding_repaint_frames = 0u;
+  g_keyboard_binding_edit_pending = false;
   g_keyboard_binding_menu_active = false;
 }
 
@@ -1690,7 +1760,7 @@ uint8_t __cdecl HookKeyboardBindingInput() {
   // that serializer runs; otherwise whichever page happened to be visible
   // would leak into ASYLUM/keys.cfg and break the next launch.
   if (result == 99u) {
-    CommitVisibleKeyboardBindingPage();
+    CommitPendingKeyboardBindingEdit();
     SaveKeyboardBindingStore();
     SetDeathtrapKeyboardBindings(g_keyboard_binding_backing.data(),
                                  g_keyboard_binding_backing.size());
@@ -1702,7 +1772,7 @@ uint8_t __cdecl HookKeyboardBindingInput() {
     if (!g_keyboard_binding_navigation_latched) {
       g_keyboard_binding_navigation_latched = true;
       if (defaults_activated) {
-        CommitVisibleKeyboardBindingPage();
+        g_keyboard_binding_edit_pending = false;
         g_keyboard_binding_backing =
             deathtrap::input::DefaultKeyboardBindings();
         SetDeathtrapKeyboardBindings(g_keyboard_binding_backing.data(),
@@ -1733,14 +1803,18 @@ uint8_t __cdecl HookKeyboardBindingInput() {
     return result;
   }
   const size_t row = static_cast<size_t>(result - 1u);
-  return deathtrap::input::BindingRowHasAction(g_keyboard_binding_page, row)
-             ? result
-             : 0;
+  if (!deathtrap::input::BindingRowHasAction(g_keyboard_binding_page, row)) {
+    return 0;
+  }
+  g_keyboard_binding_edit_pending = true;
+  g_keyboard_binding_edit_page = g_keyboard_binding_page;
+  g_keyboard_binding_edit_row = row;
+  return result;
 }
 
 int __cdecl HookKeyboardBindingAllDefined() {
   if (g_keyboard_binding_menu_active) {
-    CommitVisibleKeyboardBindingPage();
+    CommitPendingKeyboardBindingEdit();
     for (const uint16_t binding : g_keyboard_binding_backing) {
       if (binding == 0u) {
         return 0;
@@ -2391,6 +2465,87 @@ uint32_t __stdcall HookRedbookTracks(void*) {
   return deathtrap_music::kRedbookTrackCount;
 }
 
+bool SendMciMusicCommand(const std::wstring& command,
+                         const char* operation) {
+  const MCIERROR error = mciSendStringW(command.c_str(), nullptr, 0, nullptr);
+  if (error == 0) {
+    return true;
+  }
+  wchar_t message[256] = {};
+  mciGetErrorStringW(error, message,
+                     static_cast<UINT>(std::size(message)));
+  AppendDeathtrapSupportLog(
+      "support_music backend=MCI operation=%s result=%u error=%ls",
+      operation, static_cast<unsigned>(error), message);
+  return false;
+}
+
+void CloseMciMusicLocked() {
+  if (!g_mci_music_active.exchange(false, std::memory_order_acq_rel)) {
+    g_mci_music_track.store(-1, std::memory_order_release);
+    return;
+  }
+  SendMciMusicCommand(std::wstring(L"stop ") + kMciMusicAlias,
+                      "STOP");
+  SendMciMusicCommand(std::wstring(L"close ") + kMciMusicAlias,
+                      "CLOSE");
+  g_mci_music_track.store(-1, std::memory_order_release);
+}
+
+bool StartMciMusic(uint32_t mp3_index) {
+  std::lock_guard<std::mutex> lock(g_mci_music_mutex);
+  if (g_mci_music_active.load(std::memory_order_acquire) &&
+      g_mci_music_track.load(std::memory_order_acquire) ==
+          static_cast<int32_t>(mp3_index)) {
+    return true;
+  }
+
+  CloseMciMusicLocked();
+  const std::wstring path = ModuleDirectory() + L"\\Sounds\\" +
+                            std::to_wstring(mp3_index) + L".mp3";
+  if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    AppendDeathtrapSupportLog(
+        "support_music backend=MCI operation=OPEN result=FILE_MISSING "
+        "mp3=%u",
+        mp3_index);
+    return false;
+  }
+
+  const std::wstring open = std::wstring(L"open \"") + path +
+                            L"\" type mpegvideo alias " + kMciMusicAlias;
+  if (!SendMciMusicCommand(open, "OPEN")) {
+    return false;
+  }
+
+  const int32_t retail_volume = std::clamp(
+      g_mci_music_volume.load(std::memory_order_acquire), 0, 127);
+  const int32_t mci_volume = (retail_volume * 1000 + 63) / 127;
+  const std::wstring volume =
+      std::wstring(L"setaudio ") + kMciMusicAlias + L" volume to " +
+      std::to_wstring(mci_volume);
+  if (!SendMciMusicCommand(volume, "SET_VOLUME") ||
+      !SendMciMusicCommand(std::wstring(L"play ") + kMciMusicAlias +
+                               L" repeat",
+                           "PLAY")) {
+    SendMciMusicCommand(std::wstring(L"close ") + kMciMusicAlias,
+                        "CLOSE_AFTER_FAILURE");
+    return false;
+  }
+
+  g_mci_music_track.store(static_cast<int32_t>(mp3_index),
+                          std::memory_order_release);
+  g_mci_music_active.store(true, std::memory_order_release);
+  AppendDeathtrapSupportLog(
+      "support_music backend=MCI operation=PLAY result=OK mp3=%u volume=%d",
+      mp3_index, retail_volume);
+  return true;
+}
+
+void StopMciMusic() {
+  std::lock_guard<std::mutex> lock(g_mci_music_mutex);
+  CloseMciMusicLocked();
+}
+
 int32_t __stdcall HookRedbookPlay(void* handle, uint32_t start,
                                   uint32_t end) {
   uint32_t selected_cd_track = 0;
@@ -2416,9 +2571,94 @@ int32_t __stdcall HookRedbookPlay(void* handle, uint32_t start,
         routed ? "STEAM_MP3" : "ORIGINAL", selected_cd_track,
         route.valid ? route.mp3_index : 0u, start, end);
   }
+  const bool mci_started = routed && StartMciMusic(route.mp3_index);
+  AppendDeathtrapSupportLog(
+      "support_music action=PLAY cd_track=%u mp3=%u routed=%u backend=%s "
+      "start=%u end=%u",
+      selected_cd_track, route.valid ? route.mp3_index : 0u,
+      routed ? 1u : 0u, mci_started ? "MCI" : "AUDIERE_FALLBACK",
+      start, end);
 
-  return g_original_redbook_play
-             ? g_original_redbook_play(handle, start, end)
+  const int32_t result =
+      mci_started
+          ? 0
+          : (g_original_redbook_play
+                 ? g_original_redbook_play(handle, start, end)
+                 : 0);
+  g_music_playback_expected.store(true, std::memory_order_release);
+  return result;
+}
+
+int32_t CallAndLogRedbookControl(const char* action,
+                                 RedbookControlFn original,
+                                 void* handle) {
+  const int32_t before = g_redbook_status ? g_redbook_status(handle) : -1;
+  const int32_t result = original ? original(handle) : 0;
+  const int32_t after = g_redbook_status ? g_redbook_status(handle) : -1;
+  const uint32_t mp3_index = g_steam_mss_mp3_track_index
+                                 ? *g_steam_mss_mp3_track_index
+                                 : UINT32_MAX;
+  AppendDeathtrapSupportLog(
+      "support_music action=%s status=%d->%d result=%d mp3=%u",
+      action, before, after, result, mp3_index);
+  return result;
+}
+
+int32_t __stdcall HookRedbookPause(void* handle) {
+  // The Steam Audiere worker can lose the MP3 permanently across pause. The
+  // MCI backend retains its own stream and position, so do not pass Audiere's
+  // destructive pause through. The game/Windows pause state may suspend MCI
+  // output, but it resumes from the same position when gameplay continues.
+  const int32_t status = g_redbook_status ? g_redbook_status(handle) : -1;
+  const uint32_t mp3_index = g_steam_mss_mp3_track_index
+                                 ? *g_steam_mss_mp3_track_index
+                                 : UINT32_MAX;
+  AppendDeathtrapSupportLog(
+      "support_music action=PAUSE policy=KEEP_POSITION status=%d mp3=%u",
+      status, mp3_index);
+  return 0;
+}
+
+int32_t __stdcall HookRedbookResume(void* handle) {
+  if (g_mci_music_active.load(std::memory_order_acquire)) {
+    AppendDeathtrapSupportLog(
+        "support_music action=RESUME policy=ALREADY_PLAYING backend=MCI");
+    return 0;
+  }
+  return CallAndLogRedbookControl(
+      "RESUME", g_original_redbook_resume, handle);
+}
+
+int32_t __stdcall HookRedbookStop(void* handle) {
+  g_music_playback_expected.store(false, std::memory_order_release);
+  StopMciMusic();
+  return CallAndLogRedbookControl(
+      "STOP", g_original_redbook_stop, handle);
+}
+
+int32_t __stdcall HookRedbookStatus(void* handle) {
+  if (g_mci_music_active.load(std::memory_order_acquire) &&
+      g_music_playback_expected.load(std::memory_order_acquire)) {
+    return 1;
+  }
+  return g_redbook_status ? g_redbook_status(handle) : 3;
+}
+
+int32_t __stdcall HookRedbookSetVolume(void* handle, int32_t volume) {
+  const int32_t clamped = std::clamp(volume, 0, 127);
+  g_mci_music_volume.store(clamped, std::memory_order_release);
+  if (g_mci_music_active.load(std::memory_order_acquire)) {
+    std::lock_guard<std::mutex> lock(g_mci_music_mutex);
+    if (g_mci_music_active.load(std::memory_order_acquire)) {
+      const int32_t mci_volume = (clamped * 1000 + 63) / 127;
+      SendMciMusicCommand(
+          std::wstring(L"setaudio ") + kMciMusicAlias + L" volume to " +
+              std::to_wstring(mci_volume),
+          "SET_VOLUME");
+    }
+  }
+  return g_original_redbook_set_volume
+             ? g_original_redbook_set_volume(handle, volume)
              : 0;
 }
 
@@ -2519,6 +2759,16 @@ bool InstallDeathtrapMusicTrackFix() {
       mss ? GetProcAddress(mss, "_AIL_redbook_play@12") : nullptr);
   auto* const track_info = reinterpret_cast<uint8_t*>(
       mss ? GetProcAddress(mss, "_AIL_redbook_track_info@16") : nullptr);
+  auto* const pause = reinterpret_cast<uint8_t*>(
+      mss ? GetProcAddress(mss, "_AIL_redbook_pause@4") : nullptr);
+  auto* const resume = reinterpret_cast<uint8_t*>(
+      mss ? GetProcAddress(mss, "_AIL_redbook_resume@4") : nullptr);
+  auto* const stop = reinterpret_cast<uint8_t*>(
+      mss ? GetProcAddress(mss, "_AIL_redbook_stop@4") : nullptr);
+  auto* const status = reinterpret_cast<uint8_t*>(
+      mss ? GetProcAddress(mss, "_AIL_redbook_status@4") : nullptr);
+  auto* const set_volume = reinterpret_cast<uint8_t*>(
+      mss ? GetProcAddress(mss, "_AIL_redbook_set_volume@8") : nullptr);
   uint32_t* track_index = nullptr;
   if (!IsKnownSteamMssWrapper(mss, tracks, play, track_info, &track_index)) {
     AppendNativeLog(
@@ -2532,14 +2782,46 @@ bool InstallDeathtrapMusicTrackFix() {
   const MH_STATUS create_tracks = MH_CreateHook(
       tracks, reinterpret_cast<void*>(&HookRedbookTracks),
       reinterpret_cast<void**>(&g_original_redbook_tracks));
+  const MH_STATUS create_pause = MH_CreateHook(
+      pause, reinterpret_cast<void*>(&HookRedbookPause),
+      reinterpret_cast<void**>(&g_original_redbook_pause));
+  const MH_STATUS create_resume = MH_CreateHook(
+      resume, reinterpret_cast<void*>(&HookRedbookResume),
+      reinterpret_cast<void**>(&g_original_redbook_resume));
+  const MH_STATUS create_stop = MH_CreateHook(
+      stop, reinterpret_cast<void*>(&HookRedbookStop),
+      reinterpret_cast<void**>(&g_original_redbook_stop));
+  const MH_STATUS create_status = MH_CreateHook(
+      status, reinterpret_cast<void*>(&HookRedbookStatus),
+      reinterpret_cast<void**>(&g_redbook_status));
+  const MH_STATUS create_set_volume = MH_CreateHook(
+      set_volume, reinterpret_cast<void*>(&HookRedbookSetVolume),
+      reinterpret_cast<void**>(&g_original_redbook_set_volume));
   const bool play_created =
       create_play == MH_OK || create_play == MH_ERROR_ALREADY_CREATED;
   const bool tracks_created =
       create_tracks == MH_OK || create_tracks == MH_ERROR_ALREADY_CREATED;
-  if (!play_created || !tracks_created) {
+  const bool pause_created =
+      create_pause == MH_OK || create_pause == MH_ERROR_ALREADY_CREATED;
+  const bool resume_created =
+      create_resume == MH_OK || create_resume == MH_ERROR_ALREADY_CREATED;
+  const bool stop_created =
+      create_stop == MH_OK || create_stop == MH_ERROR_ALREADY_CREATED;
+  const bool status_created =
+      create_status == MH_OK || create_status == MH_ERROR_ALREADY_CREATED;
+  const bool set_volume_created =
+      create_set_volume == MH_OK ||
+      create_set_volume == MH_ERROR_ALREADY_CREATED;
+  if (!play_created || !tracks_created || !pause_created ||
+      !resume_created || !stop_created || !status_created ||
+      !set_volume_created || !g_redbook_status) {
     AppendNativeLog(
-        "music_redbook fix=failed stage=create play=%d tracks=%d",
-        static_cast<int>(create_play), static_cast<int>(create_tracks));
+        "music_redbook fix=failed stage=create play=%d tracks=%d pause=%d "
+        "resume=%d stop=%d status=%d set_volume=%d",
+        static_cast<int>(create_play), static_cast<int>(create_tracks),
+        static_cast<int>(create_pause), static_cast<int>(create_resume),
+        static_cast<int>(create_stop), static_cast<int>(create_status),
+        static_cast<int>(create_set_volume));
     return false;
   }
 
@@ -2554,13 +2836,47 @@ bool InstallDeathtrapMusicTrackFix() {
       play_enabled ? MH_EnableHook(tracks) : enable_play;
   const bool tracks_enabled =
       enable_tracks == MH_OK || enable_tracks == MH_ERROR_ENABLED;
-  if (!play_enabled || !tracks_enabled) {
+  const MH_STATUS enable_pause =
+      tracks_enabled ? MH_EnableHook(pause) : enable_tracks;
+  const MH_STATUS enable_resume =
+      enable_pause == MH_OK || enable_pause == MH_ERROR_ENABLED
+          ? MH_EnableHook(resume)
+          : enable_pause;
+  const MH_STATUS enable_stop =
+      enable_resume == MH_OK || enable_resume == MH_ERROR_ENABLED
+          ? MH_EnableHook(stop)
+          : enable_resume;
+  const MH_STATUS enable_status =
+      enable_stop == MH_OK || enable_stop == MH_ERROR_ENABLED
+          ? MH_EnableHook(status)
+          : enable_stop;
+  const MH_STATUS enable_set_volume =
+      enable_status == MH_OK || enable_status == MH_ERROR_ENABLED
+          ? MH_EnableHook(set_volume)
+          : enable_status;
+  const bool controls_enabled =
+      (enable_pause == MH_OK || enable_pause == MH_ERROR_ENABLED) &&
+      (enable_resume == MH_OK || enable_resume == MH_ERROR_ENABLED) &&
+      (enable_stop == MH_OK || enable_stop == MH_ERROR_ENABLED) &&
+      (enable_status == MH_OK || enable_status == MH_ERROR_ENABLED) &&
+      (enable_set_volume == MH_OK ||
+       enable_set_volume == MH_ERROR_ENABLED);
+  if (!play_enabled || !tracks_enabled || !controls_enabled) {
+    MH_DisableHook(set_volume);
+    MH_DisableHook(status);
+    MH_DisableHook(stop);
+    MH_DisableHook(resume);
+    MH_DisableHook(pause);
     MH_DisableHook(tracks);
     MH_DisableHook(play);
     g_steam_mss_mp3_track_index = nullptr;
     AppendNativeLog(
-        "music_redbook fix=failed stage=enable play=%d tracks=%d",
-        static_cast<int>(enable_play), static_cast<int>(enable_tracks));
+        "music_redbook fix=failed stage=enable play=%d tracks=%d pause=%d "
+        "resume=%d stop=%d status=%d set_volume=%d",
+        static_cast<int>(enable_play), static_cast<int>(enable_tracks),
+        static_cast<int>(enable_pause), static_cast<int>(enable_resume),
+        static_cast<int>(enable_stop), static_cast<int>(enable_status),
+        static_cast<int>(enable_set_volume));
     return false;
   }
 
@@ -3204,6 +3520,7 @@ enum class InjectedKey : size_t {
   kQ,
   kC,
   kTab,
+  kP,
   kEscape,
   kUp,
   kDown,
@@ -3319,8 +3636,9 @@ class ScopedXInputPoll {
 
 constexpr std::array<WORD, static_cast<size_t>(InjectedKey::kCount)>
     kInjectedVirtualKeys = {L'W', L'S', L'A', L'D', L'J', L'K', VK_LSHIFT,
-                            VK_SPACE, L'E', L'Q', L'C', VK_TAB, VK_ESCAPE,
-                            VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, VK_RETURN};
+                            VK_SPACE, L'E', L'Q', L'C', VK_TAB, L'P',
+                            VK_ESCAPE, VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT,
+                            VK_RETURN};
 
 bool IsGameForeground() {
   const HWND foreground = GetForegroundWindow();
@@ -9352,6 +9670,7 @@ void __cdecl HookMode3Camera(void* controller) {
   g_third_person_orbit_state.collision_constrained_this_tick = false;
   g_last_mode3_source_tick_ms.store(GetTickCount64(),
                                      std::memory_order_release);
+  g_root_menu_gameplay_seen.store(true, std::memory_order_release);
 
   const uintptr_t base = reinterpret_cast<uintptr_t>(controller);
   std::array<int32_t, 3> before_original{};
@@ -12480,6 +12799,22 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
       NormalizedStick(pad.sThumbRY, g_xinput_right_deadzone);
   const WORD buttons = pad.wButtons;
   const WORD pressed = buttons & ~g_previous_xinput_buttons;
+  const WORD navigation_changed =
+      (buttons ^ g_previous_xinput_buttons) &
+      (XINPUT_GAMEPAD_START | XINPUT_GAMEPAD_B);
+  if (navigation_changed != 0u) {
+    AppendDeathtrapSupportLog(
+        "support_xinput_navigation owner=%s start=%u b=%u",
+        gameplay ? "GAMEPLAY" : "MENU",
+        (buttons & XINPUT_GAMEPAD_START) != 0u ? 1u : 0u,
+        (buttons & XINPUT_GAMEPAD_B) != 0u ? 1u : 0u);
+  }
+  if (((buttons ^ g_previous_xinput_buttons) & XINPUT_GAMEPAD_BACK) != 0u) {
+    AppendDeathtrapSupportLog(
+        "support_xinput_pause owner=%s select=%u dispatch=P_KEY",
+        gameplay ? "GAMEPLAY" : "MENU",
+        (buttons & XINPUT_GAMEPAD_BACK) != 0u ? 1u : 0u);
+  }
   uint32_t gameplay_commands = 0;
   const auto set_gameplay_command = [&gameplay_commands](
                                         deathtrap::input::Command command,
@@ -12716,8 +13051,8 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
                       enabled ? 1u : 0u);
     }
     if (!selector_captures_controls &&
-        (pressed & XINPUT_GAMEPAD_BACK) != 0) {
-      ToggleCustomHeadView("SELECT");
+        (pressed & XINPUT_GAMEPAD_LEFT_THUMB) != 0) {
+      ToggleCustomHeadView("L3");
     }
     const bool first_person_requested =
         g_xinput_first_person_toggled.load(std::memory_order_acquire);
@@ -12760,7 +13095,6 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         !selector_captures_controls && !first_person_active &&
             CustomCameraOwnsMode3());
   } else {
-    SubmitDeathtrapXInputGameplayCommands(0);
     PublishCameraRelativeMovementIntent(false, 0, 0.0);
     PublishNativeJoystickMovement(false, 0.0, 0.0);
     g_xinput_direct_heading_steering_was_active = false;
@@ -12778,11 +13112,12 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     InjectVirtualKey(InjectedKey::kJ, false);
     InjectVirtualKey(InjectedKey::kK, false);
     InjectVirtualKey(InjectedKey::kShift, false);
-    // A is simultaneously the native mouse click and the keyboard confirm /
-    // movie-skip key. X remains an alternate skip key for the retail screens
-    // that bind Space but don't expose a clickable target.
-    InjectVirtualKey(InjectedKey::kSpace,
-                     (buttons & (XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_X)) != 0);
+    // Frontend buttons are published in semantic command space and merged at
+    // the DirectInput boundary after physical-keyboard remapping. This keeps
+    // controller navigation fixed even when every keyboard action is rebound.
+    set_gameplay_command(
+        deathtrap::input::Command::kMenuSpace,
+        (buttons & (XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_X)) != 0);
     InjectVirtualKey(InjectedKey::kE, false);
     InjectVirtualKey(InjectedKey::kQ, false);
     InjectVirtualKey(InjectedKey::kC, false);
@@ -12790,16 +13125,23 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     SubmitDeathtrapXInputCombatState(false, false, false, false, false);
     InjectMouseLeft(false);
     InjectMouseRight(false);
-    InjectVirtualKey(InjectedKey::kUp,
-                     left_y > 0.35 || (buttons & XINPUT_GAMEPAD_DPAD_UP));
-    InjectVirtualKey(InjectedKey::kDown,
-                     left_y < -0.35 || (buttons & XINPUT_GAMEPAD_DPAD_DOWN));
-    InjectVirtualKey(InjectedKey::kLeft,
-                     left_x < -0.35 || (buttons & XINPUT_GAMEPAD_DPAD_LEFT));
-    InjectVirtualKey(InjectedKey::kRight,
-                     left_x > 0.35 || (buttons & XINPUT_GAMEPAD_DPAD_RIGHT));
-    InjectVirtualKey(InjectedKey::kEnter,
-                     (buttons & XINPUT_GAMEPAD_A) != 0);
+    set_gameplay_command(
+        deathtrap::input::Command::kMenuUp,
+        left_y > 0.35 || (buttons & XINPUT_GAMEPAD_DPAD_UP));
+    set_gameplay_command(
+        deathtrap::input::Command::kMenuDown,
+        left_y < -0.35 || (buttons & XINPUT_GAMEPAD_DPAD_DOWN));
+    set_gameplay_command(
+        deathtrap::input::Command::kMenuLeft,
+        left_x < -0.35 || (buttons & XINPUT_GAMEPAD_DPAD_LEFT));
+    set_gameplay_command(
+        deathtrap::input::Command::kMenuRight,
+        left_x > 0.35 || (buttons & XINPUT_GAMEPAD_DPAD_RIGHT));
+    set_gameplay_command(deathtrap::input::Command::kMenuConfirm,
+                         (buttons & XINPUT_GAMEPAD_A) != 0);
+    set_gameplay_command(
+        deathtrap::input::Command::kMenu,
+        (buttons & (XINPUT_GAMEPAD_START | XINPUT_GAMEPAD_B)) != 0);
     const int32_t menu_mouse_x = static_cast<int32_t>(std::lround(
         right_x * static_cast<double>(g_xinput_menu_mouse_pixels)));
     const double menu_y_sign = g_xinput_invert_right_y ? 1.0 : -1.0;
@@ -12809,11 +13151,33 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     SubmitDeathtrapXInputMouseState(
         menu_mouse_x, menu_mouse_y,
         (buttons & XINPUT_GAMEPAD_A) != 0, false);
+    SubmitDeathtrapXInputGameplayCommands(gameplay_commands);
   }
-  InjectVirtualKey(InjectedKey::kEscape,
-                   !gameplay &&
-                       ((buttons & XINPUT_GAMEPAD_START) != 0 ||
-                        (buttons & XINPUT_GAMEPAD_B) != 0));
+  // Deathtrap's pause/back path is not part of the normal remappable action
+  // table. It observes the real Windows Escape transition, so keep this one
+  // system-key injection independent from both physical keyboard bindings and
+  // the post-remap DirectInput command plan. Start is pause/back everywhere;
+  // B is back only while the frontend owns input.
+  InjectVirtualKey(
+      InjectedKey::kEscape,
+      (buttons & XINPUT_GAMEPAD_START) != 0u ||
+          (!gameplay && (buttons & XINPUT_GAMEPAD_B) != 0u));
+  // Use a real P down/up pair rather than mutating only the keyboard state
+  // returned by GetDeviceState. Dungeon's pause path also coordinates Miles
+  // audio through the real key transition; state-only emulation paused the
+  // game but could leave music in the wrong state after resuming.
+  InjectVirtualKey(InjectedKey::kP,
+                   (buttons & XINPUT_GAMEPAD_BACK) != 0u);
+
+  // Clear the remaining legacy SendInput states. Controller action/menu
+  // commands now use the post-remap DirectInput plan above, so they cannot be
+  // rewritten by the user's physical keyboard table.
+  InjectVirtualKey(InjectedKey::kSpace, false);
+  InjectVirtualKey(InjectedKey::kUp, false);
+  InjectVirtualKey(InjectedKey::kDown, false);
+  InjectVirtualKey(InjectedKey::kLeft, false);
+  InjectVirtualKey(InjectedKey::kRight, false);
+  InjectVirtualKey(InjectedKey::kEnter, false);
   g_previous_xinput_buttons = buttons;
 }
 
@@ -18108,6 +18472,40 @@ bool PatchDungeonCode(uintptr_t rva,
   return written;
 }
 
+bool InstallRootMenuEscapeHook() {
+  if (!g_dungeon_base) {
+    return false;
+  }
+  constexpr std::array<uint8_t, 7> kRootInputPrologue = {
+      0x83, 0xEC, 0x08, 0x53, 0x6A, 0x03, 0x32};
+  if (!MatchesDungeonCode(kRootMenuInputRva, kRootInputPrologue)) {
+    AppendDeathtrapSupportLog(
+        "support_root_menu_escape state=signature_mismatch");
+    return false;
+  }
+  void* const target = g_dungeon_base + kRootMenuInputRva;
+  const MH_STATUS create = MH_CreateHook(
+      target, reinterpret_cast<void*>(&HookRootMenuInput),
+      reinterpret_cast<void**>(&g_original_root_menu_input));
+  if (create != MH_OK && create != MH_ERROR_ALREADY_CREATED) {
+    AppendDeathtrapSupportLog(
+        "support_root_menu_escape state=create_failed status=%d",
+        static_cast<int>(create));
+    return false;
+  }
+  const MH_STATUS enable = MH_EnableHook(target);
+  if (enable != MH_OK && enable != MH_ERROR_ENABLED) {
+    MH_RemoveHook(target);
+    g_original_root_menu_input = nullptr;
+    AppendDeathtrapSupportLog(
+        "support_root_menu_escape state=enable_failed status=%d",
+        static_cast<int>(enable));
+    return false;
+  }
+  AppendDeathtrapSupportLog("support_root_menu_escape state=active");
+  return true;
+}
+
 bool InstallKeyboardBindingPageHooks() {
   constexpr std::array<uint8_t, 10> kMenuPrologue = {
       0x83, 0xEC, 0x08, 0x33, 0xC0, 0x66, 0x89, 0x44, 0x24, 0x02};
@@ -18519,6 +18917,11 @@ bool InstallDeathtrapNativeRenderHooks() {
   // Keyboard bindings are patch-owned. Load them before either gameplay or
   // the paged retail editor can poll input.
   InitializeKeyboardBindingStore();
+
+  // The retail root menu maps Escape to Quit. Route only that Escape result
+  // to its own native Return-to-game action when a session exists, or consume
+  // it at the startup menu. Clickable Quit and every submenu stay native.
+  InstallRootMenuEscapeHook();
 
   // Page the retail keyboard screen without changing its fixed 11-row
   // storage. Failure leaves the original screen completely untouched.

@@ -35,6 +35,20 @@ constexpr size_t NextBindingPage(size_t page) {
   return (page + 1) % kRetailBindingPageCount;
 }
 
+inline bool CommitBindingRow(
+    size_t page, size_t row, uint16_t value,
+    std::array<uint16_t, kKeyboardActionCount>* bindings) {
+  if (!bindings) {
+    return false;
+  }
+  const int action = BindingActionForRow(page, row);
+  if (action < 0) {
+    return false;
+  }
+  (*bindings)[static_cast<size_t>(action)] = value;
+  return true;
+}
+
 inline void CommitBindingPage(
     size_t page,
     const std::array<uint16_t, kRetailBindingVisibleRows>& visible,

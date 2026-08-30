@@ -371,8 +371,12 @@ experiments and internal development changes are intentionally omitted.
 - Fixes the Steam-release bug that can repeat the same background music across
   different levels.
 - Restores routing for all fifteen music tracks already shipped with the game.
-- Keeps the original MP3 files and installed audio system; no soundtrack
+- Plays the original MP3 files through the built-in Windows media backend,
+  while Miles continues to own game sounds and movies. No soundtrack
   conversion or replacement music package is required.
+- Preserves the current music position across gameplay pause, fixing the
+  Steam Audiere failure that could silence the track until the menu was
+  reopened.
 
 ### Messages and prompts
 

@@ -466,6 +466,12 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     merge_controller_key(DIK_K, controller_plan.k);
     merge_controller_key(DIK_TAB, controller_plan.tab);
     merge_controller_key(DIK_ESCAPE, controller_plan.escape);
+    merge_controller_key(DIK_UP, controller_plan.up);
+    merge_controller_key(DIK_DOWN, controller_plan.down);
+    merge_controller_key(DIK_LEFT, controller_plan.left);
+    merge_controller_key(DIK_RIGHT, controller_plan.right);
+    merge_controller_key(DIK_RETURN, controller_plan.enter);
+    merge_controller_key(DIK_SPACE, controller_plan.menu_space);
     const bool operate_down = (keyboard[DIK_E] & 0x80u) != 0u;
     const bool was_down = g_physical_operate_key_down.exchange(
         operate_down, std::memory_order_acq_rel);

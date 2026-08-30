@@ -26,7 +26,7 @@ enum class KeyboardAction : size_t {
   kItemSelector,
   kImmersiveView,
   kNativeRate,
-  kInventory,
+  kPause,
   kCount,
 };
 
@@ -83,7 +83,7 @@ constexpr std::array<KeyboardActionDescriptor, kKeyboardActionCount>
         {"item_selector", "ITEM SELECTOR", 0x3Eu, 0x3Eu},
         {"immersive_view", "IMMERSIVE VIEW", 0x44u, 0x44u},
         {"native_rate", "NATIVE RATE", 0x57u, 0x57u},
-        {"inventory", "INVENTORY", 0x88u, 0x17u},
+        {"pause", "PAUSE", 0x8Fu, 0x19u},
     }};
 
 constexpr std::array<uint16_t, kKeyboardActionCount>

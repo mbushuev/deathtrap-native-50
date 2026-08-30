@@ -33,6 +33,11 @@ Static disassembly establishes two defects:
    the MP3 whose zero-based number remains in an internal global written by
    `_AIL_redbook_track_info@16`.
 
+The same Audiere stream also fails across gameplay pause. It remains marked
+as playing, and the game sends no Redbook stop, pause or zero-volume command,
+but audible playback disappears after the wrapper's two-second worker cycle
+and does not recover when gameplay resumes.
+
 `Dungeon.dll+0x47B20` enumerates Redbook track information during sound
 startup. With the shim's count of nine, the final metadata request is track 9,
 so the shim retains index 9. The local x86 probe confirms `tracks=9` and zero
@@ -50,9 +55,14 @@ hooks only the exact known Steam wrapper after validating its file size and
 export machine-code signatures:
 
 - `AIL_redbook_tracks` reports the correct CD-compatible count of 16;
-- `AIL_redbook_play` reads the engine-owned selected CD track and writes the
-  wrapper's MP3 index immediately before delegating to the original function;
-- the mapping is `CD 2..16 -> Sounds/0.mp3..Sounds/14.mp3`.
+- `AIL_redbook_play` reads the engine-owned selected CD track and opens the
+  matching original MP3 through the built-in Windows MCI MPEG backend;
+- the mapping remains `CD 2..16 -> Sounds/0.mp3..Sounds/14.mp3`;
+- Redbook status, stop and volume operations are mirrored to that stream;
+- gameplay pause preserves the MCI stream and playback position, so music
+  reliably resumes from the same point instead of disappearing permanently;
+- if MCI cannot open a track, playback falls back to the original Audiere
+  wrapper rather than leaving the level silent.
 
 The option is `[Audio] FixMusicTracks=1`. An unknown or updated `MSS32.DLL`
 fails closed: no audio hook is enabled and the original wrapper is untouched.
@@ -69,7 +79,9 @@ music_redbook route=STEAM_MP3 cd_track=N mp3=M ...
 ```
 
 The route invariant is `M = N - 2`. Music must change with the level while
-sound effects, volume control, pause/resume and movies remain functional.
+sound effects, volume control and movies remain functional. Pause gameplay
+for at least ten seconds, resume it, and verify that the same track continues
+from its preserved position.
 
 ## Live validation
 
@@ -83,6 +95,6 @@ music_redbook route=STEAM_MP3 cd_track=2 mp3=0 start=0 end=0
 
 The first level, Spire, may begin in silence by design; its first music request
 is CD track 2 and therefore plays `Sounds/0.mp3`. The user confirmed that
-different levels now play different music. Music volume, pause/resume and movie
-playback remain useful regression checks, but were not separately asserted in
-that confirmation.
+different levels now play different music. On 2026-08-30 the user also
+confirmed that the MCI-backed track pauses and resumes from the same position
+after the original Audiere implementation repeatedly failed to recover.

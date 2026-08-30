@@ -48,12 +48,13 @@ game, under dgVoodoo's published redistribution terms.
 - Event-driven controller vibration for attacks, hits, blocking, parries,
   spells, ranged shots, healing, landing, damage, death and radial selection.
 - Original Tab/R3 first-person camera plus a separate body-visible immersive
-  first-person view on F10/View/Back.
+  first-person view on F10/L3.
 - Full-speed lateral and diagonal movement in immersive first person on both
   keyboard and controller.
 - Physical-mouse camera control, mouse attack/parry and mouse-wheel melee
   weapon selection.
-- Correct routing for all fifteen music tracks shipped with the Steam release.
+- Correct routing for all fifteen Steam music tracks, with reliable
+  pause/resume that preserves the current playback position.
 - Safe saving at stable grounded positions through the original menu, slots
   and save-file format; the original authored save points remain available.
 - Longer gameplay prompts and safe automatic per-launch support logs.
@@ -233,7 +234,7 @@ Detailed requirements, first-run verification and rollback instructions are in
 | `Tab` | Toggle the original retail first-person view |
 | `F10` | Toggle body-visible immersive first person |
 | `F11` | Toggle the higher native render rate |
-| `I` | Inventory screen |
+| `P` | Pause gameplay |
 | `Esc` | Open or leave the menu; save and load through the retail menu |
 
 In immersive first person, `A` and `D` become full-speed pure side movement;
@@ -260,7 +261,8 @@ slot screens and save-file format.
 | Hold `LB` + left stick | Original side-step movement | — |
 | `Start/Menu` | Open pause menu | Back/leave menu |
 | `R3` | Toggle original retail first-person view | — |
-| `View/Back` | Toggle body-visible immersive first person | — |
+| `L3` | Toggle body-visible immersive first person | — |
+| `View/Back` | Pause/resume gameplay | — |
 | Tap D-pad | Cycle the next item in that category | Navigate |
 | Hold D-pad | Open radial selector | Keep held and choose with right stick |
 

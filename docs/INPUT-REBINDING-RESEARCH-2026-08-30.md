@@ -26,6 +26,8 @@ fixed synthetic keyboard keys:
 | X | `E` / operate |
 | RB | `Q` / cast spell |
 | R3 | held `Tab` / retail first person |
+| L3 | patch-owned immersive first person |
+| View/Back | stable `P` / pause-resume |
 | Start and menu B | `Escape` |
 | run threshold | `Left Shift` |
 | LB side-step | `J` / `K` |
@@ -91,7 +93,8 @@ screen into a safe long-list editor.
 
 Introduce one patch-owned command model. Examples are move forward/back,
 left/right, run, side-step, jump/climb, operate, cast, block, attack and attack
-direction, retail first-person, immersive first-person, pause and inventory.
+direction, retail first-person, immersive first-person, pause and the four
+inventory-category selectors.
 
 The command model contains no DIK, virtual-key or XInput button numbers.
 
@@ -115,7 +118,8 @@ keyboard menu. Its current layout and behaviour remain unchanged:
 - D-pad: context-owned radial inventory categories;
 - right stick: menu pointer, first-person look or third-person orbit;
 - R3: retail first-person;
-- SELECT: immersive first-person;
+- L3: immersive first-person;
+- SELECT: gameplay pause/resume;
 - Start: pause/menu.
 
 ### 3. Stable internal retail ABI

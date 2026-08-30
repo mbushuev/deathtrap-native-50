@@ -20,6 +20,12 @@ enum class Command : uint32_t {
   kRightSidestep = 1u << 9,
   kRetailFirstPerson = 1u << 10,
   kMenu = 1u << 11,
+  kMenuUp = 1u << 12,
+  kMenuDown = 1u << 13,
+  kMenuLeft = 1u << 14,
+  kMenuRight = 1u << 15,
+  kMenuConfirm = 1u << 16,
+  kMenuSpace = 1u << 17,
 };
 
 constexpr uint32_t CommandBit(Command command) {
@@ -43,6 +49,12 @@ struct RetailKeyboardPlan {
   bool k = false;
   bool tab = false;
   bool escape = false;
+  bool up = false;
+  bool down = false;
+  bool left = false;
+  bool right = false;
+  bool enter = false;
+  bool menu_space = false;
 };
 
 constexpr RetailKeyboardPlan ResolveRetailKeyboardPlan(uint32_t mask) {
@@ -59,7 +71,26 @@ constexpr RetailKeyboardPlan ResolveRetailKeyboardPlan(uint32_t mask) {
       CommandActive(mask, Command::kRightSidestep),
       CommandActive(mask, Command::kRetailFirstPerson),
       CommandActive(mask, Command::kMenu),
+      CommandActive(mask, Command::kMenuUp),
+      CommandActive(mask, Command::kMenuDown),
+      CommandActive(mask, Command::kMenuLeft),
+      CommandActive(mask, Command::kMenuRight),
+      CommandActive(mask, Command::kMenuConfirm),
+      CommandActive(mask, Command::kMenuSpace),
   };
+}
+
+// The retail root-menu input routine returns 6 for Quit, including when its
+// own Escape scan-code check fires.  Return-to-game is the native action 5.
+// Rewrite only keyboard/controller Escape; a real mouse click on Quit keeps
+// its original action, and submenus do not call this routine at all.
+constexpr uint8_t ResolveRootMenuEscapeAction(uint8_t retail_action,
+                                               bool escape_down,
+                                               bool active_game) {
+  if (retail_action != 6u || !escape_down) {
+    return retail_action;
+  }
+  return active_game ? 5u : 0u;
 }
 
 }  // namespace deathtrap::input

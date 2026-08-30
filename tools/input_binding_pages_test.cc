@@ -24,6 +24,8 @@ int main() {
   static_assert(BindingActionForRow(0, 10) == 10);
   static_assert(BindingActionForRow(1, 0) == 11);
   static_assert(BindingActionForRow(1, 8) == 19);
+  static_assert(kKeyboardActions[19].default_retail_code == 0x8Fu);
+  static_assert(kKeyboardActions[19].stable_scan == 0x19u);
   static_assert(BindingActionForRow(1, 9) == -1);
   static_assert(BindingActionForRow(1, 10) == -1);
 
@@ -50,6 +52,24 @@ int main() {
   ok &= Expect(PreviousBindingPage(0) == 1 && NextBindingPage(1) == 0,
                "page arrows must wrap deterministically");
 
+  std::array<uint16_t, kKeyboardActionCount> isolated_edit{};
+  for (size_t index = 0; index < isolated_edit.size(); ++index) {
+    isolated_edit[index] = static_cast<uint16_t>(0x20u + index);
+  }
+  const auto before_isolated_edit = isolated_edit;
+  ok &= Expect(CommitBindingRow(1, 3, 0x55u, &isolated_edit),
+               "an explicit row edit must resolve to its backing action");
+  ok &= Expect(isolated_edit[14] == 0x55u,
+               "page two row three must update only action fourteen");
+  for (size_t index = 0; index < isolated_edit.size(); ++index) {
+    if (index != 14u) {
+      ok &= Expect(isolated_edit[index] == before_isolated_edit[index],
+                   "an explicit edit must not bulk-copy another page");
+    }
+  }
+  ok &= Expect(!CommitBindingRow(1, 10, 0x66u, &isolated_edit),
+               "an unused row must never become a backing action");
+
   static_assert(RetailCodeToDirectInputScan(0x80u) == 0x1Eu);
   static_assert(RetailCodeToDirectInputScan(0x96u) == 0x11u);
   static_assert(RetailCodeToDirectInputScan(0x3Bu) == 0x3Bu);
@@ -72,6 +92,17 @@ int main() {
   ApplyKeyboardBindings(DefaultKeyboardBindings(), &keyboard);
   ok &= Expect((keyboard[0x3Bu] & 0x80u) != 0u,
                "patch-owned actions must survive the keyboard remap");
+
+  remapped_bindings = DefaultKeyboardBindings();
+  std::swap(remapped_bindings[
+                static_cast<size_t>(KeyboardAction::kCastSpell)],
+            remapped_bindings[static_cast<size_t>(KeyboardAction::kPause)]);
+  keyboard.fill(0u);
+  keyboard[0x10u] = 0x80u;  // Physical Q now owns pause.
+  ApplyKeyboardBindings(remapped_bindings, &keyboard);
+  ok &= Expect((keyboard[0x19u] & 0x80u) != 0u &&
+                   (keyboard[0x10u] & 0x80u) == 0u,
+               "rebound pause must reach the game's stable P key");
 
   if (!ok) {
     return EXIT_FAILURE;

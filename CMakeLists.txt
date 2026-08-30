@@ -56,7 +56,7 @@ target_compile_options(deathtrap_native_dinput PRIVATE
 target_link_options(deathtrap_native_dinput PRIVATE
   /IGNORE:4222)
 target_link_libraries(deathtrap_native_dinput PRIVATE
-  d3d11 dxgi dxguid minhook)
+  d3d11 dxgi dxguid minhook winmm)
 set_target_properties(deathtrap_native_dinput PROPERTIES
   OUTPUT_NAME "dinput"
   PREFIX ""
