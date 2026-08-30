@@ -78,6 +78,7 @@ $mouseCombat = Join-Path $buildPath "$Configuration\mouse_combat_routing_test.ex
 $inputCommands = Join-Path $buildPath "$Configuration\input_command_bindings_test.exe"
 $inputPages = Join-Path $buildPath "$Configuration\input_binding_pages_test.exe"
 $safeSave = Join-Path $buildPath "$Configuration\safe_save_test.exe"
+$selectorTime = Join-Path $buildPath "$Configuration\selector_time_dilation_test.exe"
 if (-not (Test-Path -LiteralPath $dll)) { throw "Missing build output: $dll" }
 if (-not (Test-Path -LiteralPath $smoke)) { throw "Missing smoke test: $smoke" }
 if (-not (Test-Path -LiteralPath $cameraSpring)) { throw "Missing camera spring test: $cameraSpring" }
@@ -88,6 +89,7 @@ if (-not (Test-Path -LiteralPath $mouseCombat)) { throw "Missing mouse combat te
 if (-not (Test-Path -LiteralPath $inputCommands)) { throw "Missing input command test: $inputCommands" }
 if (-not (Test-Path -LiteralPath $inputPages)) { throw "Missing input page test: $inputPages" }
 if (-not (Test-Path -LiteralPath $safeSave)) { throw "Missing safe save test: $safeSave" }
+if (-not (Test-Path -LiteralPath $selectorTime)) { throw "Missing selector time dilation test: $selectorTime" }
 
 & $smoke $dll
 if ($LASTEXITCODE -ne 0) { throw 'DirectInput forwarding smoke test failed.' }
@@ -115,6 +117,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Input binding page test failed.' }
 
 & $safeSave
 if ($LASTEXITCODE -ne 0) { throw 'Safe save eligibility test failed.' }
+
+& $selectorTime
+if ($LASTEXITCODE -ne 0) { throw 'Selector time dilation test failed.' }
 
 & (Join-Path $PSScriptRoot 'test-install-crlf.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Installer CRLF binding test failed.' }

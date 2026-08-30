@@ -132,6 +132,13 @@ target_include_directories(safe_save_test PRIVATE src)
 target_compile_options(safe_save_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
 
+add_executable(selector_time_dilation_test
+  tools/selector_time_dilation_test.cc)
+target_compile_features(selector_time_dilation_test PRIVATE cxx_std_17)
+target_include_directories(selector_time_dilation_test PRIVATE src)
+target_compile_options(selector_time_dilation_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
+
 add_executable(music_redbook_probe
   tools/music_redbook_probe.cc)
 target_compile_features(music_redbook_probe PRIVATE cxx_std_17)

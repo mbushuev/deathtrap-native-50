@@ -38,12 +38,14 @@
 #include "input_command_bindings.h"
 #include "mouse_combat_routing.h"
 #include "safe_save.h"
+#include "selector_time_dilation.h"
 
 namespace {
 
 constexpr uint32_t kExpectedTimestamp = 0x35752434u;
 constexpr uint32_t kExpectedImageSize = 0x00367000u;
 constexpr uintptr_t kRateConsumerSignatureRva = 0x0007F015u;
+constexpr uintptr_t kSchedulerRateSetterRva = 0x00050390u;
 constexpr uintptr_t kRenderPresentWaitRva = 0x00080600u;
 constexpr uintptr_t kRendererRva = 0x0001B320u;
 constexpr uintptr_t kSceneCacheUpdateRva = 0x00039160u;
@@ -722,6 +724,17 @@ LARGE_INTEGER g_qpc_frequency{};
 bool g_debug_log = false;
 bool g_music_track_fix_enabled = true;
 bool g_safe_save_anywhere_enabled = true;
+bool g_selector_slow_motion_enabled = true;
+uint32_t g_selector_slow_motion_percent = 25u;
+bool g_selector_slow_motion_active = false;
+// The ordinary mode-3 ownership watchdog is deliberately shorter than a
+// frontend transition. Selector time dilation lengthens the real source tick
+// to 250 ms, so publish a matching cross-thread window instead of briefly
+// handing physical mouse input back to the retail player-turn path.
+std::atomic<uint32_t> g_camera_source_watchdog_ms{200u};
+deathtrap::selector_time::KeyboardLatch g_selector_keyboard_latch{};
+int32_t g_selector_keyboard_pending_mode = -1;
+uint8_t g_selector_keyboard_pending_from = 0u;
 std::mutex g_safe_save_mutex;
 deathtrap_save::SafeSaveTracker g_safe_save_tracker;
 std::atomic<int32_t> g_safe_save_last_log_code{-1};
@@ -1089,6 +1102,7 @@ uint64_t g_ui_gate_closed_ticks = 0;
 int64_t g_last_ui_frame_delta = 0;
 
 using RenderPresentWaitFn = void(__cdecl*)(void* context, int wait);
+using SchedulerRateSetterFn = void(__cdecl*)(int rate);
 using RendererFn = void(__cdecl*)(void* context);
 using InventorySlotDrawFn = void(__cdecl*)(void* slot);
 using RenderCacheUpdateFn = void(__cdecl*)(void* owner);
@@ -1166,6 +1180,7 @@ using RedbookControlFn = int32_t(__stdcall*)(void* handle);
 using RedbookSetVolumeFn = int32_t(__stdcall*)(void* handle, int32_t volume);
 
 RenderPresentWaitFn g_original_render_present_wait = nullptr;
+SchedulerRateSetterFn g_scheduler_rate_setter = nullptr;
 RendererFn g_renderer = nullptr;
 RendererFn g_original_renderer = nullptr;
 InventorySlotDrawFn g_original_inventory_slot_draw = nullptr;
@@ -3836,6 +3851,17 @@ void PublishThirdPersonOrbitInput(double right_x, double right_y,
                                                  std::memory_order_release);
 }
 
+bool KeyboardSelectorOpen(uint8_t* mode = nullptr) {
+  uint8_t selector_mode = 0u;
+  const bool open = g_dungeon_base && !g_controller_selector.row_open &&
+      SafeReadValue(g_dungeon_base + kUiSelectorModeRva, &selector_mode) &&
+      selector_mode >= 1u && selector_mode <= 4u;
+  if (mode) {
+    *mode = open ? selector_mode : 0u;
+  }
+  return open;
+}
+
 bool ReadCameraPlayerPosition(void* controller,
                               std::array<int32_t, 3>* position) {
   if (!controller || !position) {
@@ -4753,8 +4779,19 @@ bool BuildThirdPersonOrbitPosition(void* controller,
     // source boundary. A wall-clock delta gives constant stick input unequal
     // yaw arcs whenever Windows scheduling varies; interpolation then merely
     // subdivides those unequal arcs and preserves their velocity pulse.
-    constexpr double elapsed_seconds =
+    double elapsed_seconds =
         static_cast<double>(kOriginalPeriodMilliseconds) / 1000.0;
+    if (g_selector_slow_motion_enabled && KeyboardSelectorOpen()) {
+      // The world now advances at 25% by default, but camera angular velocity
+      // is presentation/UI input and must remain real-time. Apply the complete
+      // wall-clock interval represented by this sparse source tick; the normal
+      // interpolation path distributes the resulting arc across its render
+      // phases. Mouse deltas are positional and already accumulate for the
+      // whole interval, so only the stick's velocity path is scaled here.
+      elapsed_seconds *= 100.0 /
+          static_cast<double>(std::max(1u,
+                                       g_selector_slow_motion_percent));
+    }
     const double response = 1.0 - std::exp(
         -elapsed_seconds / g_third_person_orbit_response_seconds);
     if (stick_input_active) {
@@ -9764,9 +9801,12 @@ void __cdecl HookMode3Camera(void* controller) {
     const uint64_t head_now_ms = GetTickCount64();
     const uint64_t previous_head_ms =
         g_custom_head_last_publication_ms.load(std::memory_order_acquire);
+    const uint64_t publication_watchdog_ms =
+        g_camera_source_watchdog_ms.load(std::memory_order_acquire);
     const bool transition_cut =
         !g_custom_head_publication_active.load(std::memory_order_acquire) ||
-        !previous_head_ms || head_now_ms - previous_head_ms > 200u;
+        !previous_head_ms ||
+        head_now_ms - previous_head_ms > publication_watchdog_ms;
     if (PublishImmersiveFirstPersonEndpoint(
             controller, camera_focus, room_or_sector, transition_cut)) {
       // The body-course writer belongs to a successfully published head view,
@@ -12023,6 +12063,116 @@ void UpdateControllerSelector(const XINPUT_GAMEPAD& pad, bool gameplay) {
   }
 }
 
+void PollOpenControllerSelectorForPresentation() {
+  if (!g_controller_selector.row_open || !g_xinput_get_state) {
+    return;
+  }
+  XINPUT_STATE state{};
+  if (g_xinput_get_state(g_xinput_controller_index, &state) ==
+      ERROR_SUCCESS) {
+    // The normal gameplay bridge remains source-tick owned. Only the already
+    // open selector observes intermediate right-stick/release samples so the
+    // wheel stays responsive while the world scheduler is slowed.
+    UpdateControllerSelector(state.Gamepad, true);
+  }
+}
+
+UINT VirtualKeyForDirectInputScan(uint8_t scan) {
+  if (scan == 0u) {
+    return 0u;
+  }
+  // DirectInput marks extended keys by setting bit 7; MapVirtualKey expects
+  // the equivalent E0-prefixed scan code instead.
+  const UINT windows_scan = (scan & 0x80u) != 0u
+                                ? 0xE000u | (scan & 0x7Fu)
+                                : static_cast<UINT>(scan);
+  return MapVirtualKeyW(windows_scan, MAPVK_VSC_TO_VK_EX);
+}
+
+uint8_t PhysicalSelectorKeyboardMask() {
+  if (!IsGameForeground()) {
+    return 0u;
+  }
+  constexpr std::array<deathtrap::input::KeyboardAction, 4> kSelectors = {
+      deathtrap::input::KeyboardAction::kMeleeSelector,
+      deathtrap::input::KeyboardAction::kRangedSelector,
+      deathtrap::input::KeyboardAction::kMagicSelector,
+      deathtrap::input::KeyboardAction::kItemSelector,
+  };
+  uint8_t mask = 0u;
+  for (size_t index = 0; index < kSelectors.size(); ++index) {
+    const size_t action = static_cast<size_t>(kSelectors[index]);
+    uint16_t retail_code = g_keyboard_binding_backing[action];
+    if (!deathtrap::input::IsBindableKeyboardRetailCode(retail_code)) {
+      retail_code = deathtrap::input::kKeyboardActions[action]
+                        .default_retail_code;
+    }
+    const uint8_t scan =
+        deathtrap::input::RetailCodeToDirectInputScan(retail_code);
+    const UINT virtual_key = VirtualKeyForDirectInputScan(scan);
+    if (virtual_key != 0u &&
+        (GetAsyncKeyState(static_cast<int>(virtual_key)) & 0x8000) != 0) {
+      mask |= static_cast<uint8_t>(1u << index);
+    }
+  }
+  return mask;
+}
+
+void PollOpenKeyboardSelectorForPresentation() {
+  if (g_selector_keyboard_pending_mode >= 0) {
+    return;
+  }
+  uint8_t selector_mode = 0u;
+  if (!g_dungeon_base ||
+      !SafeReadValue(g_dungeon_base + kUiSelectorModeRva, &selector_mode)) {
+    g_selector_keyboard_latch = {};
+    return;
+  }
+  const uint8_t key_mask = PhysicalSelectorKeyboardMask();
+  const auto command = deathtrap::selector_time::UpdateKeyboardLatch(
+      &g_selector_keyboard_latch, selector_mode, key_mask,
+      g_controller_selector.row_open);
+  if (!command.apply) {
+    return;
+  }
+  // Every interpolated presentation transaction restores its source snapshot,
+  // including the selector byte. Defer this command until all rollback passes
+  // have completed or it will be undone and observed repeatedly.
+  g_selector_keyboard_pending_from = selector_mode;
+  g_selector_keyboard_pending_mode = command.mode;
+}
+
+void ApplyPendingKeyboardSelectorCommand() {
+  if (g_selector_keyboard_pending_mode < 0) {
+    return;
+  }
+  const uint8_t requested_mode =
+      static_cast<uint8_t>(g_selector_keyboard_pending_mode);
+  const uint8_t expected_mode = g_selector_keyboard_pending_from;
+  g_selector_keyboard_pending_mode = -1;
+  g_selector_keyboard_pending_from = 0u;
+
+  uint8_t current_mode = 0u;
+  if (g_controller_selector.row_open || !g_dungeon_base ||
+      !SafeReadValue(g_dungeon_base + kUiSelectorModeRva, &current_mode) ||
+      current_mode != expected_mode) {
+    g_selector_keyboard_latch = {};
+    return;
+  }
+  SetNativeSelectorMode(requested_mode);
+  if (requested_mode == 0u && g_scheduler_rate_setter) {
+    // Restore responsiveness immediately. Waiting for the next 4 Hz source
+    // tick would leave a visible quarter-second tail after the key release.
+    g_scheduler_rate_setter(static_cast<int>(kOriginalGameplayRate));
+  }
+  AppendNativeLog(
+      "selector_keyboard_fast_input old_mode=%u new_mode=%u",
+      current_mode, requested_mode);
+  AppendDeathtrapSupportLog(
+      "support_selector_keyboard old_mode=%u new_mode=%u",
+      current_mode, requested_mode);
+}
+
 double NormalizedStick(SHORT value, int32_t deadzone) {
   const int32_t signed_value = static_cast<int32_t>(value);
   const int32_t magnitude = std::abs(signed_value);
@@ -13185,8 +13335,10 @@ bool RecentMode3CameraCallback() {
   const uint64_t last_mode3_ms =
       g_last_mode3_source_tick_ms.load(std::memory_order_acquire);
   const uint64_t now_ms = GetTickCount64();
+  const uint64_t watchdog_ms =
+      g_camera_source_watchdog_ms.load(std::memory_order_acquire);
   return last_mode3_ms && now_ms >= last_mode3_ms &&
-         now_ms - last_mode3_ms <= 200u;
+         now_ms - last_mode3_ms <= watchdog_ms;
 }
 
 void ReconcileXInputFrontendOwnership(bool native_gameplay) {
@@ -17705,6 +17857,47 @@ void CallOriginalRenderPresentWait(void* context, int wait) {
   g_original_render_present_wait(context, wait);
 }
 
+deathtrap::selector_time::Plan BuildSelectorTimePlan(
+    int requested_rate, uint32_t configured_subframes) {
+  uint8_t selector_mode = 0;
+  const bool selector_open =
+      g_dungeon_base &&
+      SafeReadValue(g_dungeon_base + kUiSelectorModeRva, &selector_mode) &&
+      selector_mode >= 1u && selector_mode <= 4u;
+  const bool gameplay = selector_open && DeathtrapGameplayReady(false);
+  return deathtrap::selector_time::MakePlan(
+      g_selector_slow_motion_enabled && g_scheduler_rate_setter && g_renderer,
+      gameplay, selector_open,
+      requested_rate > 0 ? static_cast<uint32_t>(requested_rate) : 0u,
+      configured_subframes, g_selector_slow_motion_percent);
+}
+
+void PublishSelectorTimePlan(const deathtrap::selector_time::Plan& plan) {
+  // Input and custom-head publication watchdogs must follow the real source
+  // cadence. At 25% speed Dungeon's next camera callback is 250 ms away, which
+  // is longer than the normal 200 ms ownership window. A small margin absorbs
+  // scheduler jitter without keeping gameplay ownership across actual menus.
+  const uint32_t camera_watchdog_ms = plan.active
+      ? std::max(200u, plan.source_period_ms + 100u)
+      : 200u;
+  g_camera_source_watchdog_ms.store(camera_watchdog_ms,
+                                     std::memory_order_release);
+  if (plan.active == g_selector_slow_motion_active) {
+    return;
+  }
+  g_selector_slow_motion_active = plan.active;
+  AppendNativeLog(
+      "selector_slow_motion state=%s scheduler_rate=%u presentation=%u "
+      "period_ms=%u",
+      plan.active ? "ENTER" : "LEAVE", plan.scheduler_rate,
+      plan.presentation_passes, plan.source_period_ms);
+  AppendDeathtrapSupportLog(
+      "support_selector_slow_motion state=%s scheduler_rate=%u "
+      "presentation=%u period_ms=%u",
+      plan.active ? "ENTER" : "LEAVE", plan.scheduler_rate,
+      plan.presentation_passes, plan.source_period_ms);
+}
+
 void __cdecl HookRenderPresentWait(void* context, int wait) {
   if (ConsumeDeathtrapImmersiveKeyboardToggle() && IsGameForeground() &&
       DeathtrapGameplayReady(false)) {
@@ -17726,8 +17919,24 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   UpdateDeathtrapXInput();
   ConsumePendingWeaponWheel();
   const uint32_t subframes = g_subframes.load(std::memory_order_relaxed);
-  if ((subframes != 2u && subframes != 3u) || wait <= 0 || !g_renderer) {
-    CallOriginalRenderPresentWait(context, wait);
+  const deathtrap::selector_time::Plan selector_time =
+      BuildSelectorTimePlan(wait, subframes);
+  PublishSelectorTimePlan(selector_time);
+  const uint32_t presentation_passes =
+      selector_time.active ? selector_time.presentation_passes : subframes;
+  const int effective_wait = selector_time.active
+                                 ? static_cast<int>(selector_time.scheduler_rate)
+                                 : wait;
+  // The retail rate setter is not a per-frame request; it publishes one
+  // persistent global scheduler period. Always write the effective rate here,
+  // including the original value on selector exit, or the process remains at
+  // the previously requested 4 Hz indefinitely.
+  if (g_scheduler_rate_setter && effective_wait > 0) {
+    g_scheduler_rate_setter(effective_wait);
+  }
+  if ((presentation_passes < 2u || presentation_passes > 24u) ||
+      effective_wait <= 0 || !g_renderer) {
+    CallOriginalRenderPresentWait(context, effective_wait);
     // Gameplay camera collision still needs two exact scene snapshots when
     // presentation interpolation is disabled. Capture only after the retail
     // renderer has completed its normal scene/camera cache update; no extra
@@ -17757,7 +17966,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   }
 
   if (!RefreshCurrentRenderCaches(context)) {
-    CallOriginalRenderPresentWait(context, wait);
+    CallOriginalRenderPresentWait(context, effective_wait);
     ResetSceneHistory();
     return;
   }
@@ -17790,7 +17999,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   ProbePlayerHeadJoints(current, source_tick);
   SampleUiEligibility();
   if (scene_history_boundary) {
-    CallOriginalRenderPresentWait(context, wait);
+    CallOriginalRenderPresentWait(context, effective_wait);
     g_older_snapshot = {};
     g_previous_snapshot = std::move(current);
     return;
@@ -17834,17 +18043,21 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
           static_cast<unsigned long long>(g_suppressed_midpoints));
       g_last_transition_log_tick = source_tick;
     }
-    CallOriginalRenderPresentWait(context, wait);
+    CallOriginalRenderPresentWait(context, effective_wait);
     AdvanceSceneHistory(std::move(current));
     return;
   }
 
   LARGE_INTEGER start{};
   QueryPerformanceCounter(&start);
+  const uint32_t source_period_ms =
+      selector_time.active ? selector_time.source_period_ms
+                           : kOriginalPeriodMilliseconds;
   const int64_t phase_ticks =
-      (g_qpc_frequency.QuadPart * kOriginalPeriodMilliseconds) /
-      (1000ll * static_cast<int64_t>(subframes));
-  const double first_phase = 1.0 / static_cast<double>(subframes);
+      (g_qpc_frequency.QuadPart * source_period_ms) /
+      (1000ll * static_cast<int64_t>(presentation_passes));
+  const double first_phase =
+      1.0 / static_cast<double>(presentation_passes);
 
   const SceneSnapshot* older =
       g_older_snapshot.root == current.root && !g_older_snapshot.nodes.empty()
@@ -17868,7 +18081,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
                          interpolation.player_bounds_axis_mask);
   }
   if (!first_pass.rendered) {
-    CallOriginalRenderPresentWait(context, wait);
+    CallOriginalRenderPresentWait(context, effective_wait);
     AdvanceSceneHistory(std::move(current));
     return;
   }
@@ -18041,19 +18254,28 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   target.QuadPart = start.QuadPart + phase_ticks;
   WaitUntil(target);
 
-  if (subframes == 3u) {
-    // Temporal contact state was advanced by the first pass. The second pass
-    // reuses its resolved projection and performs only another render
-    // transaction at 2/3, so collision cooldowns still advance exactly once
-    // per real source tick.
-    const InterpolatedPassResult second_pass = RenderInterpolatedPass(
-        context, older, g_previous_snapshot, current, 2.0 / 3.0,
-        false, source_tick);
-    if (!second_pass.rendered && g_debug_log) {
-      AppendNativeLog("interpolated phase failed tick=%llu phase=0.667",
-                      static_cast<unsigned long long>(source_tick));
+  // Temporal contact state advances only in the first pass. Every additional
+  // phase is another rollback-isolated presentation transaction. In normal
+  // play this loop executes once for x3; selector slow motion extends it to
+  // twelve evenly paced phases while gameplay itself remains at 4 Hz.
+  for (uint32_t phase_index = 2u; phase_index < presentation_passes;
+       ++phase_index) {
+    if (selector_time.active) {
+      PollOpenControllerSelectorForPresentation();
+      PollOpenKeyboardSelectorForPresentation();
     }
-    target.QuadPart = start.QuadPart + phase_ticks * 2ll;
+    const double phase = static_cast<double>(phase_index) /
+                         static_cast<double>(presentation_passes);
+    const InterpolatedPassResult extra_pass = RenderInterpolatedPass(
+        context, older, g_previous_snapshot, current, phase,
+        false, source_tick);
+    if (!extra_pass.rendered && g_debug_log) {
+      AppendNativeLog(
+          "interpolated phase failed tick=%llu phase=%.3f",
+          static_cast<unsigned long long>(source_tick), phase);
+    }
+    target.QuadPart =
+        start.QuadPart + phase_ticks * static_cast<int64_t>(phase_index);
     WaitUntil(target);
   }
 
@@ -18069,16 +18291,20 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
         current.player_contact_manifold_projection;
     g_active_presentation_trace.exact_projection_valid = true;
   }
-  CallOriginalRenderPresentWait(context, wait);
+  CallOriginalRenderPresentWait(context, effective_wait);
   g_active_presentation_trace.stage = DeathtrapNativePresentationStage::kNone;
   g_active_presentation_trace.exact_scene = nullptr;
   g_player_contact_manifold_endpoint_nodes +=
       g_active_presentation_trace.exact_projection_nodes;
   LogSupportPresentationCoherence(
-      source_tick, subframes, g_previous_snapshot, current, interpolation);
+      source_tick, presentation_passes, g_previous_snapshot, current,
+      interpolation);
   QueuePresentationTrace(source_tick, g_previous_snapshot, current,
                          interpolation);
   AdvanceSceneHistory(std::move(current));
+  // This must be the final state mutation in the presentation transaction.
+  // Applying it earlier lets RestoreScene undo the selector change.
+  ApplyPendingKeyboardSelectorCommand();
 }
 
 void InitializePatchState() {
@@ -18087,6 +18313,10 @@ void InitializePatchState() {
       ConfiguredInteger(L"Audio", L"FixMusicTracks", 1) != 0;
   g_safe_save_anywhere_enabled =
       ConfiguredInteger(L"Save", L"SafeAnywhere", 1) != 0;
+  g_selector_slow_motion_enabled =
+      ConfiguredInteger(L"Selector", L"SlowMotion", 1) != 0;
+  g_selector_slow_motion_percent = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"Selector", L"SlowMotionPercent", 25), 10, 75));
   g_camera_probe_enabled =
       ConfiguredInteger(L"Diagnostics", L"CameraProbe", 0) != 0;
   g_head_joint_probe_enabled =
@@ -18309,6 +18539,8 @@ void InitializePatchState() {
       PatchPstMessageLifetime(g_pst_message_lifetime_ticks);
 
   QueryPerformanceFrequency(&g_qpc_frequency);
+  g_scheduler_rate_setter = reinterpret_cast<SchedulerRateSetterFn>(
+      g_dungeon_base + kSchedulerRateSetterRva);
   g_renderer = reinterpret_cast<RendererFn>(g_dungeon_base + kRendererRva);
   g_scene_cache_update = reinterpret_cast<RenderCacheUpdateFn>(
       g_dungeon_base + kSceneCacheUpdateRva);
@@ -18427,17 +18659,22 @@ void InitializePatchState() {
       "max_details=24",
       g_head_joint_probe_enabled ? 1u : 0u,
       g_native_collision_probe_enabled ? 1u : 0u);
+  AppendNativeLog("selector_slow_motion enabled=%u percent=%u",
+                  g_selector_slow_motion_enabled ? 1u : 0u,
+                  g_selector_slow_motion_percent);
   g_state.store(DeathtrapNativeRenderPatchState::kActive,
                 std::memory_order_release);
   AppendDeathtrapSupportLog(
       "support_patch state=active orbit=%u immersive=%u xinput=%u "
-      "xinput_runtime=%u music_fix=%u safe_save=%u "
+      "xinput_runtime=%u music_fix=%u safe_save=%u selector_slow=%u/%u%% "
       "native_collision_probe=%u",
       g_third_person_orbit_enabled ? 1u : 0u,
       g_immersive_first_person_enabled ? 1u : 0u,
       g_xinput_enabled ? 1u : 0u, g_xinput_get_state ? 1u : 0u,
       g_music_track_fix_enabled ? 1u : 0u,
       g_safe_save_anywhere_enabled ? 1u : 0u,
+      g_selector_slow_motion_enabled ? 1u : 0u,
+      g_selector_slow_motion_percent,
       g_native_collision_probe_enabled ? 1u : 0u);
 }
 
@@ -18835,7 +19072,9 @@ bool DeathtrapModernCameraConsumesMouse() {
   const uint64_t last_mode3_ms =
       g_last_mode3_source_tick_ms.load(std::memory_order_acquire);
   const uint64_t now_ms = GetTickCount64();
-  if (!last_mode3_ms || now_ms - last_mode3_ms > 200u) {
+  const uint64_t watchdog_ms =
+      g_camera_source_watchdog_ms.load(std::memory_order_acquire);
+  if (!last_mode3_ms || now_ms - last_mode3_ms > watchdog_ms) {
     // Pause and frontend screens may keep the player/controller pointers
     // alive, but they stop the gameplay mode-3 camera callback. This watchdog
     // is therefore the authoritative mouse hand-off for physical-mouse runs
