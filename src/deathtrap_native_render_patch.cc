@@ -33,6 +33,8 @@
 #include "camera_room_collision.h"
 #include "deathtrap_music_route.h"
 #include "immersive_first_person.h"
+#include "input_binding_pages.h"
+#include "input_command_bindings.h"
 #include "mouse_combat_routing.h"
 #include "safe_save.h"
 
@@ -180,6 +182,39 @@ constexpr uintptr_t kUseConsumableRva = 0x0007B9C0u;
 constexpr uintptr_t kUseChalkRva = 0x000458B0u;
 constexpr uintptr_t kInventorySlotDrawRva = 0x000772A0u;
 constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
+// Retail keyboard-definition screen. The engine owns exactly eleven visible
+// rows; the patch pages those rows without extending any retail array.
+constexpr uintptr_t kKeyboardBindingMenuRva = 0x00016260u;
+constexpr uintptr_t kKeyboardBindingInputRva = 0x0001A0C0u;
+constexpr uintptr_t kKeyboardBindingAllDefinedRva = 0x00016230u;
+constexpr uintptr_t kKeyboardBindingDrawKeyRva = 0x00015F50u;
+constexpr uintptr_t kKeyboardBindingKeyCaptureRva = 0x000022F0u;
+constexpr uintptr_t kKeyboardBindingRightPanelRva = 0x00015A20u;
+constexpr uintptr_t kKeyboardBindingMouseStateRva = 0x00068DC0u;
+constexpr uintptr_t kKeyboardBindingHitTestRva = 0x0000EDA0u;
+constexpr uintptr_t kKeyboardBindingKeyPressedRva = 0x00069890u;
+constexpr uintptr_t kKeyboardBindingSetFontRva = 0x0003A000u;
+constexpr uintptr_t kKeyboardBindingDrawTextRva = 0x0000EE50u;
+constexpr uintptr_t kKeyboardBindingBuildPathRva = 0x00059830u;
+constexpr uintptr_t kKeyboardBindingLoadImageRva = 0x000013A0u;
+constexpr uintptr_t kKeyboardBindingFullRenderRva = 0x00015B10u;
+constexpr uintptr_t kKeyboardBindingRestoreBackgroundRva = 0x000019A0u;
+constexpr uintptr_t kKeyboardBindingAtlasSurfaceRva = 0x003504ACu;
+constexpr uintptr_t kKeyboardBindingValuesRva = 0x000BED48u;
+constexpr uintptr_t kKeyboardBindingLabelsRva = 0x0034F730u;
+constexpr uintptr_t kKeyboardKeyNameCodesRva = 0x000BE6B8u;
+constexpr uintptr_t kKeyboardKeyNameLabelsRva = 0x000BE760u;
+constexpr size_t kKeyboardKeyNameReplacementFirst = 64u;
+constexpr size_t kKeyboardKeyNameReplacementCount = 12u;
+constexpr size_t kKeyboardKeyNameLabelSize = 18u;
+constexpr uintptr_t kLocalizationTablePointerRva = 0x00216214u;
+constexpr uintptr_t kKeyboardBackgroundNameOffset = 0x444u;
+constexpr uintptr_t kKeyboardAtlasNameOffset = 0x44Cu;
+// Top and middle are the two retail joystick blocks. The bottom keyboard
+// Default label remains the single native visual control; its hit area is
+// intercepted below to reset the patch's complete keyboard action table.
+constexpr std::array<uintptr_t, 6> kKeyboardNavigationLabelOffsets = {
+    0x3F4u, 0x3FCu, 0x8D4u, 0x8DCu, 0x8E4u, 0x8ECu};
 // Preserve the retail save UI and file format. This leaf is the native
 // eligibility check used by the menu before it opens the save screen.
 constexpr uintptr_t kSavePointQueryRva = 0x0001BA90u;
@@ -1061,6 +1096,29 @@ using RangedWeaponLaunchFn = void*(__cdecl*)(void* actor,
                                              void* launch_output);
 using UseConsumableFn = void(__cdecl*)(int32_t item_id);
 using SavePointQueryFn = int(__cdecl*)(int32_t* gold_cost);
+using KeyboardBindingMenuFn = void(__cdecl*)();
+using KeyboardBindingInputFn = uint8_t(__cdecl*)();
+using KeyboardBindingAllDefinedFn = int(__cdecl*)();
+using KeyboardBindingDrawKeyFn = void(__cdecl*)(uint16_t key,
+                                                 uint32_t one_based_row);
+using KeyboardBindingKeyCaptureFn = uint8_t(__cdecl*)();
+using KeyboardBindingRightPanelFn = void(__cdecl*)();
+using KeyboardBindingMouseStateFn = void(__cdecl*)(uint16_t*, uint16_t*,
+                                                    uint16_t*);
+using KeyboardBindingHitTestFn = uint8_t(__cdecl*)(
+    int32_t, int32_t, int32_t, int32_t, uint16_t, uint16_t, uint16_t);
+using KeyboardBindingKeyPressedFn = int(__cdecl*)(uint32_t scan);
+using KeyboardBindingSetFontFn = void(__cdecl*)(uint32_t font);
+using KeyboardBindingDrawTextFn = void(__cdecl*)(int32_t x, int32_t y,
+                                                  int32_t flags,
+                                                  const char* text);
+using KeyboardBindingBuildPathFn = char*(__cdecl*)(const char* name);
+using KeyboardBindingLoadImageFn = void(__cdecl*)(const char* path,
+                                                   void* destination);
+using KeyboardBindingFullRenderFn = void(__cdecl*)();
+using KeyboardBindingRestoreBackgroundFn = void(__cdecl*)(
+    const void* source, int32_t width, int32_t height, int32_t source_x,
+    int32_t source_y, int32_t destination_x, int32_t destination_y);
 using PlayerTurnFn = void(__cdecl*)(void* player);
 using PlayerLocomotionFn = void(__cdecl*)(void* controller);
 using PlayerStateDispatcherFn = void(__cdecl*)(void* outer_player);
@@ -1108,6 +1166,36 @@ OffensiveSpellLaunchFn g_original_offensive_spell_launch = nullptr;
 RangedWeaponLaunchFn g_original_ranged_weapon_launch = nullptr;
 UseConsumableFn g_original_use_consumable = nullptr;
 SavePointQueryFn g_original_save_point_query = nullptr;
+KeyboardBindingMenuFn g_original_keyboard_binding_menu = nullptr;
+KeyboardBindingInputFn g_original_keyboard_binding_input = nullptr;
+KeyboardBindingAllDefinedFn g_original_keyboard_binding_all_defined = nullptr;
+KeyboardBindingDrawKeyFn g_original_keyboard_binding_draw_key = nullptr;
+KeyboardBindingDrawTextFn g_original_keyboard_binding_draw_text = nullptr;
+KeyboardBindingKeyCaptureFn g_original_keyboard_binding_key_capture = nullptr;
+KeyboardBindingRightPanelFn g_original_keyboard_binding_right_panel = nullptr;
+using KeyboardBindingValues =
+    std::array<uint16_t, deathtrap::input::kKeyboardActionCount>;
+using RetailBindingWindow =
+    std::array<uint16_t, deathtrap::input::kRetailBindingVisibleRows>;
+using KeyboardBindingLabels =
+    std::array<std::array<char, 20>,
+               deathtrap::input::kRetailBindingVisibleRows>;
+bool g_keyboard_binding_menu_active = false;
+bool g_keyboard_binding_navigation_latched = false;
+uint8_t g_keyboard_binding_repaint_frames = 0;
+bool g_keyboard_bindings_initialized = false;
+size_t g_keyboard_binding_page = 0;
+KeyboardBindingValues g_keyboard_binding_backing{};
+KeyboardBindingLabels g_keyboard_binding_original_labels{};
+uintptr_t g_keyboard_navigation_localization_table = 0;
+std::array<uintptr_t, kKeyboardNavigationLabelOffsets.size()>
+    g_keyboard_navigation_original_labels{};
+std::array<uint16_t, kKeyboardKeyNameReplacementCount>
+    g_keyboard_key_name_original_codes{};
+std::array<std::array<char, kKeyboardKeyNameLabelSize>,
+           kKeyboardKeyNameReplacementCount>
+    g_keyboard_key_name_original_labels{};
+bool g_keyboard_key_name_replacements_installed = false;
 PlayerTurnFn g_original_player_turn = nullptr;
 PlayerLocomotionFn g_original_player_locomotion = nullptr;
 PlayerTurnFn g_player_turn_writer = nullptr;
@@ -1188,6 +1276,516 @@ bool SafeWrite(void* destination, const void* source, size_t size) {
   } __except (EXCEPTION_EXECUTE_HANDLER) {
     return false;
   }
+}
+
+void InitializeKeyboardBindingStore();
+bool SaveKeyboardBindingStore();
+
+RetailBindingWindow StableRetailKeyboardBindings() {
+  RetailBindingWindow stable{};
+  const auto defaults = deathtrap::input::DefaultKeyboardBindings();
+  std::copy_n(defaults.begin(), stable.size(), stable.begin());
+  return stable;
+}
+
+bool ReadKeyboardBindingValues(RetailBindingWindow* values) {
+  return values && g_dungeon_base &&
+         SafeRead(g_dungeon_base + kKeyboardBindingValuesRva, values->data(),
+                  sizeof(*values));
+}
+
+bool WriteKeyboardBindingValues(const RetailBindingWindow& values) {
+  return g_dungeon_base &&
+         SafeWrite(g_dungeon_base + kKeyboardBindingValuesRva, values.data(),
+                   sizeof(values));
+}
+
+bool WriteKeyboardBindingLabels(const KeyboardBindingLabels& labels) {
+  return g_dungeon_base &&
+         SafeWrite(g_dungeon_base + kKeyboardBindingLabelsRva, labels.data(),
+                   sizeof(labels));
+}
+
+void RestoreKeyboardNavigationLabels();
+
+void RestoreKeyboardKeyNameReplacements();
+
+bool InstallKeyboardKeyNameReplacements() {
+  if (!g_dungeon_base || g_keyboard_key_name_replacements_installed) {
+    return g_keyboard_key_name_replacements_installed;
+  }
+  auto* const codes = reinterpret_cast<uint16_t*>(
+      g_dungeon_base + kKeyboardKeyNameCodesRva) +
+      kKeyboardKeyNameReplacementFirst;
+  auto* const labels = reinterpret_cast<char*>(
+      g_dungeon_base + kKeyboardKeyNameLabelsRva) +
+      kKeyboardKeyNameReplacementFirst * kKeyboardKeyNameLabelSize;
+  if (!SafeRead(codes, g_keyboard_key_name_original_codes.data(),
+                sizeof(g_keyboard_key_name_original_codes)) ||
+      !SafeRead(labels, g_keyboard_key_name_original_labels.data(),
+                sizeof(g_keyboard_key_name_original_labels))) {
+    return false;
+  }
+  constexpr std::array<uint16_t, kKeyboardKeyNameReplacementCount>
+      replacements = {0x3Bu, 0x3Cu, 0x3Du, 0x3Eu, 0x3Fu, 0x40u,
+                      0x41u, 0x42u, 0x43u, 0x44u, 0x57u, 0x58u};
+  constexpr std::array<const char*, kKeyboardKeyNameReplacementCount>
+      names = {"F1 Key", "F2 Key", "F3 Key", "F4 Key", "F5 Key",
+               "F6 Key", "F7 Key", "F8 Key", "F9 Key", "F10 Key",
+               "F11 Key", "F12 Key"};
+  std::array<std::array<char, kKeyboardKeyNameLabelSize>,
+             kKeyboardKeyNameReplacementCount>
+      replacement_labels{};
+  for (size_t index = 0; index < replacement_labels.size(); ++index) {
+    std::snprintf(replacement_labels[index].data(),
+                  replacement_labels[index].size(), "%s", names[index]);
+  }
+  if (!SafeWrite(codes, replacements.data(), sizeof(replacements)) ||
+      !SafeWrite(labels, replacement_labels.data(),
+                 sizeof(replacement_labels))) {
+    SafeWrite(codes, g_keyboard_key_name_original_codes.data(),
+              sizeof(g_keyboard_key_name_original_codes));
+    SafeWrite(labels, g_keyboard_key_name_original_labels.data(),
+              sizeof(g_keyboard_key_name_original_labels));
+    return false;
+  }
+  g_keyboard_key_name_replacements_installed = true;
+  return true;
+}
+
+void RestoreKeyboardKeyNameReplacements() {
+  if (!g_dungeon_base || !g_keyboard_key_name_replacements_installed) {
+    return;
+  }
+  auto* const codes = reinterpret_cast<uint16_t*>(
+      g_dungeon_base + kKeyboardKeyNameCodesRva) +
+      kKeyboardKeyNameReplacementFirst;
+  auto* const labels = reinterpret_cast<char*>(
+      g_dungeon_base + kKeyboardKeyNameLabelsRva) +
+      kKeyboardKeyNameReplacementFirst * kKeyboardKeyNameLabelSize;
+  SafeWrite(codes, g_keyboard_key_name_original_codes.data(),
+            sizeof(g_keyboard_key_name_original_codes));
+  SafeWrite(labels, g_keyboard_key_name_original_labels.data(),
+            sizeof(g_keyboard_key_name_original_labels));
+  g_keyboard_key_name_replacements_installed = false;
+}
+
+bool InstallKeyboardNavigationLabels() {
+  uintptr_t table = 0;
+  if (!g_dungeon_base ||
+      !SafeRead(g_dungeon_base + kLocalizationTablePointerRva, &table,
+                sizeof(table)) ||
+      table == 0) {
+    return false;
+  }
+  for (size_t index = 0; index < kKeyboardNavigationLabelOffsets.size();
+       ++index) {
+    if (!SafeRead(reinterpret_cast<void*>(
+                      table + kKeyboardNavigationLabelOffsets[index]),
+                  &g_keyboard_navigation_original_labels[index],
+                  sizeof(uintptr_t))) {
+      return false;
+    }
+  }
+  static char kPrevious[] = "<<";
+  static char kNext[] = ">>";
+  static char kEmpty[] = "";
+  const std::array<uintptr_t, 6> replacements = {
+      reinterpret_cast<uintptr_t>(kPrevious),
+      reinterpret_cast<uintptr_t>(kEmpty),
+      reinterpret_cast<uintptr_t>(kNext),
+      reinterpret_cast<uintptr_t>(kEmpty),
+      reinterpret_cast<uintptr_t>(kEmpty),
+      reinterpret_cast<uintptr_t>(kEmpty)};
+  g_keyboard_navigation_localization_table = table;
+  for (size_t index = 0; index < kKeyboardNavigationLabelOffsets.size();
+       ++index) {
+    if (!SafeWrite(reinterpret_cast<void*>(
+                       table + kKeyboardNavigationLabelOffsets[index]),
+                   &replacements[index], sizeof(uintptr_t))) {
+      RestoreKeyboardNavigationLabels();
+      return false;
+    }
+  }
+  return true;
+}
+
+void RestoreKeyboardNavigationLabels() {
+  if (!g_keyboard_navigation_localization_table) {
+    return;
+  }
+  for (size_t index = 0; index < kKeyboardNavigationLabelOffsets.size();
+       ++index) {
+    SafeWrite(reinterpret_cast<void*>(
+                  g_keyboard_navigation_localization_table +
+                  kKeyboardNavigationLabelOffsets[index]),
+              &g_keyboard_navigation_original_labels[index],
+              sizeof(uintptr_t));
+  }
+  g_keyboard_navigation_localization_table = 0;
+}
+
+constexpr int32_t kKeyboardBindingSurfaceWidth = 640;
+constexpr int32_t kKeyboardBindingSurfaceHeight = 480;
+
+bool RepaintKeyboardBindingScreen() {
+  uintptr_t localization = 0;
+  uintptr_t background_name = 0;
+  uintptr_t atlas_name = 0;
+  uintptr_t atlas_surface = 0;
+  if (!g_dungeon_base ||
+      !SafeRead(g_dungeon_base + kLocalizationTablePointerRva, &localization,
+                sizeof(localization)) ||
+      localization == 0 ||
+      !SafeRead(reinterpret_cast<void*>(
+                    localization + kKeyboardBackgroundNameOffset),
+                &background_name, sizeof(background_name)) ||
+      background_name == 0 ||
+      !SafeRead(reinterpret_cast<void*>(
+                    localization + kKeyboardAtlasNameOffset),
+                &atlas_name, sizeof(atlas_name)) ||
+      atlas_name == 0 ||
+      !SafeRead(g_dungeon_base + kKeyboardBindingAtlasSurfaceRva,
+                &atlas_surface, sizeof(atlas_surface)) ||
+      atlas_surface == 0) {
+    return false;
+  }
+  const auto build_path = reinterpret_cast<KeyboardBindingBuildPathFn>(
+      g_dungeon_base + kKeyboardBindingBuildPathRva);
+  const auto load_image = reinterpret_cast<KeyboardBindingLoadImageFn>(
+      g_dungeon_base + kKeyboardBindingLoadImageRva);
+  const auto restore = reinterpret_cast<KeyboardBindingRestoreBackgroundFn>(
+      g_dungeon_base + kKeyboardBindingRestoreBackgroundRva);
+  const auto full_render = reinterpret_cast<KeyboardBindingFullRenderFn>(
+      g_dungeon_base + kKeyboardBindingFullRenderRva);
+  char* const background_path =
+      build_path(reinterpret_cast<const char*>(background_name));
+  if (!background_path) {
+    return false;
+  }
+  bool restored = false;
+  __try {
+    // Decode KEYBOARD.PCX into the game's already registered 640x480 scratch
+    // surface. Unlike +0x12A0, +0x13A0 performs no palette swap or DirectDraw
+    // Flip, so the current draw page can be cleared deterministically.
+    load_image(background_path, reinterpret_cast<void*>(atlas_surface));
+    restore(reinterpret_cast<void*>(atlas_surface),
+            kKeyboardBindingSurfaceWidth, kKeyboardBindingSurfaceHeight,
+            0, 0, 0, 0);
+
+    // The retail key editor uses SETKEY2.PCX from this same scratch surface to
+    // erase individual key-name cells. Restore it before returning control to
+    // the native menu, otherwise subsequent assignments cannot redraw.
+    char* const atlas_path =
+        build_path(reinterpret_cast<const char*>(atlas_name));
+    if (atlas_path) {
+      load_image(atlas_path, reinterpret_cast<void*>(atlas_surface));
+      full_render();
+      restored = true;
+    }
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    restored = false;
+  }
+  return restored;
+}
+
+void __cdecl HookKeyboardBindingRightPanel() {
+  if (!g_keyboard_binding_menu_active) {
+    if (g_original_keyboard_binding_right_panel) {
+      g_original_keyboard_binding_right_panel();
+    }
+    return;
+  }
+  const auto set_font = reinterpret_cast<KeyboardBindingSetFontFn>(
+      g_dungeon_base + kKeyboardBindingSetFontRva);
+  const auto draw_text = reinterpret_cast<KeyboardBindingDrawTextFn>(
+      g_dungeon_base + kKeyboardBindingDrawTextRva);
+  set_font(0x248Fu);
+  draw_text(540, 200, 0, "<<");
+  draw_text(540, 275, 0, ">>");
+  set_font(0x1485u);
+}
+
+bool KeyboardDefaultsButtonActivated() {
+  if (!g_keyboard_binding_menu_active || !g_dungeon_base) {
+    return false;
+  }
+  const auto mouse_state = reinterpret_cast<KeyboardBindingMouseStateFn>(
+      g_dungeon_base + kKeyboardBindingMouseStateRva);
+  const auto hit_test = reinterpret_cast<KeyboardBindingHitTestFn>(
+      g_dungeon_base + kKeyboardBindingHitTestRva);
+  uint16_t first = 0;
+  uint16_t second = 0;
+  uint16_t third = 0;
+  // Preserve the retail argument order observed at Dungeon.dll+0x1A0C0.
+  mouse_state(&third, &second, &first);
+  return hit_test(520, 332, 638, 414, third, second, first) != 0u;
+}
+
+uint8_t __cdecl HookKeyboardBindingKeyCapture() {
+  const uint8_t captured = g_original_keyboard_binding_key_capture
+                               ? g_original_keyboard_binding_key_capture()
+                               : 0u;
+  if (captured != 0u || !g_keyboard_binding_menu_active || !g_dungeon_base) {
+    return captured;
+  }
+  const auto key_pressed = reinterpret_cast<KeyboardBindingKeyPressedFn>(
+      g_dungeon_base + kKeyboardBindingKeyPressedRva);
+  constexpr std::array<uint8_t, 12> function_keys = {
+      0x3Bu, 0x3Cu, 0x3Du, 0x3Eu, 0x3Fu, 0x40u,
+      0x41u, 0x42u, 0x43u, 0x44u, 0x57u, 0x58u};
+  for (const uint8_t scan : function_keys) {
+    if (key_pressed(scan) != 0) {
+      return scan;
+    }
+  }
+  return 0u;
+}
+
+void CommitVisibleKeyboardBindingPage() {
+  if (!g_keyboard_binding_menu_active) {
+    return;
+  }
+  RetailBindingWindow visible{};
+  if (!ReadKeyboardBindingValues(&visible)) {
+    return;
+  }
+  const KeyboardBindingValues previous = g_keyboard_binding_backing;
+  deathtrap::input::CommitBindingPage(
+      g_keyboard_binding_page, visible, &g_keyboard_binding_backing);
+  // Preserve the retail screen's one-key-per-base-action rule across pages.
+  // Its native duplicate loop can only see the current eleven-row window.
+  for (size_t row = 0;
+       row < deathtrap::input::kRetailBindingActionRowsPerPage; ++row) {
+    const int changed_action =
+        deathtrap::input::BindingActionForRow(g_keyboard_binding_page, row);
+    if (changed_action < 0) {
+      continue;
+    }
+    const size_t changed = static_cast<size_t>(changed_action);
+    const uint16_t value = g_keyboard_binding_backing[changed];
+    if (value != 0u &&
+        !deathtrap::input::IsBindableKeyboardRetailCode(value)) {
+      g_keyboard_binding_backing[changed] = previous[changed];
+      continue;
+    }
+    if (value == 0u || value == previous[changed]) {
+      continue;
+    }
+    for (size_t action = 0; action < g_keyboard_binding_backing.size();
+         ++action) {
+      if (action != changed && g_keyboard_binding_backing[action] == value) {
+        g_keyboard_binding_backing[action] = 0u;
+      }
+    }
+  }
+  SetDeathtrapKeyboardBindings(g_keyboard_binding_backing.data(),
+                               g_keyboard_binding_backing.size());
+}
+
+bool ApplyVisibleKeyboardBindingPage() {
+  if (!g_keyboard_binding_menu_active) {
+    return false;
+  }
+  const RetailBindingWindow visible = deathtrap::input::MakeBindingPage(
+      g_keyboard_binding_page, g_keyboard_binding_backing);
+  KeyboardBindingLabels labels{};
+  for (size_t row = 0;
+       row < deathtrap::input::kRetailBindingActionRowsPerPage; ++row) {
+    const int action =
+        deathtrap::input::BindingActionForRow(g_keyboard_binding_page, row);
+    if (action >= 0) {
+      const char* const label =
+          deathtrap::input::kKeyboardActions[static_cast<size_t>(action)]
+              .label;
+      std::snprintf(labels[row].data(), labels[row].size(), "%s", label);
+    }
+  }
+  return WriteKeyboardBindingValues(visible) &&
+         WriteKeyboardBindingLabels(labels);
+}
+
+void ChangeKeyboardBindingPage(size_t page) {
+  CommitVisibleKeyboardBindingPage();
+  g_keyboard_binding_page = page;
+  if (ApplyVisibleKeyboardBindingPage()) {
+    // The retail input function presents near its return. Defer repaint until
+    // the beginning of its next invocation so the native frame order stays
+    // background -> labels -> highlight -> present.
+    // Deathtrap alternates two DirectDraw pages. Repaint one actual page per
+    // native input/present frame so both pages are cleared without drawing
+    // twice into the same pending surface.
+    g_keyboard_binding_repaint_frames = 2u;
+  }
+}
+
+void __cdecl HookKeyboardBindingMenu() {
+  if (!g_original_keyboard_binding_menu || !g_dungeon_base ||
+      g_keyboard_binding_menu_active) {
+    if (g_original_keyboard_binding_menu) {
+      g_original_keyboard_binding_menu();
+    }
+    return;
+  }
+  KeyboardBindingLabels original_labels{};
+  RetailBindingWindow original_values{};
+  const bool state_read =
+      SafeRead(g_dungeon_base + kKeyboardBindingLabelsRva,
+               original_labels.data(), sizeof(original_labels)) &&
+      ReadKeyboardBindingValues(&original_values);
+  if (!state_read) {
+    g_original_keyboard_binding_menu();
+    return;
+  }
+
+  g_keyboard_binding_original_labels = original_labels;
+  InitializeKeyboardBindingStore();
+  g_keyboard_binding_page = 0;
+  g_keyboard_binding_navigation_latched = false;
+  g_keyboard_binding_repaint_frames = 0u;
+  g_keyboard_binding_menu_active = true;
+  const bool key_names_installed = InstallKeyboardKeyNameReplacements();
+  if (!key_names_installed || !ApplyVisibleKeyboardBindingPage()) {
+    RestoreKeyboardKeyNameReplacements();
+    g_keyboard_binding_menu_active = false;
+    WriteKeyboardBindingValues(original_values);
+    WriteKeyboardBindingLabels(original_labels);
+    g_original_keyboard_binding_menu();
+    return;
+  }
+  g_original_keyboard_binding_menu();
+  CommitVisibleKeyboardBindingPage();
+  SaveKeyboardBindingStore();
+  SetDeathtrapKeyboardBindings(g_keyboard_binding_backing.data(),
+                               g_keyboard_binding_backing.size());
+  WriteKeyboardBindingValues(StableRetailKeyboardBindings());
+  WriteKeyboardBindingLabels(original_labels);
+  RestoreKeyboardKeyNameReplacements();
+  g_keyboard_binding_navigation_latched = false;
+  g_keyboard_binding_repaint_frames = 0u;
+  g_keyboard_binding_menu_active = false;
+}
+
+uint8_t __cdecl HookKeyboardBindingInput() {
+  if (!g_original_keyboard_binding_input) {
+    return 0;
+  }
+  if (g_keyboard_binding_menu_active &&
+      g_keyboard_binding_repaint_frames != 0u) {
+    --g_keyboard_binding_repaint_frames;
+    if (!RepaintKeyboardBindingScreen()) {
+      AppendDeathtrapSupportLog(
+          "support_keyboard_pages repaint_failed page=%u",
+          static_cast<unsigned>(g_keyboard_binding_page));
+    }
+  }
+  const bool defaults_activated = KeyboardDefaultsButtonActivated();
+  const uint8_t result = g_original_keyboard_binding_input();
+  if (!g_keyboard_binding_menu_active) {
+    return result;
+  }
+
+  // The retail menu serializes its eleven-word array after it receives Back.
+  // Persist our complete table and restore the stable internal ABI before
+  // that serializer runs; otherwise whichever page happened to be visible
+  // would leak into ASYLUM/keys.cfg and break the next launch.
+  if (result == 99u) {
+    CommitVisibleKeyboardBindingPage();
+    SaveKeyboardBindingStore();
+    SetDeathtrapKeyboardBindings(g_keyboard_binding_backing.data(),
+                                 g_keyboard_binding_backing.size());
+    WriteKeyboardBindingValues(StableRetailKeyboardBindings());
+    return result;
+  }
+
+  if (result == 15u || result == 16u || defaults_activated) {
+    if (!g_keyboard_binding_navigation_latched) {
+      g_keyboard_binding_navigation_latched = true;
+      if (defaults_activated) {
+        CommitVisibleKeyboardBindingPage();
+        g_keyboard_binding_backing =
+            deathtrap::input::DefaultKeyboardBindings();
+        SetDeathtrapKeyboardBindings(g_keyboard_binding_backing.data(),
+                                     g_keyboard_binding_backing.size());
+        if (ApplyVisibleKeyboardBindingPage()) {
+          g_keyboard_binding_repaint_frames = 2u;
+        }
+      } else {
+        ChangeKeyboardBindingPage(
+            result == 16u
+                ? deathtrap::input::PreviousBindingPage(
+                      g_keyboard_binding_page)
+                : deathtrap::input::NextBindingPage(
+                      g_keyboard_binding_page));
+      }
+    }
+    return 0;
+  }
+  // The native selection is normally one of the action rows, not zero. A
+  // navigation click is released as soon as input returns to any other native
+  // selection, which permits the next deliberate arrow click.
+  g_keyboard_binding_navigation_latched = false;
+  if (result == 0u) {
+    return result;
+  }
+  if (result < 1u || result >
+                           deathtrap::input::kRetailBindingVisibleRows) {
+    return result;
+  }
+  const size_t row = static_cast<size_t>(result - 1u);
+  return deathtrap::input::BindingRowHasAction(g_keyboard_binding_page, row)
+             ? result
+             : 0;
+}
+
+int __cdecl HookKeyboardBindingAllDefined() {
+  if (g_keyboard_binding_menu_active) {
+    CommitVisibleKeyboardBindingPage();
+    for (const uint16_t binding : g_keyboard_binding_backing) {
+      if (binding == 0u) {
+        return 0;
+      }
+    }
+    return 1;
+  }
+  return g_original_keyboard_binding_all_defined
+             ? g_original_keyboard_binding_all_defined()
+             : 0;
+}
+
+void __cdecl HookKeyboardBindingDrawKey(uint16_t key,
+                                         uint32_t one_based_row) {
+  if (!g_original_keyboard_binding_draw_key) {
+    return;
+  }
+  if (g_keyboard_binding_menu_active && one_based_row >= 1u &&
+      one_based_row <= deathtrap::input::kRetailBindingVisibleRows) {
+    const size_t row = static_cast<size_t>(one_based_row - 1u);
+    if (!deathtrap::input::BindingRowHasAction(g_keyboard_binding_page, row)) {
+      return;
+    }
+  }
+  g_original_keyboard_binding_draw_key(key, one_based_row);
+}
+
+void __cdecl HookKeyboardBindingDrawText(int32_t x, int32_t y,
+                                         int32_t flags, const char* text) {
+  if (!g_original_keyboard_binding_draw_text) {
+    return;
+  }
+  if (g_keyboard_binding_menu_active && g_dungeon_base &&
+      (x == 110 || x == 300) && flags == 0 && y >= 85 && y <= 385 &&
+      ((y - 85) % 30) == 0) {
+    const size_t row = static_cast<size_t>((y - 85) / 30);
+    // Native full-page rendering draws labels at x=110 and key values at
+    // x=300. Assignment redraws can reach the value column independently of
+    // the full row renderer, so suppress both columns for every unused row.
+    if (!deathtrap::input::BindingRowHasAction(g_keyboard_binding_page,
+                                                row)) {
+      return;
+    }
+  }
+  g_original_keyboard_binding_draw_text(x, y, flags, text);
 }
 
 template <typename T>
@@ -1360,6 +1958,68 @@ std::wstring ModuleDirectory() {
 
 std::wstring ConfigurationPath() {
   return ModuleDirectory() + L"\\deathtrap_native.ini";
+}
+
+std::wstring KeyboardBindingsPath() {
+  return ModuleDirectory() + L"\\deathtrap-native-bindings.ini";
+}
+
+void InitializeKeyboardBindingStore() {
+  if (g_keyboard_bindings_initialized) {
+    return;
+  }
+  g_keyboard_binding_backing = deathtrap::input::DefaultKeyboardBindings();
+  const std::wstring path = KeyboardBindingsPath();
+  for (size_t action = 0; action < g_keyboard_binding_backing.size();
+       ++action) {
+    const auto& descriptor = deathtrap::input::kKeyboardActions[action];
+    wchar_t key[64] = {};
+    size_t converted = 0;
+    mbstowcs_s(&converted, key, descriptor.id, std::size(key) - 1u);
+    const int configured = GetPrivateProfileIntW(
+        L"keyboard", key, descriptor.default_retail_code, path.c_str());
+    const uint16_t value = static_cast<uint16_t>(configured);
+    if (deathtrap::input::IsBindableKeyboardRetailCode(value)) {
+      g_keyboard_binding_backing[action] = value;
+    }
+  }
+  g_keyboard_bindings_initialized = true;
+  SetDeathtrapKeyboardBindings(g_keyboard_binding_backing.data(),
+                               g_keyboard_binding_backing.size());
+}
+
+bool SaveKeyboardBindingStore() {
+  InitializeKeyboardBindingStore();
+  const std::wstring path = KeyboardBindingsPath();
+  const std::wstring temporary = path + L".tmp";
+  const std::wstring backup = path + L".bak";
+  DeleteFileW(temporary.c_str());
+  for (size_t action = 0; action < g_keyboard_binding_backing.size();
+       ++action) {
+    const auto& descriptor = deathtrap::input::kKeyboardActions[action];
+    wchar_t key[64] = {};
+    size_t converted = 0;
+    mbstowcs_s(&converted, key, descriptor.id, std::size(key) - 1u);
+    wchar_t value[16] = {};
+    swprintf_s(value, L"%u",
+               static_cast<unsigned>(g_keyboard_binding_backing[action]));
+    if (!WritePrivateProfileStringW(L"keyboard", key, value,
+                                    temporary.c_str())) {
+      DeleteFileW(temporary.c_str());
+      return false;
+    }
+  }
+  WritePrivateProfileStringW(nullptr, nullptr, nullptr, temporary.c_str());
+  const DWORD existing = GetFileAttributesW(path.c_str());
+  if (existing != INVALID_FILE_ATTRIBUTES) {
+    CopyFileW(path.c_str(), backup.c_str(), FALSE);
+  }
+  if (!MoveFileExW(temporary.c_str(), path.c_str(),
+                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    DeleteFileW(temporary.c_str());
+    return false;
+  }
+  return true;
 }
 
 bool IsExpectedDungeonImage(uint8_t* base) {
@@ -10652,6 +11312,7 @@ void ReleaseInjectedControllerInput() {
   InjectMouseRight(false);
   SubmitDeathtrapXInputMouseState(0, 0, false, false);
   SubmitDeathtrapXInputCombatState(false, false, false, false, false);
+  SubmitDeathtrapXInputGameplayCommands(0);
   g_xinput_first_person_toggled = false;
   g_xinput_run_active = false;
   g_xinput_menu_mode.store(true, std::memory_order_release);
@@ -11819,6 +12480,14 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
       NormalizedStick(pad.sThumbRY, g_xinput_right_deadzone);
   const WORD buttons = pad.wButtons;
   const WORD pressed = buttons & ~g_previous_xinput_buttons;
+  uint32_t gameplay_commands = 0;
+  const auto set_gameplay_command = [&gameplay_commands](
+                                        deathtrap::input::Command command,
+                                        bool active) {
+    if (active) {
+      gameplay_commands |= deathtrap::input::CommandBit(command);
+    }
+  };
   if (gameplay) {
     if (!selector_captures_controls &&
         (pressed & XINPUT_GAMEPAD_X) != 0) {
@@ -11966,27 +12635,39 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         // A failed native hook keeps the last verified keyboard-backed tank
         // mapping as a closed fallback instead of dropping movement.
         PublishNativeJoystickMovement(false, 0.0, 0.0);
-        InjectVirtualKey(InjectedKey::kW,
-                         !controller_combat_owns_stick &&
-                             left_y > g_xinput_movement_threshold);
-        InjectVirtualKey(InjectedKey::kS,
-                         !controller_combat_owns_stick &&
-                             left_y < -g_xinput_movement_threshold);
-        InjectVirtualKey(InjectedKey::kA,
-                         !controller_combat_owns_stick && !side_step &&
-                             left_x < -g_xinput_movement_threshold);
-        InjectVirtualKey(InjectedKey::kD,
-                         !controller_combat_owns_stick && !side_step &&
-                             left_x > g_xinput_movement_threshold);
+        set_gameplay_command(
+            deathtrap::input::Command::kMoveForward,
+            !controller_combat_owns_stick &&
+                left_y > g_xinput_movement_threshold);
+        set_gameplay_command(
+            deathtrap::input::Command::kMoveBackward,
+            !controller_combat_owns_stick &&
+                left_y < -g_xinput_movement_threshold);
+        set_gameplay_command(
+            deathtrap::input::Command::kMoveLeft,
+            !controller_combat_owns_stick && !side_step &&
+                left_x < -g_xinput_movement_threshold);
+        set_gameplay_command(
+            deathtrap::input::Command::kMoveRight,
+            !controller_combat_owns_stick && !side_step &&
+                left_x > g_xinput_movement_threshold);
+        InjectVirtualKey(InjectedKey::kW, false);
+        InjectVirtualKey(InjectedKey::kS, false);
+        InjectVirtualKey(InjectedKey::kA, false);
+        InjectVirtualKey(InjectedKey::kD, false);
       }
       // First person and LB retain the explicit side-step actions because the
       // retail joystick owns only one horizontal axis.
-      InjectVirtualKey(InjectedKey::kJ,
-                       !controller_combat_owns_stick && side_step &&
-                           left_x < -g_xinput_movement_threshold);
-      InjectVirtualKey(InjectedKey::kK,
-                       !controller_combat_owns_stick && side_step &&
-                           left_x > g_xinput_movement_threshold);
+      set_gameplay_command(
+          deathtrap::input::Command::kLeftSidestep,
+          !controller_combat_owns_stick && side_step &&
+              left_x < -g_xinput_movement_threshold);
+      set_gameplay_command(
+          deathtrap::input::Command::kRightSidestep,
+          !controller_combat_owns_stick && side_step &&
+              left_x > g_xinput_movement_threshold);
+      InjectVirtualKey(InjectedKey::kJ, false);
+      InjectVirtualKey(InjectedKey::kK, false);
     }
     // In the head view the full two-axis stick selects walk/run. The former
     // abs(Y) test made a fully deflected pure strafe permanently walk.
@@ -12001,12 +12682,21 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     } else if (run_magnitude <= g_xinput_run_release_threshold) {
       g_xinput_run_active = false;
     }
-    InjectVirtualKey(InjectedKey::kShift, g_xinput_run_active);
-    InjectVirtualKey(InjectedKey::kSpace,
-                     !selector_captures_controls &&
-                         (buttons & XINPUT_GAMEPAD_A));
-    InjectVirtualKey(InjectedKey::kE, buttons & XINPUT_GAMEPAD_X);
-    InjectVirtualKey(InjectedKey::kQ, buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
+    set_gameplay_command(deathtrap::input::Command::kRun,
+                         g_xinput_run_active);
+    set_gameplay_command(
+        deathtrap::input::Command::kJumpClimb,
+        !selector_captures_controls &&
+            (buttons & XINPUT_GAMEPAD_A) != 0);
+    set_gameplay_command(deathtrap::input::Command::kOperate,
+                         (buttons & XINPUT_GAMEPAD_X) != 0);
+    set_gameplay_command(
+        deathtrap::input::Command::kCastSpell,
+        (buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0);
+    InjectVirtualKey(InjectedKey::kShift, false);
+    InjectVirtualKey(InjectedKey::kSpace, false);
+    InjectVirtualKey(InjectedKey::kE, false);
+    InjectVirtualKey(InjectedKey::kQ, false);
     // Chalk is dispatched only by the radial selector through the exact
     // retail F2+8 routine. Never synthesize the unrelated C binding here.
     InjectVirtualKey(InjectedKey::kC, false);
@@ -12031,8 +12721,13 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     }
     const bool first_person_requested =
         g_xinput_first_person_toggled.load(std::memory_order_acquire);
-    InjectVirtualKey(InjectedKey::kTab,
-                     !selector_captures_controls && first_person_requested);
+    set_gameplay_command(
+        deathtrap::input::Command::kRetailFirstPerson,
+        !selector_captures_controls && first_person_requested);
+    set_gameplay_command(deathtrap::input::Command::kMenu,
+                         (buttons & XINPUT_GAMEPAD_START) != 0);
+    InjectVirtualKey(InjectedKey::kTab, false);
+    SubmitDeathtrapXInputGameplayCommands(gameplay_commands);
     SubmitDeathtrapXInputCombatState(
         controller_attack,
         observed_attack_direction.forward,
@@ -12065,6 +12760,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         !selector_captures_controls && !first_person_active &&
             CustomCameraOwnsMode3());
   } else {
+    SubmitDeathtrapXInputGameplayCommands(0);
     PublishCameraRelativeMovementIntent(false, 0, 0.0);
     PublishNativeJoystickMovement(false, 0.0, 0.0);
     g_xinput_direct_heading_steering_was_active = false;
@@ -12115,8 +12811,9 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         (buttons & XINPUT_GAMEPAD_A) != 0, false);
   }
   InjectVirtualKey(InjectedKey::kEscape,
-                   (buttons & XINPUT_GAMEPAD_START) ||
-                       (!gameplay && (buttons & XINPUT_GAMEPAD_B)));
+                   !gameplay &&
+                       ((buttons & XINPUT_GAMEPAD_START) != 0 ||
+                        (buttons & XINPUT_GAMEPAD_B) != 0));
   g_previous_xinput_buttons = buttons;
 }
 
@@ -16645,17 +17342,17 @@ void CallOriginalRenderPresentWait(void* context, int wait) {
 }
 
 void __cdecl HookRenderPresentWait(void* context, int wait) {
-  if ((GetAsyncKeyState(VK_F10) & 1) != 0 && IsGameForeground() &&
+  if (ConsumeDeathtrapImmersiveKeyboardToggle() && IsGameForeground() &&
       DeathtrapGameplayReady(false)) {
-    ToggleCustomHeadView("F10");
+    ToggleCustomHeadView("keyboard_binding");
   }
-  if ((GetAsyncKeyState(VK_F11) & 1) != 0) {
+  if (ConsumeDeathtrapNativeRateKeyboardToggle()) {
     const uint32_t previous =
         g_subframes.load(std::memory_order_relaxed);
     const uint32_t toggled = previous ? 0u : ConfiguredSubframes();
     g_subframes.store(toggled, std::memory_order_relaxed);
     ResetSceneHistory();
-    AppendNativeLog("runtime native interpolation=%s passes=%u via F11",
+    AppendNativeLog("runtime native interpolation=%s passes=%u via keyboard",
                     toggled ? "ENABLED" : "DISABLED",
                     toggled ? toggled - 1u : 0u);
   }
@@ -17380,7 +18077,230 @@ void InitializePatchState() {
       g_native_collision_probe_enabled ? 1u : 0u);
 }
 
+template <size_t Size>
+bool MatchesDungeonCode(uintptr_t rva,
+                        const std::array<uint8_t, Size>& expected) {
+  std::array<uint8_t, Size> actual{};
+  return g_dungeon_base &&
+         SafeRead(g_dungeon_base + rva, actual.data(), actual.size()) &&
+         actual == expected;
+}
+
+template <size_t Size>
+bool PatchDungeonCode(uintptr_t rva,
+                      const std::array<uint8_t, Size>& expected,
+                      const std::array<uint8_t, Size>& replacement) {
+  if (!MatchesDungeonCode(rva, expected)) {
+    return false;
+  }
+  void* const address = g_dungeon_base + rva;
+  DWORD old_protection = 0;
+  if (!VirtualProtect(address, Size, PAGE_EXECUTE_READWRITE,
+                      &old_protection)) {
+    return false;
+  }
+  const bool written = SafeWrite(address, replacement.data(), Size);
+  if (written) {
+    FlushInstructionCache(GetCurrentProcess(), address, Size);
+  }
+  DWORD ignored = 0;
+  VirtualProtect(address, Size, old_protection, &ignored);
+  return written;
+}
+
+bool InstallKeyboardBindingPageHooks() {
+  constexpr std::array<uint8_t, 10> kMenuPrologue = {
+      0x83, 0xEC, 0x08, 0x33, 0xC0, 0x66, 0x89, 0x44, 0x24, 0x02};
+  constexpr std::array<uint8_t, 7> kInputPrologue = {
+      0x83, 0xEC, 0x08, 0x53, 0x56, 0x32, 0xDB};
+  constexpr std::array<uint8_t, 7> kAllDefinedPrologue = {
+      0x33, 0xC0, 0x33, 0xC9, 0x0F, 0xBF, 0xD0};
+  constexpr std::array<uint8_t, 8> kDrawKeyPrologue = {
+      0x83, 0xEC, 0x04, 0x53, 0x56, 0x66, 0x8B, 0x74};
+  constexpr std::array<uint8_t, 8> kDrawTextPrologue = {
+      0x8B, 0x44, 0x24, 0x10, 0x8B, 0x4C, 0x24, 0x0C};
+  constexpr std::array<uint8_t, 8> kKeyCapturePrologue = {
+      0x83, 0xEC, 0x08, 0x53, 0x6A, 0x0D, 0x33, 0xDB};
+  constexpr std::array<uint8_t, 7> kRightPanelPrologue = {
+      0xE8, 0x6B, 0xD2, 0x01, 0x00, 0x85, 0xC0};
+  // The two navigation controls occupy the retail joystick display blocks:
+  // previous at y=192..262 and next at y=262..332. The native keyboard
+  // Default control remains at y=332..414; its click is intercepted by
+  // KeyboardDefaultsButtonActivated() and resets all patch actions.
+  constexpr uintptr_t kPreviousControllerGuardRva = 0x0001A517u;
+  constexpr std::array<uint8_t, 2> kPreviousControllerGuard = {0x74, 0x38};
+  constexpr std::array<uint8_t, 2> kTwoNops = {0x90, 0x90};
+  constexpr uintptr_t kNextMaxYRva = 0x0001A4E8u;
+  constexpr uintptr_t kNextMinYRva = 0x0001A4F2u;
+  constexpr uintptr_t kPreviousMaxYRva = 0x0001A529u;
+  constexpr uintptr_t kPreviousMinYRva = 0x0001A533u;
+  constexpr std::array<uint8_t, 4> kY414 = {0x9E, 0x01, 0x00, 0x00};
+  constexpr std::array<uint8_t, 4> kY332 = {0x4C, 0x01, 0x00, 0x00};
+  constexpr std::array<uint8_t, 4> kY262 = {0x06, 0x01, 0x00, 0x00};
+  constexpr std::array<uint8_t, 4> kY192 = {0xC0, 0x00, 0x00, 0x00};
+  if (!MatchesDungeonCode(kKeyboardBindingMenuRva, kMenuPrologue) ||
+      !MatchesDungeonCode(kKeyboardBindingInputRva, kInputPrologue) ||
+      !MatchesDungeonCode(kKeyboardBindingAllDefinedRva,
+                          kAllDefinedPrologue) ||
+      !MatchesDungeonCode(kKeyboardBindingDrawKeyRva, kDrawKeyPrologue) ||
+      !MatchesDungeonCode(kKeyboardBindingDrawTextRva, kDrawTextPrologue) ||
+      !MatchesDungeonCode(kKeyboardBindingKeyCaptureRva,
+                          kKeyCapturePrologue) ||
+      !MatchesDungeonCode(kKeyboardBindingRightPanelRva,
+                          kRightPanelPrologue) ||
+      !MatchesDungeonCode(kPreviousControllerGuardRva,
+                          kPreviousControllerGuard) ||
+      !MatchesDungeonCode(kNextMaxYRva, kY414) ||
+      !MatchesDungeonCode(kNextMinYRva, kY332) ||
+      !MatchesDungeonCode(kPreviousMaxYRva, kY332) ||
+      !MatchesDungeonCode(kPreviousMinYRva, kY262)) {
+    AppendNativeLog(
+        "keyboard_pages signature_mismatch fallback=retail_11_rows");
+    AppendDeathtrapSupportLog(
+        "support_keyboard_pages state=signature_mismatch");
+    return false;
+  }
+
+  void* const menu_target = g_dungeon_base + kKeyboardBindingMenuRva;
+  void* const input_target = g_dungeon_base + kKeyboardBindingInputRva;
+  void* const defined_target =
+      g_dungeon_base + kKeyboardBindingAllDefinedRva;
+  void* const draw_target = g_dungeon_base + kKeyboardBindingDrawKeyRva;
+  void* const draw_text_target =
+      g_dungeon_base + kKeyboardBindingDrawTextRva;
+  void* const capture_target =
+      g_dungeon_base + kKeyboardBindingKeyCaptureRva;
+  void* const right_panel_target =
+      g_dungeon_base + kKeyboardBindingRightPanelRva;
+  const MH_STATUS create_menu = MH_CreateHook(
+      menu_target, reinterpret_cast<void*>(&HookKeyboardBindingMenu),
+      reinterpret_cast<void**>(&g_original_keyboard_binding_menu));
+  const MH_STATUS create_input = MH_CreateHook(
+      input_target, reinterpret_cast<void*>(&HookKeyboardBindingInput),
+      reinterpret_cast<void**>(&g_original_keyboard_binding_input));
+  const MH_STATUS create_defined = MH_CreateHook(
+      defined_target,
+      reinterpret_cast<void*>(&HookKeyboardBindingAllDefined),
+      reinterpret_cast<void**>(&g_original_keyboard_binding_all_defined));
+  const MH_STATUS create_draw = MH_CreateHook(
+      draw_target, reinterpret_cast<void*>(&HookKeyboardBindingDrawKey),
+      reinterpret_cast<void**>(&g_original_keyboard_binding_draw_key));
+  const MH_STATUS create_draw_text = MH_CreateHook(
+      draw_text_target, reinterpret_cast<void*>(&HookKeyboardBindingDrawText),
+      reinterpret_cast<void**>(&g_original_keyboard_binding_draw_text));
+  const MH_STATUS create_capture = MH_CreateHook(
+      capture_target,
+      reinterpret_cast<void*>(&HookKeyboardBindingKeyCapture),
+      reinterpret_cast<void**>(&g_original_keyboard_binding_key_capture));
+  const MH_STATUS create_right_panel = MH_CreateHook(
+      right_panel_target,
+      reinterpret_cast<void*>(&HookKeyboardBindingRightPanel),
+      reinterpret_cast<void**>(&g_original_keyboard_binding_right_panel));
+  const auto created = [](MH_STATUS status) {
+    return status == MH_OK || status == MH_ERROR_ALREADY_CREATED;
+  };
+  if (!created(create_menu) || !created(create_input) ||
+      !created(create_defined) || !created(create_draw) ||
+      !created(create_draw_text) || !created(create_capture) ||
+      !created(create_right_panel)) {
+    AppendNativeLog(
+        "keyboard_pages create_failed menu=%d input=%d defined=%d draw=%d "
+        "text=%d capture=%d right=%d "
+        "fallback=retail_11_rows",
+        static_cast<int>(create_menu), static_cast<int>(create_input),
+        static_cast<int>(create_defined), static_cast<int>(create_draw),
+        static_cast<int>(create_draw_text),
+        static_cast<int>(create_capture),
+        static_cast<int>(create_right_panel));
+    return false;
+  }
+
+  const auto restore_navigation_code = [&]() {
+    PatchDungeonCode(kPreviousMinYRva, kY192, kY262);
+    PatchDungeonCode(kPreviousMaxYRva, kY262, kY332);
+    PatchDungeonCode(kNextMinYRva, kY262, kY332);
+    PatchDungeonCode(kNextMaxYRva, kY332, kY414);
+    PatchDungeonCode(kPreviousControllerGuardRva, kTwoNops,
+                     kPreviousControllerGuard);
+  };
+  const bool navigation_code_patched =
+      PatchDungeonCode(kPreviousControllerGuardRva,
+                       kPreviousControllerGuard, kTwoNops) &&
+      PatchDungeonCode(kNextMaxYRva, kY414, kY332) &&
+      PatchDungeonCode(kNextMinYRva, kY332, kY262) &&
+      PatchDungeonCode(kPreviousMaxYRva, kY332, kY262) &&
+      PatchDungeonCode(kPreviousMinYRva, kY262, kY192);
+  if (!navigation_code_patched) {
+    restore_navigation_code();
+    MH_RemoveHook(menu_target);
+    MH_RemoveHook(input_target);
+    MH_RemoveHook(defined_target);
+    MH_RemoveHook(draw_target);
+    MH_RemoveHook(draw_text_target);
+    MH_RemoveHook(capture_target);
+    MH_RemoveHook(right_panel_target);
+    AppendNativeLog(
+        "keyboard_pages navigation_patch_failed fallback=retail_11_rows");
+    return false;
+  }
+
+  const MH_STATUS enable_menu = MH_EnableHook(menu_target);
+  const MH_STATUS enable_input = MH_EnableHook(input_target);
+  const MH_STATUS enable_defined = MH_EnableHook(defined_target);
+  const MH_STATUS enable_draw = MH_EnableHook(draw_target);
+  const MH_STATUS enable_draw_text = MH_EnableHook(draw_text_target);
+  const MH_STATUS enable_capture = MH_EnableHook(capture_target);
+  const MH_STATUS enable_right_panel = MH_EnableHook(right_panel_target);
+  const auto enabled = [](MH_STATUS status) {
+    return status == MH_OK || status == MH_ERROR_ENABLED;
+  };
+  if (!enabled(enable_menu) || !enabled(enable_input) ||
+      !enabled(enable_defined) || !enabled(enable_draw) ||
+      !enabled(enable_draw_text) || !enabled(enable_capture) ||
+      !enabled(enable_right_panel)) {
+    MH_DisableHook(menu_target);
+    MH_DisableHook(input_target);
+    MH_DisableHook(defined_target);
+    MH_DisableHook(draw_target);
+    MH_DisableHook(draw_text_target);
+    MH_DisableHook(capture_target);
+    MH_DisableHook(right_panel_target);
+    restore_navigation_code();
+    MH_RemoveHook(menu_target);
+    MH_RemoveHook(input_target);
+    MH_RemoveHook(defined_target);
+    MH_RemoveHook(draw_target);
+    MH_RemoveHook(draw_text_target);
+    MH_RemoveHook(capture_target);
+    MH_RemoveHook(right_panel_target);
+    AppendNativeLog(
+        "keyboard_pages enable_failed menu=%d input=%d defined=%d draw=%d "
+        "text=%d capture=%d right=%d "
+        "fallback=retail_11_rows",
+        static_cast<int>(enable_menu), static_cast<int>(enable_input),
+        static_cast<int>(enable_defined), static_cast<int>(enable_draw),
+        static_cast<int>(enable_draw_text),
+        static_cast<int>(enable_capture),
+        static_cast<int>(enable_right_panel));
+    return false;
+  }
+
+  AppendNativeLog(
+      "keyboard_pages active pages=%u action_rows=%u navigation=right_panel",
+      static_cast<unsigned>(deathtrap::input::kRetailBindingPageCount),
+      static_cast<unsigned>(
+          deathtrap::input::kRetailBindingActionRowsPerPage));
+  AppendDeathtrapSupportLog(
+      "support_keyboard_pages state=active pages=%u",
+      static_cast<unsigned>(deathtrap::input::kRetailBindingPageCount));
+  return true;
+}
+
 }  // namespace
+
+bool DeathtrapKeyboardBindingMenuActive() {
+  return g_keyboard_binding_menu_active;
+}
 
 void AppendDeathtrapSupportLog(const char* format, ...) {
   va_list args;
@@ -17595,6 +18515,14 @@ bool InstallDeathtrapNativeRenderHooks() {
   // Optional and fail-closed: only the exact 25 KiB Steam MP3 wrapper is
   // accepted. Music failure must never disable rendering, input or camera.
   InstallDeathtrapMusicTrackFix();
+
+  // Keyboard bindings are patch-owned. Load them before either gameplay or
+  // the paged retail editor can poll input.
+  InitializeKeyboardBindingStore();
+
+  // Page the retail keyboard screen without changing its fixed 11-row
+  // storage. Failure leaves the original screen completely untouched.
+  InstallKeyboardBindingPageHooks();
 
   // Preserve the retail serializer, slots, screenshots and loader. The hook
   // replaces only the Savetrig eligibility leaf and only after the exact

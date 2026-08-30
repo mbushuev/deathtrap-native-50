@@ -111,6 +111,20 @@ target_include_directories(mouse_combat_routing_test PRIVATE src)
 target_compile_options(mouse_combat_routing_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
 
+add_executable(input_command_bindings_test
+  tools/input_command_bindings_test.cc)
+target_compile_features(input_command_bindings_test PRIVATE cxx_std_17)
+target_include_directories(input_command_bindings_test PRIVATE src)
+target_compile_options(input_command_bindings_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
+
+add_executable(input_binding_pages_test
+  tools/input_binding_pages_test.cc)
+target_compile_features(input_binding_pages_test PRIVATE cxx_std_17)
+target_include_directories(input_binding_pages_test PRIVATE src)
+target_compile_options(input_binding_pages_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
+
 add_executable(safe_save_test
   tools/safe_save_test.cc)
 target_compile_features(safe_save_test PRIVATE cxx_std_17)

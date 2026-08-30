@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 // One process session writes all render/input/present diagnostics to one
@@ -75,6 +76,19 @@ void SubmitDeathtrapXInputMouseState(int32_t delta_x, int32_t delta_y,
 // coherent snapshot, not independent synthetic keyboard inputs.
 void SubmitDeathtrapXInputCombatState(bool attack, bool forward, bool backward,
                                       bool left, bool right);
+
+// Publishes the fixed XInput gameplay layout as semantic commands. The
+// DirectInput proxy converts these commands to the stable retail wiring; it
+// never consults the user's keyboard bindings.
+void SubmitDeathtrapXInputGameplayCommands(uint32_t commands);
+
+// Installs the user-facing physical keyboard table. The DirectInput proxy
+// translates it to the stable retail wiring without consulting controller
+// mappings. Binding capture itself receives the untouched physical keyboard.
+void SetDeathtrapKeyboardBindings(const uint16_t* retail_codes, size_t count);
+bool DeathtrapKeyboardBindingMenuActive();
+bool ConsumeDeathtrapImmersiveKeyboardToggle();
+bool ConsumeDeathtrapNativeRateKeyboardToggle();
 
 // Routes physical relative DirectInput mouse motion to the modern third-
 // person camera. The proxy calls this only when the render patch explicitly

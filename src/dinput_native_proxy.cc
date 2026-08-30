@@ -6,6 +6,7 @@
 #include <MinHook.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -13,6 +14,8 @@
 #include <unordered_map>
 
 #include "deathtrap_native_render_patch.h"
+#include "input_command_bindings.h"
+#include "keyboard_bindings.h"
 #include "mouse_combat_routing.h"
 #include "native_d3d11_present_guard.h"
 
@@ -82,6 +85,14 @@ std::atomic<int32_t> g_xinput_mouse_delta_x{0};
 std::atomic<int32_t> g_xinput_mouse_delta_y{0};
 std::atomic<uint8_t> g_xinput_mouse_buttons{0};
 std::atomic<uint8_t> g_xinput_combat_state{0};
+std::atomic<uint32_t> g_xinput_gameplay_commands{0};
+std::array<std::atomic<uint16_t>, deathtrap::input::kKeyboardActionCount>
+    g_keyboard_bindings{};
+std::once_flag g_keyboard_bindings_once;
+std::atomic<bool> g_immersive_keyboard_toggle_pending{false};
+std::atomic<bool> g_native_rate_keyboard_toggle_pending{false};
+bool g_immersive_keyboard_toggle_down = false;
+bool g_native_rate_keyboard_toggle_down = false;
 std::atomic<int32_t> g_xinput_buffered_mouse_delta_x{0};
 std::atomic<int32_t> g_xinput_buffered_mouse_delta_y{0};
 std::atomic<uint8_t> g_xinput_buffered_mouse_buttons{0};
@@ -142,6 +153,57 @@ bool LoadSystemDinput() {
   RESOLVE(DllUnregisterServer);
 #undef RESOLVE
   return g_target_DirectInputCreateA != nullptr;
+}
+
+void EnsureKeyboardBindingsInitialized() {
+  std::call_once(g_keyboard_bindings_once, [] {
+    const auto defaults = deathtrap::input::DefaultKeyboardBindings();
+    for (size_t index = 0; index < defaults.size(); ++index) {
+      g_keyboard_bindings[index].store(defaults[index],
+                                       std::memory_order_relaxed);
+    }
+  });
+}
+
+void RemapPhysicalKeyboard(uint8_t* keyboard) {
+  if (!keyboard) {
+    return;
+  }
+  EnsureKeyboardBindingsInitialized();
+  if (DeathtrapKeyboardBindingMenuActive()) {
+    g_immersive_keyboard_toggle_down = false;
+    g_native_rate_keyboard_toggle_down = false;
+    return;
+  }
+
+  deathtrap::input::KeyboardBindingArray bindings{};
+  for (size_t action = 0; action < bindings.size(); ++action) {
+    bindings[action] =
+        g_keyboard_bindings[action].load(std::memory_order_acquire);
+  }
+  deathtrap::input::DirectInputKeyboardState physical{};
+  std::memcpy(physical.data(), keyboard, physical.size());
+  const auto active = deathtrap::input::ResolveKeyboardActions(
+      bindings, physical);
+  auto remapped = physical;
+  deathtrap::input::ApplyKeyboardBindings(bindings, &remapped);
+  std::memcpy(keyboard, remapped.data(), remapped.size());
+
+  const bool immersive =
+      active[static_cast<size_t>(
+          deathtrap::input::KeyboardAction::kImmersiveView)];
+  const bool native_rate =
+      active[static_cast<size_t>(deathtrap::input::KeyboardAction::kNativeRate)];
+  if (immersive && !g_immersive_keyboard_toggle_down) {
+    g_immersive_keyboard_toggle_pending.store(true,
+                                               std::memory_order_release);
+  }
+  if (native_rate && !g_native_rate_keyboard_toggle_down) {
+    g_native_rate_keyboard_toggle_pending.store(true,
+                                                 std::memory_order_release);
+  }
+  g_immersive_keyboard_toggle_down = immersive;
+  g_native_rate_keyboard_toggle_down = native_rate;
 }
 
 void DiscardPendingControllerCursorAxes() {
@@ -380,6 +442,30 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
           : DIERR_GENERIC;
   if (SUCCEEDED(result) && data && data_size == 256u) {
     auto* keyboard = static_cast<uint8_t*>(data);
+    // Keyboard users may freely rebind actions. The fixed controller plan is
+    // merged afterwards in stable game-command space and therefore cannot be
+    // changed by keyboard bindings.
+    RemapPhysicalKeyboard(keyboard);
+    const auto controller_plan =
+        deathtrap::input::ResolveRetailKeyboardPlan(
+            g_xinput_gameplay_commands.load(std::memory_order_acquire));
+    const auto merge_controller_key = [keyboard](uint8_t scan, bool down) {
+      if (down) {
+        keyboard[scan] |= 0x80u;
+      }
+    };
+    merge_controller_key(DIK_W, controller_plan.w);
+    merge_controller_key(DIK_S, controller_plan.s);
+    merge_controller_key(DIK_A, controller_plan.a);
+    merge_controller_key(DIK_D, controller_plan.d);
+    merge_controller_key(DIK_LSHIFT, controller_plan.left_shift);
+    merge_controller_key(DIK_SPACE, controller_plan.space);
+    merge_controller_key(DIK_E, controller_plan.e);
+    merge_controller_key(DIK_Q, controller_plan.q);
+    merge_controller_key(DIK_J, controller_plan.j);
+    merge_controller_key(DIK_K, controller_plan.k);
+    merge_controller_key(DIK_TAB, controller_plan.tab);
+    merge_controller_key(DIK_ESCAPE, controller_plan.escape);
     const bool operate_down = (keyboard[DIK_E] & 0x80u) != 0u;
     const bool was_down = g_physical_operate_key_down.exchange(
         operate_down, std::memory_order_acq_rel);
@@ -1137,6 +1223,32 @@ DWORD WINAPI InitializeThread(void*) {
 
 }  // namespace
 
+void SetDeathtrapKeyboardBindings(const uint16_t* retail_codes,
+                                  size_t count) {
+  EnsureKeyboardBindingsInitialized();
+  if (!retail_codes) {
+    return;
+  }
+  const size_t copied =
+      std::min(count, deathtrap::input::kKeyboardActionCount);
+  for (size_t index = 0; index < copied; ++index) {
+    const uint16_t value = retail_codes[index];
+    if (deathtrap::input::IsBindableKeyboardRetailCode(value)) {
+      g_keyboard_bindings[index].store(value, std::memory_order_release);
+    }
+  }
+}
+
+bool ConsumeDeathtrapImmersiveKeyboardToggle() {
+  return g_immersive_keyboard_toggle_pending.exchange(
+      false, std::memory_order_acq_rel);
+}
+
+bool ConsumeDeathtrapNativeRateKeyboardToggle() {
+  return g_native_rate_keyboard_toggle_pending.exchange(
+      false, std::memory_order_acq_rel);
+}
+
 void SubmitDeathtrapXInputMouseState(int32_t delta_x, int32_t delta_y,
                                      bool left_button, bool right_button) {
   SubmitDeathtrapXInputMouseStateInternal(delta_x, delta_y, left_button,
@@ -1158,6 +1270,10 @@ void SubmitDeathtrapXInputCombatState(bool attack, bool forward, bool backward,
         attack ? 1u : 0u, forward ? 1u : 0u, backward ? 1u : 0u,
         left ? 1u : 0u, right ? 1u : 0u);
   }
+}
+
+void SubmitDeathtrapXInputGameplayCommands(uint32_t commands) {
+  g_xinput_gameplay_commands.store(commands, std::memory_order_release);
 }
 
 void SetDeathtrapNativePageRestorePresentSuppressed(bool suppressed) {

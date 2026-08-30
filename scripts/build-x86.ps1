@@ -5,16 +5,68 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $buildPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $BuildDirectory))
 . (Join-Path $PSScriptRoot 'resolve-cmake.ps1')
 $cmake = Resolve-CMakeExecutable
 
-& $cmake -S $repoRoot -B $buildPath -G 'Visual Studio 17 2022' -A Win32
-if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed.' }
+# Some hosts preserve both PATH and Path in the process environment. MSBuild's
+# .NET launcher treats those names case-insensitively and fails while building
+# its child environment. Run CMake through cmd with one canonical PATH entry;
+# doing this at the actual CMake boundary also covers every MSBuild child.
+$normalizedProcessPath = $env:PATH
+if ([string]::IsNullOrWhiteSpace($normalizedProcessPath)) {
+    $normalizedProcessPath = $env:Path
+}
 
-& $cmake --build $buildPath --config $Configuration --parallel
-if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+function Invoke-NormalizedProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $quotedArguments = @($Arguments | ForEach-Object {
+        '"' + $_.Replace('"', '""') + '"'
+    })
+    $command = 'set "PATH=" & set "Path=" & set "PATH=' +
+        $normalizedProcessPath + '" & "' + $Executable + '" ' +
+        ($quotedArguments -join ' ')
+    & cmd.exe /d /s /c $command | ForEach-Object { Write-Host $_ }
+    return [int]$LASTEXITCODE
+}
+
+$cmakeExitCode = Invoke-NormalizedProcess -Executable $cmake -Arguments @(
+    '-S', $repoRoot,
+    '-B', $buildPath,
+    '-G', 'Visual Studio 17 2022',
+    '-A', 'Win32'
+)
+if ($cmakeExitCode -ne 0) { throw 'CMake configure failed.' }
+
+$programFilesX86 = ${env:ProgramFiles(x86)}
+$vswhere = Join-Path $programFilesX86 `
+    'Microsoft Visual Studio\Installer\vswhere.exe'
+$msbuild = $null
+if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
+    $msbuild = @(& $vswhere -latest -products '*' `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -find 'MSBuild\**\Bin\MSBuild.exe') |
+        Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+        Select-Object -First 1
+}
+if (-not $msbuild) {
+    throw 'MSBuild was not found in the Visual Studio 2022 C++ installation.'
+}
+
+$solution = Join-Path $buildPath 'deathtrap_native50_overlay.sln'
+$buildExitCode = Invoke-NormalizedProcess -Executable $msbuild -Arguments @(
+    $solution,
+    "/p:Configuration=$Configuration",
+    '/p:Platform=Win32',
+    '/m'
+)
+if ($buildExitCode -ne 0) { throw 'Build failed.' }
 
 $dll = Join-Path $buildPath "$Configuration\dinput.dll"
 $smoke = Join-Path $buildPath "$Configuration\dinput_proxy_smoke_test.exe"
@@ -23,6 +75,8 @@ $cameraRoom = Join-Path $buildPath "$Configuration\camera_room_collision_test.ex
 $immersiveFirstPerson = Join-Path $buildPath "$Configuration\immersive_first_person_test.exe"
 $musicRouting = Join-Path $buildPath "$Configuration\music_track_routing_test.exe"
 $mouseCombat = Join-Path $buildPath "$Configuration\mouse_combat_routing_test.exe"
+$inputCommands = Join-Path $buildPath "$Configuration\input_command_bindings_test.exe"
+$inputPages = Join-Path $buildPath "$Configuration\input_binding_pages_test.exe"
 $safeSave = Join-Path $buildPath "$Configuration\safe_save_test.exe"
 if (-not (Test-Path -LiteralPath $dll)) { throw "Missing build output: $dll" }
 if (-not (Test-Path -LiteralPath $smoke)) { throw "Missing smoke test: $smoke" }
@@ -31,6 +85,8 @@ if (-not (Test-Path -LiteralPath $cameraRoom)) { throw "Missing camera room test
 if (-not (Test-Path -LiteralPath $immersiveFirstPerson)) { throw "Missing immersive first-person test: $immersiveFirstPerson" }
 if (-not (Test-Path -LiteralPath $musicRouting)) { throw "Missing music routing test: $musicRouting" }
 if (-not (Test-Path -LiteralPath $mouseCombat)) { throw "Missing mouse combat test: $mouseCombat" }
+if (-not (Test-Path -LiteralPath $inputCommands)) { throw "Missing input command test: $inputCommands" }
+if (-not (Test-Path -LiteralPath $inputPages)) { throw "Missing input page test: $inputPages" }
 if (-not (Test-Path -LiteralPath $safeSave)) { throw "Missing safe save test: $safeSave" }
 
 & $smoke $dll
@@ -50,6 +106,12 @@ if ($LASTEXITCODE -ne 0) { throw 'Music track routing test failed.' }
 
 & $mouseCombat
 if ($LASTEXITCODE -ne 0) { throw 'Mouse combat routing test failed.' }
+
+& $inputCommands
+if ($LASTEXITCODE -ne 0) { throw 'Input command binding test failed.' }
+
+& $inputPages
+if ($LASTEXITCODE -ne 0) { throw 'Input binding page test failed.' }
 
 & $safeSave
 if ($LASTEXITCODE -ne 0) { throw 'Safe save eligibility test failed.' }
