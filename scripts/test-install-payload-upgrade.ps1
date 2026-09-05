@@ -18,7 +18,9 @@ try {
     [System.IO.File]::WriteAllText(
         (Join-Path $steamApps 'appmanifest_245010.acf'),
         '"AppState" { "appid" "245010" }')
-    foreach ($name in @('Dungeon.dll', 'DD_CD.EXE', 'DDraw.dll', 'D3DImm.dll')) {
+    foreach ($name in @(
+        'Dungeon.dll', 'DD_CD.EXE', 'DDraw.dll', 'D3DImm.dll', 'D3D9.dll',
+        'dxwrapper.dll', 'dxwrapper.ini')) {
         [System.IO.File]::WriteAllText((Join-Path $game $name), "test $name")
     }
     [System.IO.File]::WriteAllText(
@@ -33,6 +35,9 @@ try {
     $oldIniHash = Get-TestHash $oldIni
     $oldDDrawHash = Get-TestHash (Join-Path $game 'DDraw.dll')
     $oldD3DImmHash = Get-TestHash (Join-Path $game 'D3DImm.dll')
+    $oldD3D9Hash = Get-TestHash (Join-Path $game 'D3D9.dll')
+    $oldDxWrapperHash = Get-TestHash (Join-Path $game 'dxwrapper.dll')
+    $oldDxConfigHash = Get-TestHash (Join-Path $game 'dxwrapper.ini')
     $oldDgConfigHash = Get-TestHash (Join-Path $game 'dgVoodoo.conf')
 
     $originalKeys = (@(
@@ -95,11 +100,20 @@ try {
         -Destination (Join-Path $payload 'keys.cfg')
     $payloadDgVoodoo = Join-Path $payload 'dgVoodoo'
     New-Item -ItemType Directory -Path $payloadDgVoodoo -Force | Out-Null
-    foreach ($wrapper in @('DDraw.dll', 'D3DImm.dll')) {
+    foreach ($wrapper in @('D3D9.dll', 'D3DImm.dll')) {
         Copy-Item -LiteralPath (Join-Path $repoRoot `
             "third_party\dgVoodoo2-2.86.2\x86\$wrapper") `
             -Destination (Join-Path $payloadDgVoodoo $wrapper)
     }
+    $payloadDxWrapper = Join-Path $payload 'dxwrapper'
+    New-Item -ItemType Directory -Path $payloadDxWrapper -Force | Out-Null
+    foreach ($wrapper in @('DDraw.dll', 'dxwrapper.dll')) {
+        Copy-Item -LiteralPath (Join-Path $repoRoot `
+            "third_party\deathtrap-dxwrapper-release225\x86\$wrapper") `
+            -Destination (Join-Path $payloadDxWrapper $wrapper)
+    }
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'config\dxwrapper-dgvoodoo.ini') `
+        -Destination (Join-Path $payload 'dxwrapper.ini')
     Copy-Item -LiteralPath (Join-Path $repoRoot 'config\dgVoodoo-recommended.conf') `
         -Destination (Join-Path $payload 'dgVoodoo.conf')
 
@@ -115,11 +129,21 @@ try {
     if ((Get-TestHash $oldIni) -ne (Get-TestHash (Join-Path $payload 'deathtrap_native.ini'))) {
         throw 'Installer did not replace the old configuration with the payload configuration.'
     }
-    foreach ($wrapper in @('DDraw.dll', 'D3DImm.dll')) {
+    foreach ($wrapper in @('D3D9.dll', 'D3DImm.dll')) {
         if ((Get-TestHash (Join-Path $game $wrapper)) -ne
                 (Get-TestHash (Join-Path $payloadDgVoodoo $wrapper))) {
             throw "Installer did not install bundled dgVoodoo file $wrapper."
         }
+    }
+    foreach ($wrapper in @('DDraw.dll', 'dxwrapper.dll')) {
+        if ((Get-TestHash (Join-Path $game $wrapper)) -ne
+                (Get-TestHash (Join-Path $payloadDxWrapper $wrapper))) {
+            throw "Installer did not install bundled Deathtrap dxwrapper file $wrapper."
+        }
+    }
+    if ((Get-TestHash (Join-Path $game 'dxwrapper.ini')) -ne
+            (Get-TestHash (Join-Path $payload 'dxwrapper.ini'))) {
+        throw 'Installer did not install the bundled dxwrapper configuration.'
     }
     if ((Get-TestHash (Join-Path $game 'dgVoodoo.conf')) -ne
             (Get-TestHash (Join-Path $payload 'dgVoodoo.conf'))) {
@@ -143,6 +167,15 @@ try {
     }
     if ((Get-TestHash (Join-Path $backup.FullName 'D3DImm.dll')) -ne $oldD3DImmHash) {
         throw 'Rollback directory does not contain the previous D3DImm.dll.'
+    }
+    if ((Get-TestHash (Join-Path $backup.FullName 'D3D9.dll')) -ne $oldD3D9Hash) {
+        throw 'Rollback directory does not contain the previous D3D9.dll.'
+    }
+    if ((Get-TestHash (Join-Path $backup.FullName 'dxwrapper.dll')) -ne $oldDxWrapperHash) {
+        throw 'Rollback directory does not contain the previous dxwrapper.dll.'
+    }
+    if ((Get-TestHash (Join-Path $backup.FullName 'dxwrapper.ini')) -ne $oldDxConfigHash) {
+        throw 'Rollback directory does not contain the previous dxwrapper.ini.'
     }
     if ((Get-TestHash (Join-Path $backup.FullName 'dgVoodoo.conf')) -ne $oldDgConfigHash) {
         throw 'Rollback directory does not contain the previous dgVoodoo.conf.'

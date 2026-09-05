@@ -6,18 +6,26 @@
 DD_CD.EXE / Dungeon.dll
   |-- imports DINPUT.dll --> our native overlay --> Windows x86 dinput.dll
   |
-  `-- imports DDRAW.dll  --> bundled unmodified dgVoodoo 2.86.2 x86
+  `-- imports DDRAW.dll  --> tested Deathtrap dxwrapper Dd7to9 layer
                                |
-                               `-- D3D11 / DXGI swapchain
-                                      ^
-                                      `-- minimal Present observation
+                               `-- bundled dgVoodoo 2.86.2 x86 D3D9
+                                      |
+                                      `-- D3D11 / DXGI swapchain
+                                             ^
+                                             `-- minimal Present observation
 ```
 
-The overlay and dgVoodoo are siblings in the process, not a proxy chain. Our
-DLL never loads a renamed `DDraw_dgVoodoo.dll` and never forwards DirectDraw.
-No dgVoodoo path or binary hash is compiled into the overlay itself. The
-release installer verifies and installs the bundled unmodified 2.86.2 x86
-runtime before launch.
+The native overlay does not proxy DirectDraw. The Deathtrap-specific Dd7to9
+layer owns the logical/physical surface split required by the proven
+widescreen implementation and loads local `D3D9.dll`; that file is the
+unmodified dgVoodoo runtime. dgVoodoo remains the final D3D11 backend. The
+installer verifies every runtime hash before installation.
+
+The game continues to see 800x600. During the exact world-render boundary
+exported by `DINPUT.dll`, the engine emits a wider Hor+ world. The Dd7to9 layer
+maps it into a monitor-sized physical target while mapping menus, movies and
+HUD draws into a centered 4:3 safe area. This is the same native-canvas path
+used by the tested release configuration.
 
 ## Native rendering
 

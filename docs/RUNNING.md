@@ -19,9 +19,11 @@ The final relevant game-directory layout is:
 <SteamLibrary>\steamapps\common\Deathtrap Dungeon\
 |-- DD_CD.EXE
 |-- Dungeon.dll
-|-- DDraw.dll                 bundled dgVoodoo 2.86.2 x86
+|-- DDraw.dll                 tested Deathtrap dxwrapper Dd7to9 stub
+|-- dxwrapper.dll             tested Deathtrap native-canvas implementation
+|-- dxwrapper.ini             tested native-canvas profile
+|-- D3D9.dll                  bundled dgVoodoo 2.86.2 x86
 |-- D3DImm.dll                bundled dgVoodoo 2.86.2 x86
-|-- D3D9.dll                  optional dgVoodoo x86; not required by Deathtrap
 |-- dgVoodoo.conf             tested profile installed by this project
 |-- DINPUT.dll                this project
 |-- deathtrap_native.ini      this project
@@ -57,8 +59,9 @@ D3D11/DXGI Present hook. These functions are unavailable when dgVoodoo chooses
 D3D12, WARP or another backend. Do not use `OutputAPI = bestavailable` for this
 build because it may select D3D12.
 
-The installer preserves any previous `dgVoodoo.conf`, `DDraw.dll` and
-`D3DImm.dll` in its timestamped rollback directory before replacing them.
+The installer preserves any previous `dxwrapper.ini`, `dgVoodoo.conf`,
+`DDraw.dll`, `dxwrapper.dll`, `D3D9.dll` and `D3DImm.dll` in its timestamped
+rollback directory before replacing them.
 Advanced users can download the complete dgVoodoo package separately and
 copy only `dgVoodooCpl.exe` beside `DD_CD.EXE`. Running it there loads the
 installed `dgVoodoo.conf`, allowing resolution, filtering, antialiasing and
@@ -67,15 +70,17 @@ runtime DLLs and `OutputAPI = d3d11_fl11_0`.
 
 The tested preset uses:
 
-- `Resolution = 3x`;
-- `Antialiasing = 8x`;
+- one monitor-sized render target created by the native-canvas layer;
+- `Resolution = unforced`;
+- `Antialiasing = appdriven`;
 - `Filtering = 16` (16x anisotropic);
 - `Mipmapping = autogen_point`;
 - `ForceVerticalSync = true`;
 - `OutputAPI = d3d11_fl11_0`.
 
-These multipliers materially improve the image over unscaled defaults. On a
-slower GPU, lower only resolution to `2x` and antialiasing to `4x` first.
+Do not add dgVoodoo resolution multipliers to this profile: the preceding
+Dd7to9 layer has already created a native-resolution target, so another
+multiplier wastes memory and can make the game unplayable.
 
 ### General tab
 
@@ -100,9 +105,13 @@ payload/
   DINPUT.dll
   deathtrap_native.ini
   keys.cfg
+  dxwrapper.ini
   dgVoodoo.conf
-  dgVoodoo/
+  dxwrapper/
     DDraw.dll
+    dxwrapper.dll
+  dgVoodoo/
+    D3D9.dll
     D3DImm.dll
 optional/
   dgVoodoo-General.png
@@ -122,11 +131,13 @@ The script:
 
 1. verifies the Steam App ID, compares `Dungeon.dll` and `DD_CD.EXE` with the
    tested hashes, and continues with a warning if they differ;
-2. verifies the bundled dgVoodoo wrapper hashes and D3D11 configuration;
+2. verifies the bundled dxwrapper and dgVoodoo runtime hashes and D3D11
+   configuration;
 3. backs up existing patch files, dgVoodoo runtime/configuration,
    `ASYLUM\keys.cfg` and `ASYLUM\config.dat` under
    `back\deathtrap-native50-overlay-<timestamp>`;
-4. installs the tested dgVoodoo 2.86.2 runtime/configuration;
+4. installs the tested Deathtrap native-canvas layer and dgVoodoo 2.86.2
+   D3D9/D3D11 runtime/configuration;
 5. replaces `ASYLUM\keys.cfg` with the exact verified keyboard, mouse and
    joystick profile shipped with the same build; the previous file is already
    preserved by step 3;
@@ -159,7 +170,7 @@ The load chain is automatic:
 
 ```text
 DD_CD.EXE -> DINPUT.dll -> Windows x86 DirectInput
-DD_CD.EXE -> DDraw.dll  -> dgVoodoo D3D11 -> DXGI
+DD_CD.EXE -> DDraw.dll  -> dxwrapper Dd7to9 -> dgVoodoo D3D9 -> D3D11/DXGI
 ```
 
 The game imports legacy DirectInput, so Windows loads our `DINPUT.dll`; the DLL

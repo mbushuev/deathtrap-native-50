@@ -23,6 +23,47 @@ struct KeyboardCommand {
   uint8_t mode = 0;
 };
 
+constexpr bool PollPresentationLook(bool slow, bool selector_open,
+                                    bool modern_third_person, bool head_view,
+                                    bool retail_first_person) {
+  return slow && selector_open && (modern_third_person || head_view) &&
+      !retail_first_person;
+}
+
+constexpr bool WritePresentationMatrix(bool interpolated, bool slow,
+                                       bool is_camera) {
+  return interpolated || (slow && is_camera);
+}
+
+// A selector camera must not switch recovery policy when mouse input stops.
+// Collision confirmation still occurs; releasing the mouse is not a new wall.
+constexpr bool UseResponsiveRecovery(bool slow, bool orbit_input) {
+  return slow || orbit_input;
+}
+
+constexpr bool UseContinuousOrbitBasis(bool slow, bool presentation_look,
+                                       bool stationary_orbit) {
+  return slow || presentation_look || stationary_orbit;
+}
+
+// Selector mouse-look is sampled between sparse gameplay ticks. Once that
+// motion has been displayed, the next synthetic phase must hold the newly
+// accepted source camera instead of interpolating from the older source pose
+// and visibly replaying the same angular arc.
+constexpr bool InterpolateCameraAcrossSourceTicks(bool slow_motion_active) {
+  return !slow_motion_active;
+}
+
+// Holding the sparse source camera prevents replaying an angle that the user
+// has already seen, but every synthetic selector frame must still receive the
+// current focus so the presentation-rate orbit basis is actually applied.
+// Without this route only the final exact frame receives the new mouse angle,
+// producing a visible hold/jump cycle at the slowed source rate.
+constexpr bool RoutePresentationCameraBasis(bool slow_motion_active,
+                                            bool camera_focus_valid) {
+  return slow_motion_active && camera_focus_valid;
+}
+
 // Slow motion also slows the retail DirectInput poll. Capture selector keys at
 // presentation rate, but commit only after release so the next gameplay tick
 // cannot see the same held key and immediately reopen the selector.

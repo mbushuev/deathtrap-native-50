@@ -1,0 +1,1225 @@
+diff --git a/Dllmain/BuildNo.rc b/Dllmain/BuildNo.rc
+index a91ea38074c63506f67e278507198d199aeb54b1..6acaf79e1f7af14afed737dd11d1d3132a2fbe89 100644
+--- a/Dllmain/BuildNo.rc
++++ b/Dllmain/BuildNo.rc
+@@ -1 +1 @@
+-#define BUILD_NUMBER 8615 
++#define BUILD_NUMBER 8618 
+diff --git a/Settings/AllSettings.ini b/Settings/AllSettings.ini
+index af9530b8deae8f078f0342e0dec3a85ca6f704c9..5c603f273fc7b3c2f862eaefc6044d5d525f0889 100644
+--- a/Settings/AllSettings.ini
++++ b/Settings/AllSettings.ini
+@@ -65,11 +65,23 @@ DirectShowEmulation        = 0
+ 
+ [Dd7to9]
+ DdrawAutoFrameSkip         = 0
++DdrawAutoEndSceneOnFlip    = 0
++DdrawClearFlipBackBuffer   = 0
++DdrawAllowPrimarySurfaceReplacement = 0
+ DdrawFillSurfaceColor      = 0
+ DdrawEmulateSurface        = 0
+ DdrawEmulateLock           = 0
+ DdrawUseShadowSurface      = 0
+ DdrawKeepAllInterfaceCache = 0
++DdrawDisableAlphaTestForAdditiveColorKey = 0
++DdrawUseTextureAlphaForUnblendedColorKey = 0
++DdrawUseExternalD3D9      = 0
++DdrawDumpTextures          = 0
++DdrawInternalResolutionScale = 0
++DdrawWidescreenAspectX1000 = 0
++DdrawTraceAlphaDraws       = 0
++DdrawUseLegacyDirect3DCaps = 0
++DdrawUseLegacyTextureFormatOrder = 0
+ DdrawDisableDirect3DCaps   = 0
+ DdrawAllowMultiSampling    = 0
+ DdrawForceMipMapAutoGen    = 0
+diff --git a/Settings/Settings.h b/Settings/Settings.h
+index 01c6731b08034a3fec633aff85f7fa2b600485a2..869c7d123d4acf96e64f7b042b8036bc2ed8c688 100644
+--- a/Settings/Settings.h
++++ b/Settings/Settings.h
+@@ -43,6 +43,8 @@ inline std::ostream& operator<<(std::ostream& os, const DHEX& dhex) {
+ 	visit(DdrawAllowMultiSampling) \
+ 	visit(DdrawAlternatePixelCenter) \
+ 	visit(DdrawAutoFrameSkip) \
++	visit(DdrawAutoEndSceneOnFlip) \
++	visit(DdrawAllowPrimarySurfaceReplacement) \
+ 	visit(DdrawClampVertexZDepth) \
+ 	visit(DdrawClippedWidth) \
+ 	visit(DdrawClippedHeight) \
+@@ -54,8 +56,18 @@ inline std::ostream& operator<<(std::ostream& os, const DHEX& dhex) {
+ 	visit(DdrawFillSurfaceColor) \
+ 	visit(DdrawFilterActivateApp) \
+ 	visit(DdrawForceMipMapAutoGen) \
++	visit(DdrawClearFlipBackBuffer) \
+ 	visit(DdrawFlipFillColor) \
+ 	visit(DdrawKeepAllInterfaceCache) \
++	visit(DdrawDisableAlphaTestForAdditiveColorKey) \
++	visit(DdrawUseTextureAlphaForUnblendedColorKey) \
++	visit(DdrawUseExternalD3D9) \
++	visit(DdrawDumpTextures) \
++	visit(DdrawInternalResolutionScale) \
++	visit(DdrawWidescreenAspectX1000) \
++	visit(DdrawTraceAlphaDraws) \
++	visit(DdrawUseLegacyDirect3DCaps) \
++	visit(DdrawUseLegacyTextureFormatOrder) \
+ 	visit(DdrawRemoveScanlines) \
+ 	visit(DdrawRemoveInterlacing) \
+ 	visit(DdrawFixByteAlignment) \
+@@ -275,6 +287,8 @@ struct CONFIG
+ 	bool DdrawAlternatePixelCenter = false;		// Enables alternate pixel center -0.5f vs 0.0
+ 	DWORD DdrawClampVertexZDepth = 0;			// 1) Clamps z depth to a max of 1.0f, 2) Clamps the z depth between 0.0f and 1.0f and recomputes w/rhw
+ 	bool DdrawAutoFrameSkip = false;			// Automatically skips frames to reduce input lag
++	bool DdrawAutoEndSceneOnFlip = false;		// Ends an active legacy Direct3D scene before flipping the primary surface
++	bool DdrawAllowPrimarySurfaceReplacement = false;	// Allows a new primary surface to supersede a still-referenced primary surface
+ 	DWORD DdrawFixByteAlignment = false;		// Fixes lock with surfaces that have unaligned byte sizes, 1) just byte align, 2) byte align + D3DTEXF_NONE, 3) byte align + D3DTEXF_LINEAR
+ 	bool DdrawEnableByteAlignment = false;		// Disables 32bit / 64bit byte alignment
+ 	bool DdrawIntroVideoFix = false;			// Enables some fixes that may help with showing intro videos
+@@ -283,6 +297,15 @@ struct CONFIG
+ 	bool DdrawRemoveInterlacing = false;		// Experimental feature to removing interlacing between frames
+ 	bool DdrawFillSurfaceColor = false;			// After creating surface fill with random color for testing black screen or objects
+ 	bool DdrawKeepAllInterfaceCache = false;	// Preserve the interface cache all ddraw interfaces, which may casue higher memory usage
++	bool DdrawDisableAlphaTestForAdditiveColorKey = false;	// Avoid rejecting additive color-key effects whose vertex alpha is intentionally zero
++	bool DdrawUseTextureAlphaForUnblendedColorKey = false;	// Ignore irrelevant vertex alpha when alpha testing opaque color-key draws
++	bool DdrawUseExternalD3D9 = false;			// Chain Dd7to9 to a local D3D9 wrapper instead of System32
++	bool DdrawDumpTextures = false;			// Dump each unique Dd7to9 draw texture as PNG with a content-hash manifest
++	DWORD DdrawInternalResolutionScale = 0;	// Scale 800x600 Dd7to9 render/depth targets while preserving the logical game mode
++	DWORD DdrawWidescreenAspectX1000 = 0;	// 0=off, 1=auto monitor aspect, >1333=manual aspect; keep Deathtrap UI in a centered 4:3 safe area
++	bool DdrawTraceAlphaDraws = false;			// Log unique alpha/color-key draw signatures for legacy rendering diagnostics
++	bool DdrawUseLegacyDirect3DCaps = false;	// Report a conservative DX5 HAL capability profile to legacy applications
++	bool DdrawUseLegacyTextureFormatOrder = false;	// Expose the compact DX5 texture format list/order, including P8 in high-color modes
+ 	bool DdrawEmulateSurface = false;			// Emulates the ddraw surface using device context for Dd7to9
+ 	bool DdrawEmulateLock = false;				// Emulates the lock to prevent crashes when an application tries to read data outside Lock/Unlock pair
+ 	bool DdrawReadFromGDI = false;				// Read from GDI bfore passing surface to program
+@@ -312,6 +335,7 @@ struct CONFIG
+ 	DWORD DdrawFlipFillColor = 0;				// Color used to fill the primary surface before flipping
+ 	bool DdrawFilterActivateApp = false;		// Filters the WM_ACTIVATEAPP from the game, some games have issues with this message
+ 	bool DdrawForceMipMapAutoGen = false;		// Force Direct3d9 to use this AutoGenMipMap when using Dd7to9
++	bool DdrawClearFlipBackBuffer = false;		// Clear the newly selected video-memory backbuffer to black after Flip
+ 	DWORD DdrawHookSystem32 = 0;				// Hooks the ddraw.dll file in the Windows System32 folder
+ 	DWORD D3d8HookSystem32 = 0;					// Hooks the d3d8.dll file in the Windows System32 folder
+ 	bool D3d9HookSystem32 = false;				// Hooks the d3d9.dll file in the Windows System32 folder
+diff --git a/Settings/Settings.ini b/Settings/Settings.ini
+index 0ff9362584a93a205e8499753027ba9a7afb8d83..7937b620458ac595af6a2ef1510a026414afde95 100644
+--- a/Settings/Settings.ini
++++ b/Settings/Settings.ini
+@@ -51,10 +51,22 @@ DdrawUseDirect3D9Caps      = 0
+ 
+ [Dd7to9]
+ DdrawAutoFrameSkip         = 0
++DdrawAutoEndSceneOnFlip    = 0
++DdrawClearFlipBackBuffer   = 0
++DdrawAllowPrimarySurfaceReplacement = 0
+ DdrawEmulateSurface        = 0
+ DdrawEmulateLock           = 0
+ DdrawUseShadowSurface      = 0
+ DdrawKeepAllInterfaceCache = 0
++DdrawDisableAlphaTestForAdditiveColorKey = 0
++DdrawUseTextureAlphaForUnblendedColorKey = 0
++DdrawUseExternalD3D9      = 0
++DdrawDumpTextures          = 0
++DdrawInternalResolutionScale = 0
++DdrawWidescreenAspectX1000 = 0
++DdrawTraceAlphaDraws       = 0
++DdrawUseLegacyDirect3DCaps = 0
++DdrawUseLegacyTextureFormatOrder = 0
+ DdrawAllowMultiSampling    = 0
+ DdrawForceMipMapAutoGen    = 0
+ DdrawClampVertexZDepth     = 0
+diff --git a/Stub/stub.vcxproj b/Stub/stub.vcxproj
+index 88337a1e8dd5da95e3749a5faefc85ed97036116..2c68efcfd44779c7f9241ef63b6f80c8709a0095 100644
+--- a/Stub/stub.vcxproj
++++ b/Stub/stub.vcxproj
+@@ -137,6 +137,7 @@ copy /Y "$(TargetDir)$(TargetName).dll" "$(TargetDir)Build\Stub\winmmbase.dll" &
+       <ModuleDefinitionFile>stub.def</ModuleDefinitionFile>
+       <OptimizeReferences>true</OptimizeReferences>
+       <EnableCOMDATFolding>true</EnableCOMDATFolding>
++      <AdditionalOptions>/PDBALTPATH:%_PDB% %(AdditionalOptions)</AdditionalOptions>
+     </Link>
+     <PostBuildEvent>
+       <Command>IF NOT EXIST "$(TargetDir)Build" mkdir "$(TargetDir)Build" &gt;nul
+@@ -297,4 +298,4 @@ copy /Y "$(TargetDir)$(TargetName).dll" "$(TargetDir)..\Release_xp\Build\Stub\ws
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+   <ImportGroup Label="ExtensionTargets">
+   </ImportGroup>
+-</Project>
+\ No newline at end of file
++</Project>
+diff --git a/d3d8/BuildNo.rc b/d3d8/BuildNo.rc
+index e12e4969f7f1c5c587292114485f8c009e144051..87be5804cd7da8b3c1b53ed7710a929568a21d2e 100644
+--- a/d3d8/BuildNo.rc
++++ b/d3d8/BuildNo.rc
+@@ -1 +1 @@
+-#define  FILEVERSION 1.15.1.0   
++#define  FILEVERSION 1.15.1.0   
+diff --git a/d3d9/d3d9.cpp b/d3d9/d3d9.cpp
+index 1f77e6354fb0281f83863c2f5cad8ffec39724b3..ad1ed3e14e55ef403c753e542008c3e4bbe0fbda 100644
+--- a/d3d9/d3d9.cpp
++++ b/d3d9/d3d9.cpp
+@@ -31,10 +31,17 @@ static HMODULE GetSystemD3d9()
+ 	// Get System d3d9.dll
+ 	if (!h_d3d9)
+ 	{
+-		char Path[MAX_PATH] = {};
+-		GetSystemDirectoryA(Path, MAX_PATH);
+-		strcat_s(Path, "\\d3d9.dll");
+-		h_d3d9 = LoadLibraryA(Path);
++		if (Config.DdrawUseExternalD3D9)
++		{
++			h_d3d9 = LoadLibraryA("d3d9.dll");
++		}
++		else
++		{
++			char Path[MAX_PATH] = {};
++			GetSystemDirectoryA(Path, MAX_PATH);
++			strcat_s(Path, "\\d3d9.dll");
++			h_d3d9 = LoadLibraryA(Path);
++		}
+ 	}
+ 
+ 	return h_d3d9;
+diff --git a/ddraw/IDirect3DDeviceX.cpp b/ddraw/IDirect3DDeviceX.cpp
+index 6aa0b54ad6b86d06b07d112739696567f2eff879..b7be1addc8afb82a8206b20c4a517a101e272601 100644
+--- a/ddraw/IDirect3DDeviceX.cpp
++++ b/ddraw/IDirect3DDeviceX.cpp
+@@ -22,6 +22,72 @@ const DWORD ReserveCount = 64;
+ 
+ using namespace DdrawWrapper;
+ 
++namespace DdrawWrapper
++{
++	using DeathtrapWidescreenWorldRenderActiveFn = BOOL(WINAPI*)();
++	using DeathtrapWidescreenAspectX1000Fn = DWORD(WINAPI*)();
++
++	bool IsDeathtrapWidescreenWorldRenderActive()
++	{
++		static DeathtrapWidescreenWorldRenderActiveFn Query = nullptr;
++		if (!Query)
++		{
++			if (HMODULE Dinput = GetModuleHandleW(L"DINPUT.dll"))
++			{
++				Query = reinterpret_cast<DeathtrapWidescreenWorldRenderActiveFn>(
++					GetProcAddress(Dinput, "DeathtrapWidescreenWorldRenderActive"));
++			}
++		}
++		return Query && Query();
++	}
++
++	DWORD GetDeathtrapWidescreenAspectX1000()
++	{
++		if (Config.DdrawWidescreenAspectX1000 == 0)
++		{
++			return 0;
++		}
++		if (Config.DdrawWidescreenAspectX1000 > 1)
++		{
++			return min(Config.DdrawWidescreenAspectX1000, 3000ul);
++		}
++
++		static DeathtrapWidescreenAspectX1000Fn Query = nullptr;
++		if (!Query)
++		{
++			if (HMODULE Dinput = GetModuleHandleW(L"DINPUT.dll"))
++			{
++				Query = reinterpret_cast<DeathtrapWidescreenAspectX1000Fn>(
++					GetProcAddress(Dinput, "DeathtrapWidescreenAspectX1000"));
++			}
++		}
++		if (Query)
++		{
++			const DWORD AspectX1000 = Query();
++			if (AspectX1000)
++			{
++				return min(AspectX1000, 3000ul);
++			}
++		}
++
++		HWND Window = Utils::GetMainWindowForProcess(GetCurrentProcessId());
++		HMONITOR Monitor = MonitorFromWindow(Window,
++			Window ? MONITOR_DEFAULTTONEAREST : MONITOR_DEFAULTTOPRIMARY);
++		MONITORINFO MonitorInfo = {};
++		MonitorInfo.cbSize = sizeof(MonitorInfo);
++		if (Monitor && GetMonitorInfoW(Monitor, &MonitorInfo))
++		{
++			const LONG Width = MonitorInfo.rcMonitor.right - MonitorInfo.rcMonitor.left;
++			const LONG Height = MonitorInfo.rcMonitor.bottom - MonitorInfo.rcMonitor.top;
++			if (Width > 0 && Height > 0)
++			{
++				return min(static_cast<DWORD>((static_cast<ULONGLONG>(Width) * 1000 + Height / 2) / Height), 3000ul);
++			}
++		}
++		return 0;
++	}
++}
++
+ // ******************************
+ // IUnknown functions
+ // ******************************
+@@ -2999,6 +3065,7 @@ HRESULT m_IDirect3DDeviceX::DrawPrimitive(D3DPRIMITIVETYPE dptPrimitiveType, DWO
+ 
+ 		// Handle dwFlags
+ 		SetDrawStates(dwVertexTypeDesc, dwFlags, DirectXVersion);
++		TraceAlphaDraw("DrawPrimitive", dptPrimitiveType, dwVertexTypeDesc, dwVertexCount, lpVertices);
+ 
+ 		// Draw primitive UP
+ 		HRESULT hr = (*d3d9Device)->DrawPrimitiveUP(dptPrimitiveType, GetNumberOfPrimitives(dptPrimitiveType, dwVertexCount), lpVertices, GetVertexStride(dwVertexTypeDesc));
+@@ -3092,6 +3159,7 @@ HRESULT m_IDirect3DDeviceX::DrawIndexedPrimitive(D3DPRIMITIVETYPE dptPrimitiveTy
+ 
+ 		// Handle dwFlags
+ 		SetDrawStates(dwVertexTypeDesc, dwFlags, DirectXVersion);
++		TraceAlphaDraw("DrawIndexedPrimitive", dptPrimitiveType, dwVertexTypeDesc, dwVertexCount, lpVertices);
+ 
+ 		// Draw indexed primitive UP
+ 		HRESULT hr = (*d3d9Device)->DrawIndexedPrimitiveUP(dptPrimitiveType, 0, dwVertexCount, GetNumberOfPrimitives(dptPrimitiveType, dwIndexCount), lpwIndices, D3DFMT_INDEX16, lpVertices, GetVertexStride(dwVertexTypeDesc));
+@@ -4138,12 +4206,44 @@ HRESULT m_IDirect3DDeviceX::EnumTextureFormats(LPD3DENUMPIXELFORMATSCALLBACK lpd
+ 			return DDERR_INVALIDOBJECT;
+ 		}
+ 
+-		const bool IsDirectDraw8bit = (ddrawParent->GetDisplayBPP(ddrawParent->GetHMonitor()) == 8);
+-
+ 		// Get cached texture formats from ddrawParent
+ 		std::vector<D3DFORMAT> TextureFormat;
+ 		ddrawParent->GetD9SupportedTextures(TextureFormat);
+ 
++		// Some DX5 engines treat the format enumeration order as a hardware
++		// profile and expect P8 to remain visible with a high-color target.
++		if (Config.DdrawUseLegacyTextureFormatOrder)
++		{
++			const D3DFORMAT LegacyOrder[] = {
++				D3DFMT_P8,
++				D3DFMT_X1R5G5B5,
++				D3DFMT_A1R5G5B5,
++				D3DFMT_A4R4G4B4,
++				D3DFMT_R5G6B5,
++				D3DFMT_X8R8G8B8,
++				D3DFMT_A8R8G8B8 };
++
++			for (const auto format : LegacyOrder)
++			{
++				if (std::find(TextureFormat.begin(), TextureFormat.end(), format) == TextureFormat.end())
++				{
++					continue;
++				}
++
++				DDPIXELFORMAT ddpfPixelFormat = {};
++				ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
++				SetPixelDisplayFormat(format, ddpfPixelFormat);
++				if (lpd3dEnumPixelProc(&ddpfPixelFormat, lpArg) == DDENUMRET_CANCEL)
++				{
++					return D3D_OK;
++				}
++			}
++
++			return D3D_OK;
++		}
++
++		const bool IsDirectDraw8bit = (ddrawParent->GetDisplayBPP(ddrawParent->GetHMonitor()) == 8);
++
+ 		// Check for supported textures
+ 		for (const auto& format : TextureFormat)
+ 		{
+@@ -5711,8 +5811,40 @@ HRESULT m_IDirect3DDeviceX::Clear(const D3DVIEWPORT9& Viewport, DWORD dwCount, L
+ 
+ 	ScopedCriticalSection ThreadLockDD(DdrawWrapper::GetDDCriticalSection());
+ 
+-	// Clear respects the current viewport
+-	(*d3d9Device)->SetViewport(&Viewport);
++	// Clear respects the current viewport. Scale logical clear coordinates to
++	// the physical supersampled render target just like ordinary draws.
++	D3DVIEWPORT9 ClearViewport = Viewport;
++	LPD3DRECT ClearRects = lpRects;
++	std::vector<D3DRECT> ScaledRects;
++	if (Config.DdrawInternalResolutionScale > 1 && lpCurrentRenderTargetX &&
++		lpCurrentRenderTargetX->GetLogicalWidth() == 800 && lpCurrentRenderTargetX->GetLogicalHeight() == 600 &&
++		lpCurrentRenderTargetX->GetD9Width() > lpCurrentRenderTargetX->GetLogicalWidth() &&
++		lpCurrentRenderTargetX->GetD9Height() > lpCurrentRenderTargetX->GetLogicalHeight())
++	{
++		const float ScaleX = static_cast<float>(lpCurrentRenderTargetX->GetD9Width()) / lpCurrentRenderTargetX->GetLogicalWidth();
++		const float ScaleY = static_cast<float>(lpCurrentRenderTargetX->GetD9Height()) / lpCurrentRenderTargetX->GetLogicalHeight();
++		if (ClearViewport.X + ClearViewport.Width <= lpCurrentRenderTargetX->GetLogicalWidth() &&
++			ClearViewport.Y + ClearViewport.Height <= lpCurrentRenderTargetX->GetLogicalHeight())
++		{
++			ClearViewport.X = static_cast<DWORD>(lroundf(ClearViewport.X * ScaleX));
++			ClearViewport.Y = static_cast<DWORD>(lroundf(ClearViewport.Y * ScaleY));
++			ClearViewport.Width = static_cast<DWORD>(lroundf(ClearViewport.Width * ScaleX));
++			ClearViewport.Height = static_cast<DWORD>(lroundf(ClearViewport.Height * ScaleY));
++		}
++		if (lpRects && dwCount)
++		{
++			ScaledRects.assign(lpRects, lpRects + dwCount);
++			for (auto& Rect : ScaledRects)
++			{
++				Rect.x1 = static_cast<LONG>(lroundf(Rect.x1 * ScaleX));
++				Rect.y1 = static_cast<LONG>(lroundf(Rect.y1 * ScaleY));
++				Rect.x2 = static_cast<LONG>(lroundf(Rect.x2 * ScaleX));
++				Rect.y2 = static_cast<LONG>(lroundf(Rect.y2 * ScaleY));
++			}
++			ClearRects = ScaledRects.data();
++		}
++	}
++	(*d3d9Device)->SetViewport(&ClearViewport);
+ 
+ 	if (lpCurrentRenderTargetX && (dwFlags & D3DCLEAR_TARGET))
+ 	{
+@@ -5724,7 +5856,7 @@ HRESULT m_IDirect3DDeviceX::Clear(const D3DVIEWPORT9& Viewport, DWORD dwCount, L
+ 		}
+ 	}
+ 
+-	HRESULT hr = (*d3d9Device)->Clear(dwCount, lpRects, dwFlags, dwColor, dvZ, dwStencil);
++	HRESULT hr = (*d3d9Device)->Clear(dwCount, ClearRects, dwFlags, dwColor, dvZ, dwStencil);
+ 
+ 	return GetReturnResult(hr);
+ }
+@@ -6745,8 +6877,24 @@ void m_IDirect3DDeviceX::SetDrawStates(DWORD dwVertexTypeDesc, DWORD& dwFlags, D
+ 		}
+ 	}
+ 
+-	// Need to always set viewport
+-	(*d3d9Device)->SetViewport(&DeviceStates.Viewport.FixedView);
++	// Need to always set viewport. Keep the viewport reported to the game in
++	// logical coordinates while mapping it to an enlarged physical render target.
++	D3DVIEWPORT9 DrawViewport = DeviceStates.Viewport.FixedView;
++	if (Config.DdrawInternalResolutionScale > 1 && lpCurrentRenderTargetX &&
++		lpCurrentRenderTargetX->GetLogicalWidth() == 800 && lpCurrentRenderTargetX->GetLogicalHeight() == 600 &&
++		lpCurrentRenderTargetX->GetD9Width() > lpCurrentRenderTargetX->GetLogicalWidth() &&
++		lpCurrentRenderTargetX->GetD9Height() > lpCurrentRenderTargetX->GetLogicalHeight() &&
++		DrawViewport.X + DrawViewport.Width <= lpCurrentRenderTargetX->GetLogicalWidth() &&
++		DrawViewport.Y + DrawViewport.Height <= lpCurrentRenderTargetX->GetLogicalHeight())
++	{
++		const float ScaleX = static_cast<float>(lpCurrentRenderTargetX->GetD9Width()) / lpCurrentRenderTargetX->GetLogicalWidth();
++		const float ScaleY = static_cast<float>(lpCurrentRenderTargetX->GetD9Height()) / lpCurrentRenderTargetX->GetLogicalHeight();
++		DrawViewport.X = static_cast<DWORD>(lroundf(DrawViewport.X * ScaleX));
++		DrawViewport.Y = static_cast<DWORD>(lroundf(DrawViewport.Y * ScaleY));
++		DrawViewport.Width = static_cast<DWORD>(lroundf(DrawViewport.Width * ScaleX));
++		DrawViewport.Height = static_cast<DWORD>(lroundf(DrawViewport.Height * ScaleY));
++	}
++	(*d3d9Device)->SetViewport(&DrawViewport);
+ 
+ 	// Handle byte alignment
+ 	if (Config.DdrawFixByteAlignment > 1)
+@@ -6769,6 +6917,8 @@ void m_IDirect3DDeviceX::SetDrawStates(DWORD dwVertexTypeDesc, DWORD& dwFlags, D
+ 	{
+ 		if (CurrentTextureSurfaceX[x])
+ 		{
++			IDirect3DTexture9* BoundTexture = nullptr;
++			bool BoundColorKey = false;
+ 			// Generate MipMap levels
+ 			if (DeviceStates.TextureStageState[x][D3DTSS_MIPFILTER].State != D3DTEXF_NONE && !CurrentTextureSurfaceX[x]->IsMipMapGenerated())
+ 			{
+@@ -6778,13 +6928,41 @@ void m_IDirect3DDeviceX::SetDrawStates(DWORD dwVertexTypeDesc, DWORD& dwFlags, D
+ 			if (UsingColorKey && CurrentTextureSurfaceX[x]->IsColorKeyTexture() && CurrentTextureSurfaceX[x]->GetD9DrawTexture())
+ 			{
+ 				dwFlags |= D3DDP_DXW_ALPHACOLORKEY;
+-				(*d3d9Device)->SetTexture(x, CurrentTextureSurfaceX[x]->GetD9DrawTexture());
++				BoundTexture = CurrentTextureSurfaceX[x]->GetD9DrawTexture();
++				BoundColorKey = true;
++				(*d3d9Device)->SetTexture(x, BoundTexture);
+ 			}
+ 			// Set texture
+ 			else if (IDirect3DTexture9* pTexture9 = CurrentTextureSurfaceX[x]->GetD9Texture(); pTexture9 != nullptr)
+ 			{
+-				(*d3d9Device)->SetTexture(x, pTexture9);
++				BoundTexture = pTexture9;
++				(*d3d9Device)->SetTexture(x, BoundTexture);
+ 			}
++
++			if (Config.DdrawDumpTextures && BoundTexture)
++			{
++				DumpTexture(x, CurrentTextureSurfaceX[x], BoundTexture, BoundColorKey);
++			}
++		}
++	}
++
++	// Some DX5 engines use vertex alpha zero for additive ONE+ONE effects,
++	// because that blend equation does not consume alpha.  The color-key
++	// compatibility path normally uses a D3D9 alpha test to discard keyed
++	// texels, but that tests the post-stage alpha and therefore rejects the
++	// entire additive primitive.  With a black color key, disabling the test
++	// is equivalent for ONE+ONE: keyed texels add black and remain invisible.
++	if ((dwFlags & D3DDP_DXW_ALPHACOLORKEY) && Config.DdrawDisableAlphaTestForAdditiveColorKey)
++	{
++		DWORD AlphaBlend = FALSE;
++		DWORD SrcBlend = D3DBLEND_ZERO;
++		DWORD DestBlend = D3DBLEND_ZERO;
++		GetD9RenderState(D3DRS_ALPHABLENDENABLE, &AlphaBlend);
++		GetD9RenderState(D3DRS_SRCBLEND, &SrcBlend);
++		GetD9RenderState(D3DRS_DESTBLEND, &DestBlend);
++		if (AlphaBlend && SrcBlend == D3DBLEND_ONE && DestBlend == D3DBLEND_ONE)
++		{
++			dwFlags &= ~D3DDP_DXW_ALPHACOLORKEY;
+ 		}
+ 	}
+ 
+@@ -6798,6 +6976,20 @@ void m_IDirect3DDeviceX::SetDrawStates(DWORD dwVertexTypeDesc, DWORD& dwFlags, D
+ 		(*d3d9Device)->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE);
+ 		(*d3d9Device)->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_GREATER);
+ 		(*d3d9Device)->SetRenderState(D3DRS_ALPHAREF, (DWORD)0x01);
++
++		// Opaque color-key sprites in some DX5 engines carry vertex alpha zero
++		// because alpha blending is disabled and legacy color-key rejection is
++		// independent of vertex alpha. Dd7to9 implements the key with a post-stage
++		// alpha test, so MODULATE would multiply the texture mask by zero and reject
++		// the complete sprite (Deathtrap's HUD). Test the texture mask directly.
++		DWORD AlphaBlend = FALSE;
++		GetD9RenderState(D3DRS_ALPHABLENDENABLE, &AlphaBlend);
++		if (Config.DdrawUseTextureAlphaForUnblendedColorKey && !AlphaBlend)
++		{
++			GetD9TextureStageState(0, D3DTSS_ALPHAOP, &DrawStates.tsAlphaOp0);
++			(*d3d9Device)->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
++			dwFlags |= D3DDP_DXW_TEXTUREALPHAOVERRIDE;
++		}
+ 	}
+ 
+ 	// Color key shader
+@@ -6839,6 +7031,271 @@ void m_IDirect3DDeviceX::SetDrawStates(DWORD dwVertexTypeDesc, DWORD& dwFlags, D
+ 	}*/
+ }
+ 
++void m_IDirect3DDeviceX::DumpTexture(UINT Stage, m_IDirectDrawSurfaceX* TextureSurface, IDirect3DTexture9* DrawTexture, bool ColorKey)
++{
++	if (!Config.DdrawDumpTextures || !TextureSurface || !DrawTexture || !D3DXSaveTextureToFileInMemory)
++	{
++		return;
++	}
++
++	static std::vector<const m_IDirectDrawSurfaceX*> SeenSurfaces;
++	if (std::find(SeenSurfaces.begin(), SeenSurfaces.end(), TextureSurface) != SeenSurfaces.end())
++	{
++		return;
++	}
++	SeenSurfaces.push_back(TextureSurface);
++
++	D3DSURFACE_DESC Desc = {};
++	if (FAILED(DrawTexture->GetLevelDesc(0, &Desc)))
++	{
++		return;
++	}
++
++	ComPtr<ID3DXBuffer> Buffer;
++	const HRESULT DumpResult = D3DXSaveTextureToFileInMemory(Buffer.GetAddressOf(), D3DXIFF_PNG, DrawTexture, nullptr);
++	if (FAILED(DumpResult) || !Buffer || !Buffer->GetBufferPointer() || !Buffer->GetBufferSize())
++	{
++		Logging::Log() << "TextureDump failed tex=" << TextureSurface << " hr=" << (D3DERR)DumpResult;
++		return;
++	}
++
++	const BYTE* Bytes = static_cast<const BYTE*>(Buffer->GetBufferPointer());
++	const SIZE_T ByteCount = Buffer->GetBufferSize();
++	UINT64 Hash = 1469598103934665603ull;
++	for (SIZE_T i = 0; i < ByteCount; ++i)
++	{
++		Hash ^= Bytes[i];
++		Hash *= 1099511628211ull;
++	}
++	Hash ^= Desc.Width;
++	Hash *= 1099511628211ull;
++	Hash ^= Desc.Height;
++	Hash *= 1099511628211ull;
++	Hash ^= static_cast<DWORD>(Desc.Format);
++	Hash *= 1099511628211ull;
++
++	char ExePath[MAX_PATH] = {};
++	if (!GetModuleFileNameA(nullptr, ExePath, MAX_PATH))
++	{
++		return;
++	}
++	if (char* Slash = strrchr(ExePath, '\\'))
++	{
++		*Slash = '\0';
++	}
++
++	char DumpDirectory[MAX_PATH] = {};
++	sprintf_s(DumpDirectory, "%s\\texture-dump", ExePath);
++	CreateDirectoryA(DumpDirectory, nullptr);
++
++	char HashText[32] = {};
++	sprintf_s(HashText, "%016llX", Hash);
++	char DumpPath[MAX_PATH] = {};
++	sprintf_s(DumpPath, "%s\\tex-%s-%ux%u-fmt%u.png", DumpDirectory, HashText, Desc.Width, Desc.Height, static_cast<UINT>(Desc.Format));
++
++	const bool NewFile = (GetFileAttributesA(DumpPath) == INVALID_FILE_ATTRIBUTES);
++	if (NewFile)
++	{
++		std::ofstream Output(DumpPath, std::ios::binary | std::ios::out);
++		if (Output.is_open())
++		{
++			Output.write(static_cast<const char*>(Buffer->GetBufferPointer()), Buffer->GetBufferSize());
++		}
++	}
++
++	char ManifestPath[MAX_PATH] = {};
++	sprintf_s(ManifestPath, "%s\\manifest.csv", DumpDirectory);
++	const bool NewManifest = (GetFileAttributesA(ManifestPath) == INVALID_FILE_ATTRIBUTES);
++	std::ofstream Manifest(ManifestPath, std::ios::out | std::ios::app);
++	if (Manifest.is_open())
++	{
++		if (NewManifest)
++		{
++			Manifest << "hash,file,width,height,format,color_key,has_alpha,stage,png_bytes\n";
++		}
++		Manifest << HashText << ",tex-" << HashText << "-" << Desc.Width << "x" << Desc.Height << "-fmt" << static_cast<UINT>(Desc.Format) << ".png,"
++			<< Desc.Width << "," << Desc.Height << "," << static_cast<UINT>(Desc.Format) << "," << ColorKey << ","
++			<< TextureSurface->HasAlphaChannel(ColorKey) << "," << Stage << "," << ByteCount << "\n";
++	}
++
++	Logging::Log() << "TextureDump " << (NewFile ? "saved" : "seen") << " tex=" << TextureSurface << " hash=" << HashText << " size=" << Desc.Width << "x" << Desc.Height
++		<< " fmt=" << Desc.Format << " ckey=" << ColorKey << " stage=" << Stage;
++}
++
++void m_IDirect3DDeviceX::TraceAlphaDraw(const char* DrawKind, D3DPRIMITIVETYPE PrimitiveType, DWORD VertexTypeDesc, DWORD VertexCount, const void* Vertices)
++{
++	if (!Config.DdrawTraceAlphaDraws || !d3d9Device || !*d3d9Device)
++	{
++		return;
++	}
++
++	DWORD AlphaBlend = FALSE;
++	DWORD SrcBlend = D3DBLEND_ONE;
++	DWORD DestBlend = D3DBLEND_ZERO;
++	DWORD AlphaTest = FALSE;
++	DWORD AlphaFunc = D3DCMP_ALWAYS;
++	DWORD AlphaRef = 0;
++	DWORD ZWrite = TRUE;
++	DWORD ZEnable = TRUE;
++	DWORD ColorOp = D3DTOP_DISABLE;
++	DWORD AlphaOp = D3DTOP_DISABLE;
++	DWORD MinFilter = D3DTEXF_NONE;
++	DWORD MagFilter = D3DTEXF_NONE;
++	DWORD MipFilter = D3DTEXF_NONE;
++
++	(*d3d9Device)->GetRenderState(D3DRS_ALPHABLENDENABLE, &AlphaBlend);
++	(*d3d9Device)->GetRenderState(D3DRS_SRCBLEND, &SrcBlend);
++	(*d3d9Device)->GetRenderState(D3DRS_DESTBLEND, &DestBlend);
++	(*d3d9Device)->GetRenderState(D3DRS_ALPHATESTENABLE, &AlphaTest);
++	(*d3d9Device)->GetRenderState(D3DRS_ALPHAFUNC, &AlphaFunc);
++	(*d3d9Device)->GetRenderState(D3DRS_ALPHAREF, &AlphaRef);
++	(*d3d9Device)->GetRenderState(D3DRS_ZWRITEENABLE, &ZWrite);
++	(*d3d9Device)->GetRenderState(D3DRS_ZENABLE, &ZEnable);
++	(*d3d9Device)->GetTextureStageState(0, D3DTSS_COLOROP, &ColorOp);
++	(*d3d9Device)->GetTextureStageState(0, D3DTSS_ALPHAOP, &AlphaOp);
++	(*d3d9Device)->GetSamplerState(0, D3DSAMP_MINFILTER, &MinFilter);
++	(*d3d9Device)->GetSamplerState(0, D3DSAMP_MAGFILTER, &MagFilter);
++	(*d3d9Device)->GetSamplerState(0, D3DSAMP_MIPFILTER, &MipFilter);
++
++	m_IDirectDrawSurfaceX* Texture = CurrentTextureSurfaceX[0];
++	const bool ColorKey = Texture && Texture->IsColorKeyTexture();
++	const bool HasAlpha = Texture && Texture->HasAlphaChannel(ColorKey);
++	if (!AlphaBlend && !AlphaTest && !ColorKey && !HasAlpha)
++	{
++		return;
++	}
++
++	DWORD MinVertexAlpha = 0xFF;
++	DWORD MaxVertexAlpha = 0;
++	DWORD FirstDiffuse = 0;
++	bool HasVertexAlpha = false;
++	float MinVertexX = FLT_MAX;
++	float MinVertexY = FLT_MAX;
++	float MaxVertexX = -FLT_MAX;
++	float MaxVertexY = -FLT_MAX;
++	bool HasScreenPosition = false;
++	if (Vertices && VertexCount && (VertexTypeDesc & D3DFVF_XYZRHW))
++	{
++		const DWORD Stride = GetVertexStride(VertexTypeDesc);
++		for (DWORD i = 0; i < VertexCount; ++i)
++		{
++			const float* Position = reinterpret_cast<const float*>(reinterpret_cast<const BYTE*>(Vertices) + (i * Stride));
++			MinVertexX = min(MinVertexX, Position[0]);
++			MinVertexY = min(MinVertexY, Position[1]);
++			MaxVertexX = max(MaxVertexX, Position[0]);
++			MaxVertexY = max(MaxVertexY, Position[1]);
++		}
++		HasScreenPosition = true;
++	}
++	if (Vertices && VertexCount && (VertexTypeDesc & D3DFVF_DIFFUSE))
++	{
++		DWORD DiffuseOffset = 0;
++		switch (VertexTypeDesc & D3DFVF_POSITION_MASK)
++		{
++		case D3DFVF_XYZ: DiffuseOffset = 3 * sizeof(float); break;
++		case D3DFVF_XYZRHW: DiffuseOffset = 4 * sizeof(float); break;
++		case D3DFVF_XYZB1: DiffuseOffset = 4 * sizeof(float); break;
++		case D3DFVF_XYZB2: DiffuseOffset = 5 * sizeof(float); break;
++		case D3DFVF_XYZB3: DiffuseOffset = 6 * sizeof(float); break;
++		case D3DFVF_XYZB4: DiffuseOffset = 7 * sizeof(float); break;
++		case D3DFVF_XYZB5: DiffuseOffset = 8 * sizeof(float); break;
++		default: DiffuseOffset = 0; break;
++		}
++		if (DiffuseOffset)
++		{
++			if (VertexTypeDesc & D3DFVF_NORMAL)
++			{
++				DiffuseOffset += 3 * sizeof(float);
++			}
++			const DWORD Stride = GetVertexStride(VertexTypeDesc);
++			for (DWORD i = 0; i < VertexCount; ++i)
++			{
++				const DWORD Diffuse = *reinterpret_cast<const DWORD*>(reinterpret_cast<const BYTE*>(Vertices) + (i * Stride) + DiffuseOffset);
++				if (i == 0)
++				{
++					FirstDiffuse = Diffuse;
++				}
++				const DWORD Alpha = Diffuse >> 24;
++				MinVertexAlpha = min(MinVertexAlpha, Alpha);
++				MaxVertexAlpha = max(MaxVertexAlpha, Alpha);
++			}
++			HasVertexAlpha = true;
++		}
++	}
++
++	const UINT64 TextureId = reinterpret_cast<UINT_PTR>(Texture);
++	if (AlphaBlend && Texture)
++	{
++		static std::vector<UINT64> DumpedTextures;
++		if (std::find(DumpedTextures.begin(), DumpedTextures.end(), TextureId) == DumpedTextures.end())
++		{
++			DumpedTextures.push_back(TextureId);
++			if (IDirect3DTexture9* DrawTexture = Texture->GetD9DrawTexture(); DrawTexture && D3DXSaveTextureToFileInMemory)
++			{
++				char ExePath[MAX_PATH] = {};
++				if (GetModuleFileNameA(nullptr, ExePath, MAX_PATH))
++				{
++					if (char* Slash = strrchr(ExePath, '\\'))
++					{
++						*Slash = '\0';
++					}
++					char DumpDirectory[MAX_PATH] = {};
++					sprintf_s(DumpDirectory, "%s\\alpha-trace-textures", ExePath);
++					CreateDirectoryA(DumpDirectory, nullptr);
++
++					char DumpPath[MAX_PATH] = {};
++					sprintf_s(DumpPath, "%s\\tex-%08llX-%lux%lu-src%lu-dst%lu.png", DumpDirectory,
++						TextureId, Texture->GetD9Width(), Texture->GetD9Height(), SrcBlend, DestBlend);
++
++					ComPtr<ID3DXBuffer> Buffer;
++					const HRESULT DumpResult = D3DXSaveTextureToFileInMemory(Buffer.GetAddressOf(), D3DXIFF_PNG, DrawTexture, nullptr);
++					if (SUCCEEDED(DumpResult) && Buffer)
++					{
++						std::ofstream Output(DumpPath, std::ios::binary | std::ios::out);
++						if (Output.is_open())
++						{
++							Output.write(static_cast<const char*>(Buffer->GetBufferPointer()), Buffer->GetBufferSize());
++						}
++					}
++					Logging::Log() << "AlphaTrace texture dump tex=" << Texture << " path=" << DumpPath << " hr=" << (D3DERR)DumpResult;
++				}
++			}
++		}
++	}
++
++	UINT64 Signature = TextureId ^ (static_cast<UINT64>(PrimitiveType) << 48) ^ (static_cast<UINT64>(VertexTypeDesc) << 24) ^ VertexCount;
++	Signature ^= (static_cast<UINT64>(AlphaBlend) << 63) ^ (static_cast<UINT64>(SrcBlend) << 56) ^ (static_cast<UINT64>(DestBlend) << 52);
++	Signature ^= (static_cast<UINT64>(AlphaTest) << 51) ^ (static_cast<UINT64>(AlphaOp) << 44) ^ (static_cast<UINT64>(ColorOp) << 36);
++	Signature ^= (static_cast<UINT64>(MinVertexAlpha) << 8) ^ MaxVertexAlpha;
++	Signature ^= FirstDiffuse;
++	if (HasScreenPosition)
++	{
++		Signature ^= static_cast<UINT64>(static_cast<LONG>(MinVertexX)) << 32;
++		Signature ^= static_cast<UINT64>(static_cast<LONG>(MinVertexY));
++	}
++
++	static std::vector<UINT64> SeenSignatures;
++	if (SeenSignatures.size() >= 1024 || std::find(SeenSignatures.begin(), SeenSignatures.end(), Signature) != SeenSignatures.end())
++	{
++		return;
++	}
++	SeenSignatures.push_back(Signature);
++
++	Logging::Log() << "AlphaTrace " << DrawKind <<
++		" prim=" << PrimitiveType << " fvf=" << Logging::hex(VertexTypeDesc) << " verts=" << VertexCount <<
++		" tex=" << Texture << " size=" << (Texture ? Texture->GetD9Width() : 0) << "x" << (Texture ? Texture->GetD9Height() : 0) <<
++		" fmt=" << (Texture ? Texture->GetSurfaceFormat() : D3DFMT_UNKNOWN) << " ckey=" << ColorKey << " texAlpha=" << HasAlpha <<
++		" blend=" << AlphaBlend << " src=" << SrcBlend << " dst=" << DestBlend <<
++		" atest=" << AlphaTest << " afunc=" << AlphaFunc << " aref=" << AlphaRef <<
++		" colorOp=" << ColorOp << " alphaOp=" << AlphaOp <<
++		" min=" << MinFilter << " mag=" << MagFilter << " mip=" << MipFilter <<
++		" z=" << ZEnable << " zwrite=" << ZWrite <<
++		" va=" << (HasVertexAlpha ? static_cast<LONG>(MinVertexAlpha) : -1) << "-" << (HasVertexAlpha ? static_cast<LONG>(MaxVertexAlpha) : -1) <<
++		" diffuse=" << Logging::hex(FirstDiffuse) <<
++		" xy=" << (HasScreenPosition ? MinVertexX : -1.0f) << "," << (HasScreenPosition ? MinVertexY : -1.0f) << "-" <<
++		(HasScreenPosition ? MaxVertexX : -1.0f) << "," << (HasScreenPosition ? MaxVertexY : -1.0f);
++}
++
+ void m_IDirect3DDeviceX::RestoreDrawStates(HRESULT hr, DWORD dwFlags, DWORD DirectXVersion)
+ {
+ 	// Legacy device handling
+@@ -6885,6 +7342,10 @@ void m_IDirect3DDeviceX::RestoreDrawStates(HRESULT hr, DWORD dwFlags, DWORD Dire
+ 		(*d3d9Device)->SetRenderState(D3DRS_ALPHAFUNC, DrawStates.rsAlphaFunc);
+ 		(*d3d9Device)->SetRenderState(D3DRS_ALPHAREF, DrawStates.rsAlphaRef);
+ 	}
++	if (dwFlags & D3DDP_DXW_TEXTUREALPHAOVERRIDE)
++	{
++		(*d3d9Device)->SetTextureStageState(0, D3DTSS_ALPHAOP, DrawStates.tsAlphaOp0);
++	}
+ 	/*if (dwFlags & D3DDP_DXW_COLORKEYENABLE)
+ 	{
+ 		(*d3d9Device)->SetPixelShader(nullptr);
+@@ -7117,7 +7578,11 @@ void m_IDirect3DDeviceX::UpdateVertices(DWORD& dwVertexTypeDesc, LPVOID& lpVerti
+ 	}
+ 	else if (dwVertexTypeDesc & D3DFVF_XYZRHW)
+ 	{
+-		if (Config.DdrawClampVertexZDepth)
++		const bool ScaleVertices = Config.DdrawInternalResolutionScale > 1 && lpCurrentRenderTargetX &&
++			lpCurrentRenderTargetX->GetLogicalWidth() == 800 && lpCurrentRenderTargetX->GetLogicalHeight() == 600 &&
++			lpCurrentRenderTargetX->GetD9Width() > lpCurrentRenderTargetX->GetLogicalWidth() &&
++			lpCurrentRenderTargetX->GetD9Height() > lpCurrentRenderTargetX->GetLogicalHeight();
++		if (Config.DdrawClampVertexZDepth || ScaleVertices)
+ 		{
+ 			DWORD Stride = GetVertexStride(dwVertexTypeDesc);
+ 			VertexCache.resize((dwVertexStart + dwNumVertices) * Stride);
+@@ -7125,7 +7590,45 @@ void m_IDirect3DDeviceX::UpdateVertices(DWORD& dwVertexTypeDesc, LPVOID& lpVerti
+ 				reinterpret_cast<void*>((DWORD)lpVertices + (dwVertexStart * Stride)),
+ 				dwNumVertices * Stride);
+ 
+-			ClampVertices(VertexCache.data(), Stride, dwNumVertices);
++			if (Config.DdrawClampVertexZDepth)
++			{
++				ClampVertices(VertexCache.data(), Stride, dwNumVertices);
++			}
++
++			if (ScaleVertices)
++			{
++				const bool Widescreen =
++					static_cast<ULONGLONG>(lpCurrentRenderTargetX->GetD9Width()) * lpCurrentRenderTargetX->GetLogicalHeight() >
++					static_cast<ULONGLONG>(lpCurrentRenderTargetX->GetD9Height()) * lpCurrentRenderTargetX->GetLogicalWidth();
++				// Deathtrap's software transform/sort pipeline disables hardware Z for
++				// both its world and HUD, so ZENABLE cannot distinguish the layers.
++				// Its native patch exposes the exact scene-render boundary instead.
++				const bool SafeAreaUi = Widescreen && !IsDeathtrapWidescreenWorldRenderActive();
++				const float ScaleY = static_cast<float>(lpCurrentRenderTargetX->GetD9Height()) / lpCurrentRenderTargetX->GetLogicalHeight();
++				// In widescreen gameplay the native engine emits world vertices in
++				// target-aspect logical coordinates (960x600 for 16:10). Both layers
++				// therefore retain the vertical scale; only the legacy 800-wide UI is
++				// translated into the centered 4:3 safe area.
++				const float ScaleX = Widescreen ? ScaleY :
++					static_cast<float>(lpCurrentRenderTargetX->GetD9Width()) / lpCurrentRenderTargetX->GetLogicalWidth();
++				const float OffsetX = SafeAreaUi ?
++					(lpCurrentRenderTargetX->GetD9Width() - lpCurrentRenderTargetX->GetLogicalWidth() * ScaleY) * 0.5f : 0.0f;
++				for (DWORD i = 0; i < dwNumVertices; ++i)
++				{
++					float* Position = reinterpret_cast<float*>(VertexCache.data() + ((dwVertexStart + i) * Stride));
++					// Deathtrap sorts world polygons in software and passes camera-space
++					// Z with hardware depth disabled. D3D9 still clips XYZRHW Z to [0,1].
++					// Keep RHW intact for perspective textures; scope to the world pass,
++					// including 4:3, never the UI. No external probe flag is required.
++					if (IsDeathtrapWidescreenWorldRenderActive() &&
++						DeviceStates.RenderState[D3DRS_ZENABLE].State == D3DZB_FALSE)
++					{
++						Position[2] = 0.5f;
++					}
++					Position[0] = (Position[0] + 0.5f) * ScaleX + OffsetX - 0.5f;
++					Position[1] = (Position[1] + 0.5f) * ScaleY - 0.5f;
++				}
++			}
+ 
+ 			lpVertices = VertexCache.data();
+ 		}
+diff --git a/ddraw/IDirect3DDeviceX.h b/ddraw/IDirect3DDeviceX.h
+index f1e0b1e8d0f5f020ae5ca4ab8063a638e4ff6a9f..5c0fc98e4c8e658beb9456fd563efe319493b65d 100644
+--- a/ddraw/IDirect3DDeviceX.h
++++ b/ddraw/IDirect3DDeviceX.h
+@@ -212,6 +212,7 @@ private:
+ 		DWORD rsAlphaTestEnable = 0;
+ 		DWORD rsAlphaFunc = 0;
+ 		DWORD rsAlphaRef = 0;
++		DWORD tsAlphaOp0 = 0;
+ 		DWORD ssMinFilter[D3DHAL_TSS_MAXSTAGES] = {};
+ 		DWORD ssMagFilter[D3DHAL_TSS_MAXSTAGES] = {};
+ 		float lowColorKey[4] = {};
+@@ -358,6 +359,8 @@ private:
+ 	HRESULT RestoreStates();
+ 	void SetDefaults();
+ 	void SetDrawStates(DWORD dwVertexTypeDesc, DWORD& dwFlags, DWORD DirectXVersion);
++	void DumpTexture(UINT Stage, m_IDirectDrawSurfaceX* TextureSurface, IDirect3DTexture9* DrawTexture, bool ColorKey);
++	void TraceAlphaDraw(const char* DrawKind, D3DPRIMITIVETYPE PrimitiveType, DWORD VertexTypeDesc, DWORD VertexCount, const void* Vertices);
+ 	void RestoreDrawStates(HRESULT hr, DWORD dwFlags, DWORD DirectXVersion);
+ 	void UpdateVertices(DWORD& dwVertexTypeDesc, LPVOID& lpVertices, DWORD dwVertexStart, DWORD dwNumVertices);
+ 
+diff --git a/ddraw/IDirect3DTypes.cpp b/ddraw/IDirect3DTypes.cpp
+index 50f5c73f8869e46344e697230925e1b5ee465cd5..ac143930b25a3440cd493f2832ab2f5e2636f8f3 100644
+--- a/ddraw/IDirect3DTypes.cpp
++++ b/ddraw/IDirect3DTypes.cpp
+@@ -360,6 +360,41 @@ void ConvertDeviceDesc(D3DDEVICEDESC& Desc, const D3DDEVICEDESC7& Desc7)
+ 	Desc.dwMaxBufferSize = MAX_EXECUTE_BUFFER_SIZE;
+ 	Desc.dwMaxVertexCount = 65535;
+ 
++	// A few DX5 engines select materially different rendering paths from the
++	// advertised HAL profile.  Allow them to see the conservative capability
++	// set exposed by period hardware wrappers, while keeping Dd7to9's actual
++	// implementation unchanged.
++	if (Config.DdrawUseLegacyDirect3DCaps && Desc7.deviceGUID == IID_IDirect3DHALDevice)
++	{
++		Desc.dwFlags = 0x000001FF;
++		Desc.dcmColorModel = D3DCOLOR_RGB;
++		Desc.dwDevCaps = 0x00001EF1;
++		Desc.dtcTransformCaps.dwCaps = D3DTRANSFORMCAPS_CLIP;
++		Desc.bClipping = TRUE;
++		Desc.dlcLightingCaps.dwCaps = 0x0000000F;
++		Desc.dlcLightingCaps.dwLightingModel = D3DLIGHTINGMODEL_RGB;
++		Desc.dlcLightingCaps.dwNumLights = 8;
++
++		Desc.dpcLineCaps.dwMiscCaps = 0x00000003;
++		Desc.dpcLineCaps.dwRasterCaps = 0x000361B1;
++		Desc.dpcLineCaps.dwZCmpCaps = 0x000000FF;
++		Desc.dpcLineCaps.dwSrcBlendCaps = 0x00001FFF;
++		Desc.dpcLineCaps.dwDestBlendCaps = 0x00001FFF;
++		Desc.dpcLineCaps.dwAlphaCmpCaps = 0x000000FF;
++		Desc.dpcLineCaps.dwShadeCaps = 0x000C528A;
++		Desc.dpcLineCaps.dwTextureCaps = 0x0000001D;
++		Desc.dpcLineCaps.dwTextureFilterCaps = 0x0000003F;
++		Desc.dpcLineCaps.dwTextureBlendCaps = 0x000000CF;
++		Desc.dpcLineCaps.dwTextureAddressCaps = 0x0000001F;
++
++		Desc.dpcTriCaps = Desc.dpcLineCaps;
++		Desc.dpcTriCaps.dwMiscCaps = 0x00000073;
++		Desc.dwDeviceRenderBitDepth = 0x00000D00;
++		Desc.dwDeviceZBufferBitDepth = 0x00000600;
++		Desc.dwMaxBufferSize = 0;
++		Desc.dwMaxVertexCount = 0;
++	}
++
+ 	// Handle additional fields depending on the structure size
+ 	if (Desc.dwSize >= D3DDEVICEDESC5_SIZE)
+ 	{
+diff --git a/ddraw/IDirect3DTypes.h b/ddraw/IDirect3DTypes.h
+index f1ff1e9b1f551f7a63afb04adfd1c34d865d7fb2..2bf376a7550f5f63dda809e787ac32493122995e 100644
+--- a/ddraw/IDirect3DTypes.h
++++ b/ddraw/IDirect3DTypes.h
+@@ -14,6 +14,7 @@
+ #define D3DDP_DXW_SCALEMATRIX           0x00000020l
+ #define D3DDP_DXW_COLORKEYENABLE        0x00000040l
+ #define D3DDP_DXW_ALPHACOLORKEY         0x00000080l
++#define D3DDP_DXW_TEXTUREALPHAOVERRIDE  0x00000100l
+ 
+ #define D3DDEVICEDESC1_SIZE 172
+ #define D3DDEVICEDESC5_SIZE 204
+diff --git a/ddraw/IDirectDrawSurfaceX.cpp b/ddraw/IDirectDrawSurfaceX.cpp
+index 0ebaa3ca6e9aa0e04f66f0847374442c80614400..0ed6343245c8539389dded8135ff1b5d03cb11bb 100644
+--- a/ddraw/IDirectDrawSurfaceX.cpp
++++ b/ddraw/IDirectDrawSurfaceX.cpp
+@@ -1319,8 +1319,13 @@ HRESULT m_IDirectDrawSurfaceX::Flip(LPDIRECTDRAWSURFACE7 lpDDSurfaceTargetOverri
+ 		{
+ 			if (ddrawParent->IsInScene())
+ 			{
+-				LOG_LIMIT(100, __FUNCTION__ << " Error: Device is in scene when attempting to flip!");
+-				return DDERR_GENERIC;
++				if (!Config.DdrawAutoEndSceneOnFlip || FAILED(ddrawParent->EndActive3DScenes()))
++				{
++					LOG_LIMIT(100, __FUNCTION__ << " Error: Device is in scene when attempting to flip!");
++					return DDERR_GENERIC;
++				}
++
++				LOG_LIMIT(3, __FUNCTION__ << " Warning: ended active Direct3D scene before flip.");
+ 			}
+ 		}
+ 
+@@ -1454,6 +1459,20 @@ HRESULT m_IDirectDrawSurfaceX::Flip(LPDIRECTDRAWSURFACE7 lpDDSurfaceTargetOverri
+ 		if (IsRenderTarget())
+ 		{
+ 			ddrawParent->SetCurrentRenderTarget();
++
++			// Some legacy renderers intentionally leave portal/occlusion pixels
++			// untouched and expect the newly selected backbuffer to start black.
++			// A video-memory Flip rotates the old frontbuffer into that slot, so
++			// clear the complete physical surface after it has been rebound.
++			if (Config.DdrawClearFlipBackBuffer)
++			{
++				m_IDirectDrawSurfaceX* pRenderTarget = ddrawParent->GetRenderTargetSurface();
++				LPDIRECT3DSURFACE9 pSurfaceD9 = pRenderTarget ? pRenderTarget->GetD9Surface() : nullptr;
++				if (!pSurfaceD9 || FAILED((*d3d9Device)->ColorFill(pSurfaceD9, nullptr, D3DCOLOR_XRGB(0, 0, 0))))
++				{
++					LOG_LIMIT(100, __FUNCTION__ << " Error: failed to clear the new flip backbuffer.");
++				}
++			}
+ 		}
+ 
+ 		return DD_OK;
+@@ -4681,9 +4700,29 @@ HRESULT m_IDirectDrawSurfaceX::CreateD9Surface()
+ 	// Default usage
+ 	surface.Usage = 0;
+ 
+-	// Adjust Width to be byte-aligned
+-	surface.Width = GetByteAlignedWidth(surfaceDesc2.dwWidth, surface.BitCount);
+-	surface.Height = surfaceDesc2.dwHeight;
++	// Adjust Width to be byte-aligned. Deathtrap Dungeon exposes only an
++	// 800x600 3D mode even though the wrapper presents to a native-resolution
++	// backbuffer. Keep the legacy descriptor unchanged for the game, but allow
++	// the actual D3D9 render/depth surfaces to be larger.
++	DWORD PhysicalWidth = surfaceDesc2.dwWidth;
++	DWORD PhysicalHeight = surfaceDesc2.dwHeight;
++	if (Config.DdrawInternalResolutionScale > 1 && surfaceDesc2.dwWidth == 800 && surfaceDesc2.dwHeight == 600 &&
++		(IsRenderTarget() || IsDepthStencil()))
++	{
++		const DWORD Scale = min(Config.DdrawInternalResolutionScale, 4ul);
++		PhysicalWidth *= Scale;
++		PhysicalHeight *= Scale;
++		const DWORD AspectX1000 = DdrawWrapper::GetDeathtrapWidescreenAspectX1000();
++		if (AspectX1000 > 1333)
++		{
++			PhysicalWidth = max(PhysicalWidth,
++				static_cast<DWORD>((static_cast<ULONGLONG>(PhysicalHeight) * AspectX1000 + 500) / 1000));
++		}
++		Logging::Log() << "InternalResolution surface=" << this << " logical=800x600 physical=" << PhysicalWidth << "x" << PhysicalHeight
++			<< " rt=" << IsRenderTarget() << " depth=" << IsDepthStencil();
++	}
++	surface.Width = GetByteAlignedWidth(PhysicalWidth, surface.BitCount);
++	surface.Height = PhysicalHeight;
+ 
+ 	// Set lockable
+ 	surface.IsLockable = true;
+@@ -8222,14 +8261,6 @@ HRESULT m_IDirectDrawSurfaceX::CopyToDrawTexture(LPRECT lpDestRect)
+ 		return DDERR_GENERIC;
+ 	}
+ 
+-	IDirect3DSurface9* SrcSurface = Get3DMipMapSurface(0);
+-	ComPtr<IDirect3DSurface9> DestSurface;
+-	if (!SrcSurface || FAILED(surface.DrawTexture->GetSurfaceLevel(0, DestSurface.GetAddressOf())))
+-	{
+-		LOG_LIMIT(100, __FUNCTION__ << " Error: failed to get surface texture!");
+-		return DDERR_GENERIC;
+-	}
+-
+ 	// Get color key
+ 	DWORD ColorKey = 0;
+ 	if (surfaceDesc2.dwFlags & DDSD_CKSRCBLT)
+@@ -8249,13 +8280,54 @@ HRESULT m_IDirectDrawSurfaceX::CopyToDrawTexture(LPRECT lpDestRect)
+ 		}
+ 	}
+ 
+-	if (FAILED(D3DXLoadSurfaceFromSurface(DestSurface.Get(), nullptr, lpDestRect, SrcSurface, surface.PaletteEntryArray, lpDestRect, D3DX_FILTER_NONE, ColorKey)))
++
++	// Color-key textures use an A8R8G8B8 draw texture so transparent source
++	// pixels can be represented by alpha. Convert the full-size level first,
++	// then generate lower levels from that RGBA result. Generating RGB mipmaps
++	// before applying the color key blends thin effects into their black key
++	// background until they disappear; leaving RGBA mip levels uninitialized
++	// instead turns them into opaque black masks.
++	IDirect3DSurface9* SrcSurface = Get3DMipMapSurface(0);
++	ComPtr<IDirect3DSurface9> DestSurface;
++	if (!SrcSurface || FAILED(surface.DrawTexture->GetSurfaceLevel(0, DestSurface.GetAddressOf())))
+ 	{
+-		Logging::Log() << __FUNCTION__ " Error: failed to copy data from surface: " << surface.Format << " " << (void*)ColorKey << " " << lpDestRect;
++		LOG_LIMIT(100, __FUNCTION__ << " Error: failed to get surface texture!");
++		return DDERR_GENERIC;
++	}
+ 
++	if (FAILED(D3DXLoadSurfaceFromSurface(DestSurface.Get(), nullptr, lpDestRect, SrcSurface,
++		surface.PaletteEntryArray, lpDestRect, D3DX_FILTER_NONE, ColorKey)))
++	{
++		Logging::Log() << __FUNCTION__ " Error: failed to copy data from surface: " <<
++			surface.Format << " " << (void*)ColorKey << " " << lpDestRect;
+ 		return DDERR_GENERIC;
+ 	}
+ 
++	if (surface.DrawTexture->GetLevelCount() > 1)
++	{
++		if (IsMipMapAutogen())
++		{
++			surface.DrawTexture->GenerateMipSubLevels();
++		}
++		else
++		{
++			const DWORD LevelCount = surface.DrawTexture->GetLevelCount();
++			for (DWORD Level = 1; Level < LevelCount; ++Level)
++			{
++				ComPtr<IDirect3DSurface9> MipSource;
++				ComPtr<IDirect3DSurface9> MipDest;
++				if (FAILED(surface.DrawTexture->GetSurfaceLevel(Level - 1, MipSource.GetAddressOf())) ||
++					FAILED(surface.DrawTexture->GetSurfaceLevel(Level, MipDest.GetAddressOf())) ||
++					FAILED(D3DXLoadSurfaceFromSurface(MipDest.Get(), nullptr, nullptr, MipSource.Get(),
++						nullptr, nullptr, D3DX_FILTER_LINEAR, 0x00000000)))
++				{
++					LOG_LIMIT(100, __FUNCTION__ << " Error: failed to generate alpha color key MipMap level: " << Level);
++					return DDERR_GENERIC;
++				}
++			}
++		}
++	}
++
+ 	surface.IsDrawTextureDirty = false;
+ 
+ 	return DD_OK;
+diff --git a/ddraw/IDirectDrawSurfaceX.h b/ddraw/IDirectDrawSurfaceX.h
+index b132eb1e617f7543d9965e846c308bffe5ed2e13..44a63655086df62817d15ac5cf05fadee0459072 100644
+--- a/ddraw/IDirectDrawSurfaceX.h
++++ b/ddraw/IDirectDrawSurfaceX.h
+@@ -615,6 +615,8 @@ public:
+ 	HRESULT GenerateMipMapLevels();
+ 	DWORD GetD9Width() const { return surface.Width; }
+ 	DWORD GetD9Height() const { return surface.Height; }
++	DWORD GetLogicalWidth() const { return surfaceDesc2.dwWidth; }
++	DWORD GetLogicalHeight() const { return surfaceDesc2.dwHeight; }
+ 	D3DFORMAT GetD9Format() const { return surface.Format; }
+ 	LPDIRECT3DTEXTURE9 GetD9PaletteTexture() const { return primary.PaletteTexture; }
+ 	m_IDirect3DTextureX* GetAttachedTexture() { return attached3DTexture; }
+diff --git a/ddraw/IDirectDrawX.cpp b/ddraw/IDirectDrawX.cpp
+index bffe020535dffdf7b5b52d957ab033f64432bf8b..e61f8be4a8428a22fdacb57063ea0716f9d9c22e 100644
+--- a/ddraw/IDirectDrawX.cpp
++++ b/ddraw/IDirectDrawX.cpp
+@@ -512,8 +512,30 @@ HRESULT m_IDirectDrawX::CreateSurface2(LPDDSURFACEDESC2 lpDDSurfaceDesc2, LPDIRE
+ 		// Check for existing primary surface
+ 		if ((lpDDSurfaceDesc2->ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE) && GetPrimarySurface())
+ 		{
+-			LOG_LIMIT(100, __FUNCTION__ << " Error: primary surface already exists!");
+-			return DDERR_PRIMARYSURFACEALREADYEXISTS;
++			if (!Config.DdrawAllowPrimarySurfaceReplacement)
++			{
++				LOG_LIMIT(100, __FUNCTION__ << " Error: primary surface already exists!");
++				return DDERR_PRIMARYSURFACEALREADYEXISTS;
++			}
++
++			// Some legacy games create the next mode's primary surface before releasing the
++			// previous Direct3D device. End the old scene while its primary is still active;
++			// after replacing PrimarySurface the old device can no longer present/close it.
++			if (IsInScene())
++			{
++				const HRESULT endSceneResult = EndActive3DScenes();
++				if (FAILED(endSceneResult))
++				{
++					LOG_LIMIT(10, __FUNCTION__ << " Warning: failed to end the active scene before replacing the primary surface: " << (D3DERR)endSceneResult);
++				}
++				else
++				{
++					LOG_LIMIT(10, __FUNCTION__ << " Warning: ended the active scene before replacing the primary surface.");
++				}
++			}
++
++			LOG_LIMIT(10, __FUNCTION__ << " Warning: allowing a new primary surface to replace the active primary surface: " << PrimarySurface);
++			PrimarySurface = nullptr;
+ 		}
+ 
+ 		// Validate backbuffer
+@@ -3064,6 +3086,31 @@ bool m_IDirectDrawX::IsInScene()
+ 	return false;
+ }
+ 
++HRESULT m_IDirectDrawX::EndActive3DScenes()
++{
++	HRESULT hr = D3D_OK;
++
++	for (const auto& pDDraw : DDrawVector)
++	{
++		if (pDDraw->D3DInterface)
++		{
++			for (DWORD x = 0; m_IDirect3DDeviceX* D3DDeviceX = pDDraw->D3DInterface->GetNextD3DDevice(x); ++x)
++			{
++				if (D3DDeviceX->IsDeviceInScene())
++				{
++					const HRESULT endSceneResult = D3DDeviceX->EndScene();
++					if (FAILED(endSceneResult))
++					{
++						hr = endSceneResult;
++					}
++				}
++			}
++		}
++	}
++
++	return IsInScene() ? DDERR_GENERIC : hr;
++}
++
+ UINT m_IDirectDrawX::GetAdapterIndex() const
+ {
+ 	return d3d9AdapterIndex;
+@@ -5400,7 +5447,14 @@ HRESULT m_IDirectDrawX::CopyPrimarySurface(m_IDirectDrawSurfaceX* pPrimarySurfac
+ 	// Get source rect
+ 	RECT* pSrcRect = nullptr;
+ 	RECT SrcRect = { 0, 0, (LONG)pPrimarySurface->GetD9Width(), (LONG)pPrimarySurface->GetD9Height() };
+-	if (!IsExclusiveMode() && hWnd && !IsIconic(hWnd))
++	const bool InternalResolutionScaled = Config.DdrawInternalResolutionScale > 1 &&
++		pPrimarySurface->GetLogicalWidth() == 800 && pPrimarySurface->GetLogicalHeight() == 600 &&
++		pPrimarySurface->GetD9Width() > pPrimarySurface->GetLogicalWidth() &&
++		pPrimarySurface->GetD9Height() > pPrimarySurface->GetLogicalHeight();
++	// A supersampled source can intentionally exceed the desktop. Clipping it
++	// to the client rectangle would discard the right/bottom part of the scene
++	// and HUD before the full target is downsampled for presentation.
++	if (!InternalResolutionScaled && !IsExclusiveMode() && hWnd && !IsIconic(hWnd))
+ 	{
+ 		// Clip rect
+ 		RECT ClientRect = {};
+@@ -5428,6 +5482,42 @@ HRESULT m_IDirectDrawX::CopyPrimarySurface(m_IDirectDrawSurfaceX* pPrimarySurfac
+ 		pDestRect = &DestRect;
+ 	}
+ 
++	// Native-resolution render targets use the physical backbuffer size, so using
++	// that size to calculate aspect ratio incorrectly treats a stretched legacy
++	// image as native widescreen. Fit the game's logical display mode instead.
++	if (Config.DdrawMaintainAspectRatio && pDestBuffer && DisplayMode.Width && DisplayMode.Height)
++	{
++		D3DSURFACE_DESC DestDesc = {};
++		if (SUCCEEDED(pDestBuffer->GetDesc(&DestDesc)) && DestDesc.Width && DestDesc.Height)
++		{
++			DestRect = { 0, 0, (LONG)DestDesc.Width, (LONG)DestDesc.Height };
++
++			const bool Widescreen =
++				static_cast<ULONGLONG>(pPrimarySurface->GetD9Width()) * pPrimarySurface->GetLogicalHeight() >
++				static_cast<ULONGLONG>(pPrimarySurface->GetD9Height()) * pPrimarySurface->GetLogicalWidth();
++			const DWORD AspectWidth = Widescreen ? pPrimarySurface->GetD9Width() : DisplayMode.Width;
++			const DWORD AspectHeight = Widescreen ? pPrimarySurface->GetD9Height() : DisplayMode.Height;
++			if ((ULONGLONG)AspectWidth * DestDesc.Height < (ULONGLONG)AspectHeight * DestDesc.Width)
++			{
++				const DWORD scaledWidth = (DWORD)((ULONGLONG)DestDesc.Height * AspectWidth / AspectHeight);
++				DestRect.left = (LONG)((DestDesc.Width - scaledWidth) / 2);
++				DestRect.right = DestRect.left + (LONG)scaledWidth;
++			}
++			else if ((ULONGLONG)AspectWidth * DestDesc.Height > (ULONGLONG)AspectHeight * DestDesc.Width)
++			{
++				const DWORD scaledHeight = (DWORD)((ULONGLONG)DestDesc.Width * AspectHeight / AspectWidth);
++				DestRect.top = (LONG)((DestDesc.Height - scaledHeight) / 2);
++				DestRect.bottom = DestRect.top + (LONG)scaledHeight;
++			}
++
++			if (DestRect.left || DestRect.top || DestRect.right != (LONG)DestDesc.Width || DestRect.bottom != (LONG)DestDesc.Height)
++			{
++				d3d9Device->ColorFill(pDestBuffer, nullptr, D3DCOLOR_XRGB(0, 0, 0));
++				pDestRect = &DestRect;
++			}
++		}
++	}
++
+ 	// Copy render target
+ 	HRESULT hr = d3d9Device->StretchRect(pRenderTarget, pSrcRect, pDestBuffer, pDestRect, D3DTEXF_NONE);
+ 	if (FAILED(hr))
+diff --git a/ddraw/IDirectDrawX.h b/ddraw/IDirectDrawX.h
+index 66d1de49219c518ad170705984a6664ce636a88e..88b3da19e1d83ae3f705b94e30d3defd9bbf263e 100644
+--- a/ddraw/IDirectDrawX.h
++++ b/ddraw/IDirectDrawX.h
+@@ -223,6 +223,7 @@ public:
+ 	bool IsUsing3D() const { return Using3D; }
+ 	bool IsPrimaryRenderTarget() { return PrimarySurface ? PrimarySurface->IsRenderTarget() : false; }
+ 	bool IsInScene();
++	HRESULT EndActive3DScenes();
+ 
+ 	// Direct3D9 interfaces
+ 	UINT GetAdapterIndex() const;
+diff --git a/ddraw/ddraw.h b/ddraw/ddraw.h
+index e3be09633551153c903881717dd92ebb3c99ed17..157270da941b4bb2aafe7cf9ecf3e59276c3fdb4 100644
+--- a/ddraw/ddraw.h
++++ b/ddraw/ddraw.h
+@@ -112,6 +112,8 @@ namespace DdrawWrapper
+ 
+ 	CRITICAL_SECTION* GetDDCriticalSection();
+ 	CRITICAL_SECTION* GetPECriticalSection();
++	DWORD GetDeathtrapWidescreenAspectX1000();
++	bool IsDeathtrapWidescreenWorldRenderActive();
+ }
+ 
+ extern AddressLookupTableDdraw<void> ProxyAddressLookupTableDdraw;
+diff --git a/dxwrapper.vcxproj b/dxwrapper.vcxproj
+index ea3937b72a5efcd00cb0222298b65e3bb944b1aa..270bad44eab453a46c7f38564494cb0081bdd3cc 100644
+--- a/dxwrapper.vcxproj
++++ b/dxwrapper.vcxproj
+@@ -78,6 +78,7 @@
+       <OptimizeReferences>true</OptimizeReferences>
+       <EnableCOMDATFolding>true</EnableCOMDATFolding>
+       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
++      <AdditionalOptions>/PDBALTPATH:%_PDB% %(AdditionalOptions)</AdditionalOptions>
+     </Link>
+     <PostBuildEvent>
+       <Command>IF NOT EXIST "$(TargetDir)Build" mkdir "$(TargetDir)Build" &gt;nul
+@@ -1348,4 +1349,4 @@ copy /Y "$(ProjectDir)License.txt" "$(TargetDir)Build\" &gt;nul</Command>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+   <ImportGroup Label="ExtensionTargets">
+   </ImportGroup>
+-</Project>
+\ No newline at end of file
++</Project>

@@ -10,6 +10,10 @@ endif()
 project(deathtrap_native50_overlay VERSION ${DEATHTRAP_NATIVE_VERSION}
   LANGUAGES C CXX)
 
+add_executable(widescreen_layout_test tools/widescreen_layout_test.cc)
+target_compile_features(widescreen_layout_test PRIVATE cxx_std_17)
+target_include_directories(widescreen_layout_test PRIVATE src)
+
 if(NOT WIN32 OR NOT MSVC)
   message(FATAL_ERROR "Deathtrap Native 50 requires 32-bit Windows and MSVC")
 endif()
@@ -76,6 +80,17 @@ target_compile_options(dinput_proxy_smoke_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
 target_link_libraries(dinput_proxy_smoke_test PRIVATE dxguid)
 
+add_executable(input_device_routing_test
+  tools/input_device_routing_test.cc
+  src/deathtrap_native_render_patch.cc
+  src/native_d3d11_present_guard.cc)
+target_compile_features(input_device_routing_test PRIVATE cxx_std_17)
+target_compile_definitions(input_device_routing_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(input_device_routing_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(input_device_routing_test PRIVATE d3d11 dxgi dxguid minhook winmm)
+
 add_executable(camera_spring_arm_test
   tools/camera_spring_arm_test.cc)
 target_compile_features(camera_spring_arm_test PRIVATE cxx_std_17)
@@ -137,6 +152,20 @@ add_executable(selector_time_dilation_test
 target_compile_features(selector_time_dilation_test PRIVATE cxx_std_17)
 target_include_directories(selector_time_dilation_test PRIVATE src)
 target_compile_options(selector_time_dilation_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
+
+add_executable(selector_gameplay_command_test
+  tools/selector_gameplay_command_test.cc)
+target_compile_features(selector_gameplay_command_test PRIVATE cxx_std_17)
+target_include_directories(selector_gameplay_command_test PRIVATE src)
+target_compile_options(selector_gameplay_command_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
+
+add_executable(selector_camera_handoff_test
+  tools/selector_camera_handoff_probe.cc)
+target_compile_features(selector_camera_handoff_test PRIVATE cxx_std_17)
+target_include_directories(selector_camera_handoff_test PRIVATE src)
+target_compile_options(selector_camera_handoff_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
 
 add_executable(music_redbook_probe

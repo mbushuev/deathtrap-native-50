@@ -118,6 +118,43 @@ struct CameraContinuousLookAtBasis {
   bool valid = false;
 };
 
+// Smooth source-owned head translation without replaying source-owned angles.
+inline std::array<double, 3> InterpolateHeadCameraTranslation(
+    const std::array<double, 3>& previous,
+    const std::array<double, 3>& current, double phase) {
+  if (!std::isfinite(phase)) return current;
+  std::array<double, 3> result{};
+  for (size_t axis = 0; axis < 3u; ++axis) {
+    if (!std::isfinite(previous[axis]) || !std::isfinite(current[axis]))
+      return current;
+    result[axis] = previous[axis] +
+        (current[axis] - previous[axis]) * std::clamp(phase, 0.0, 1.0);
+  }
+  return result;
+}
+
+// Selector look has already displayed the current angle. Only interpolate
+// distance; interpolating the angle again replays mouse motion backwards.
+// The caller must collision-check this proposed point before publication.
+inline std::array<double, 3> InterpolateCameraRadiusAtCurrentAngle(
+    double previous_radius, const std::array<double, 3>& focus,
+    const std::array<double, 3>& current, double phase) {
+  const double radius = std::hypot(
+      std::hypot(current[0] - focus[0], current[2] - focus[2]),
+      current[1] - focus[1]);
+  if (!std::isfinite(radius) || radius < 0.000001 ||
+      !std::isfinite(previous_radius) || previous_radius < 0.0 ||
+      !std::isfinite(phase)) return current;
+  const double selected = previous_radius +
+      (radius - previous_radius) * std::clamp(phase, 0.0, 1.0);
+  std::array<double, 3> result{};
+  for (size_t axis = 0; axis < 3u; ++axis) {
+    result[axis] = focus[axis] +
+        (current[axis] - focus[axis]) * selected / radius;
+  }
+  return result;
+}
+
 inline CameraContinuousLookAtBasis BuildCameraContinuousLookAtBasis(
     const std::array<double, 3>& position,
     const std::array<double, 3>& focus) {

@@ -3,8 +3,9 @@
 This directory contains only the unmodified x86 runtime files required by
 Deathtrap Dungeon:
 
-- `x86/DDraw.dll`
 - `x86/D3DImm.dll`
+- `x86/DDraw.dll` (retained for rollback/reference)
+- `x86/D3D9.dll` (the active backend for the widescreen Dd7to9 chain)
 
 They come from dgVoodoo2 2.86.2 by Dege. The control panel and unrelated
 wrappers are intentionally not included.

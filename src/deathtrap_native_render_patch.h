@@ -97,8 +97,17 @@ bool ConsumeDeathtrapNativeRateKeyboardToggle();
 void SubmitDeathtrapPhysicalMouseDelta(int32_t delta_x, int32_t delta_y);
 bool DeathtrapModernCameraConsumesMouse();
 
+// Samples the already-acquired DirectInput mouse between sparse gameplay
+// ticks. This is used only by selector slow motion so camera-look can remain
+// presentation-rate without advancing gameplay or replaying button actions.
+bool PollDeathtrapPresentationMouseDelta(int32_t* delta_x, int32_t* delta_y);
+
 // Frontend-safe gate for the DirectInput mouse-to-retail-combat translator.
 bool DeathtrapGameplayAcceptsMouseCombat();
+
+// The melee and ranged selectors share one native active-weapon field.
+// Ranged IDs occupy the verified 8..13 interval.
+bool DeathtrapRangedWeaponSelected();
 
 // True only while the overlay-owned body-visible first-person camera is the
 // active gameplay view.
@@ -134,6 +143,14 @@ uint64_t GetDeathtrapNativeSuppressedPresentCount();
 // execute synchronously on the game's render thread.
 DeathtrapNativePresentationStage GetDeathtrapNativePresentationStage();
 uint64_t GetDeathtrapNativePresentationTick();
+
+// Exact world-render boundary consumed by the DirectDraw presentation proxy.
+// HUD, menus and movies are deliberately outside it.
+bool DeathtrapWidescreenWorldRenderActive();
+
+// Output aspect * 1000. 0 disables, 1 selects the current monitor, and a
+// larger value is a manual override.
+uint32_t DeathtrapWidescreenAspectX1000();
 
 // Read-only presentation state for the controller's four-category selector.
 // The D3D11 layer uses this to draw an eight-direction marker after the game

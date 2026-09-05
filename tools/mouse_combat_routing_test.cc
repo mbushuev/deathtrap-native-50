@@ -76,6 +76,14 @@ int main() {
   Require(simple_attack.modifier_down && simple_attack.key_w,
           "plain left click must emit the verified F+W grammar");
 
+  const auto ranged_attack = ResolveMouseCombatKeyboardPlan(
+      true, true, false, true, false, true, false, true);
+  Require(ranged_attack.attack == MouseCombatAttack::kRanged &&
+              ranged_attack.modifier_down && !ranged_attack.key_w &&
+              !ranged_attack.key_a && !ranged_attack.key_s &&
+              !ranged_attack.key_d,
+          "ranged fire must emit plain F without a movement direction");
+
   const auto explicit_forward = ResolveMouseCombatKeyboardPlan(
       true, true, false, true, false, false, false);
   Require(explicit_forward.attack == MouseCombatAttack::kForward &&

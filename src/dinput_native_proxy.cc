@@ -104,6 +104,7 @@ std::atomic<bool> g_physical_left_button_press_pending{false};
 std::atomic<uint64_t> g_last_physical_cursor_activity_ms{0};
 std::atomic<uint64_t> g_last_controller_cursor_activity_ms{0};
 std::atomic<IDirectInputDeviceA*> g_support_mouse_device{nullptr};
+std::atomic<uint32_t> g_support_mouse_data_size{0};
 std::atomic<HWND> g_support_mouse_window{nullptr};
 std::atomic<uint32_t> g_support_mouse_cooperative_flags{0};
 std::atomic<uint64_t> g_support_mouse_state_calls{0};
@@ -500,10 +501,12 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     const bool attack_button = physical_left_button || controller_attack;
     const bool gameplay_accepts_combat =
         DeathtrapGameplayAcceptsMouseCombat();
+    const bool ranged_weapon_selected =
+        gameplay_accepts_combat && DeathtrapRangedWeaponSelected();
     const auto combat_plan =
         deathtrap::input::ResolveMouseCombatKeyboardPlan(
             attack_button, gameplay_accepts_combat, immersive_vector,
-            forward, backward, left, right);
+            forward, backward, left, right, ranged_weapon_selected);
     if (combat_plan.submit_immersive_movement) {
       const int32_t lateral = static_cast<int32_t>(right) -
           static_cast<int32_t>(left);
@@ -623,6 +626,12 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetData(
     return result;
   }
 
+  // DirectInput implementations share device vtables. Keyboard scan code 4
+  // (the '3' key) is also DIMOFS_Y; never interpret another device's events
+  // using the mouse layout or inject controller mouse events into that queue.
+  if (device != g_support_mouse_device.load(std::memory_order_acquire)) {
+    return result;
+  }
   g_support_mouse_data_calls.fetch_add(1, std::memory_order_relaxed);
 
   DWORD written = *count;
@@ -689,7 +698,14 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetData(
       ++kept;
     }
     written = kept;
-    if (!peek && (physical_x != 0 || physical_y != 0)) {
+    // Immediate state and buffered events describe the same physical motion.
+    // The standard mouse is polled via GetDeviceState, including between slow
+    // gameplay ticks. Its queued axis events must be removed, not replayed.
+    const uint32_t mouse_state_size =
+        g_support_mouse_data_size.load(std::memory_order_acquire);
+    const bool immediate_axes = mouse_state_size == sizeof(DIMOUSESTATE) ||
+        mouse_state_size == sizeof(DIMOUSESTATE2);
+    if (!immediate_axes && !peek && (physical_x != 0 || physical_y != 0)) {
       SubmitDeathtrapPhysicalMouseDelta(physical_x, physical_y);
     }
   }
@@ -775,6 +791,14 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceSetDataFormat(
       ? g_direct_input_device_set_data_format(device, format)
       : DIERR_GENERIC;
   if (device == g_support_mouse_device.load(std::memory_order_acquire)) {
+    if (SUCCEEDED(result) && format &&
+        (format->dwDataSize == sizeof(DIMOUSESTATE) ||
+         format->dwDataSize == sizeof(DIMOUSESTATE2))) {
+      g_support_mouse_data_size.store(format->dwDataSize,
+                                      std::memory_order_release);
+    } else if (SUCCEEDED(result)) {
+      g_support_mouse_data_size.store(0, std::memory_order_release);
+    }
     AppendDeathtrapSupportLog(
         "support_mouse_data_format result=0x%08lx size=%lu objects=%lu "
         "flags=0x%08lx",
@@ -840,6 +864,7 @@ HRESULT STDMETHODCALLTYPE HookDirectInputCreateDeviceA(
   if (SUCCEEDED(result) && device && *device &&
       IsEqualGUID(device_guid, GUID_SysMouse)) {
     g_support_mouse_device.store(*device, std::memory_order_release);
+    g_support_mouse_data_size.store(0, std::memory_order_release);
     void** vtable = *reinterpret_cast<void***>(*device);
     const bool acquire_hooked = PatchVtableSlot(
         vtable, 7, reinterpret_cast<void*>(&HookDirectInputDeviceAcquire),
@@ -870,6 +895,46 @@ HRESULT STDMETHODCALLTYPE HookDirectInputCreateDeviceA(
         data_format_hooked ? 1u : 0u, cooperative_hooked ? 1u : 0u);
   }
   return result;
+}
+
+bool PollDeathtrapPresentationMouseDeltaInternal(int32_t* delta_x,
+                                                 int32_t* delta_y) {
+  if (delta_x) {
+    *delta_x = 0;
+  }
+  if (delta_y) {
+    *delta_y = 0;
+  }
+  if (!delta_x || !delta_y || !DeathtrapModernCameraConsumesMouse() ||
+      !g_direct_input_device_get_state) {
+    return false;
+  }
+  IDirectInputDeviceA* device =
+      g_support_mouse_device.load(std::memory_order_acquire);
+  const uint32_t data_size =
+      g_support_mouse_data_size.load(std::memory_order_acquire);
+  if (!device || (data_size != sizeof(DIMOUSESTATE) &&
+                  data_size != sizeof(DIMOUSESTATE2))) {
+    return false;
+  }
+
+  DIMOUSESTATE2 state = {};
+  const HRESULT result = g_direct_input_device_get_state(
+      device, data_size, &state);
+  if (FAILED(result)) {
+    return false;
+  }
+  *delta_x = std::clamp(static_cast<int32_t>(state.lX), -2048, 2048);
+  *delta_y = std::clamp(static_cast<int32_t>(state.lY), -2048, 2048);
+  if (state.lZ != 0) {
+    QueueDeathtrapWeaponWheelDelta(state.lZ);
+  }
+  if (*delta_x != 0 || *delta_y != 0) {
+    AccumulateSupportMouseDelta(*delta_x, *delta_y);
+    NotePhysicalCursorActivity(*delta_x, *delta_y);
+    return true;
+  }
+  return false;
 }
 
 void AttachDirectInput(IDirectInputA* direct_input) {
@@ -1261,6 +1326,11 @@ void SubmitDeathtrapXInputMouseState(int32_t delta_x, int32_t delta_y,
                                           right_button);
 }
 
+bool PollDeathtrapPresentationMouseDelta(int32_t* delta_x,
+                                         int32_t* delta_y) {
+  return PollDeathtrapPresentationMouseDeltaInternal(delta_x, delta_y);
+}
+
 void SubmitDeathtrapXInputCombatState(bool attack, bool forward, bool backward,
                                       bool left, bool right) {
   const uint8_t state = static_cast<uint8_t>(
@@ -1343,4 +1413,12 @@ extern "C" HRESULT WINAPI Proxy_DirectInputCreateA(
     AttachDirectInput(*direct_input);
   }
   return result;
+}
+
+extern "C" BOOL WINAPI Proxy_DeathtrapWidescreenWorldRenderActive() {
+  return DeathtrapWidescreenWorldRenderActive() ? TRUE : FALSE;
+}
+
+extern "C" DWORD WINAPI Proxy_DeathtrapWidescreenAspectX1000() {
+  return DeathtrapWidescreenAspectX1000();
 }

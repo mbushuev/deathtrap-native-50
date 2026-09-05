@@ -26,13 +26,14 @@ configuration must keep `Diagnostics/DebugLog=0`.
 
 The ZIP must contain only the runtime DLL and INI, the two verified unmodified
 dgVoodoo 2.86.2 x86 runtime DLLs and tested configuration in a `payload`
-directory, the two optional setup-reference screenshots, plus the top-level
-one-click launcher, PowerShell installer, short user README, user-facing
-changelog, per-file checksum manifest, required third-party notices and the
-MIT licence. Keeping the payload separate prevents archive extraction from
-overwriting installed files before the installer creates its rollback copy.
-The ZIP must not contain the repository directory tree or internal development
-documentation.
+directory, the two optional setup-reference screenshots, the exact
+Deathtrap-specific dxwrapper source patch and reproduction instructions, plus
+the top-level one-click launcher, PowerShell installer, short user README,
+user-facing changelog, per-file checksum manifest, required third-party
+notices and the MIT licence. Keeping the payload separate prevents archive
+extraction from overwriting installed files before the installer creates its
+rollback copy. The ZIP must not contain the repository directory tree or
+internal development documentation.
 
 ## Tagging
 

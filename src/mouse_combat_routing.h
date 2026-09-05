@@ -10,6 +10,7 @@ enum class MouseCombatAttack : uint8_t {
   kLeft = 2,
   kRight = 3,
   kBack = 4,
+  kRanged = 5,
 };
 
 struct MouseCombatKeyboardPlan {
@@ -76,8 +77,15 @@ constexpr ControllerJoystickMovementPlan ResolveControllerJoystickMovement(
 constexpr MouseCombatKeyboardPlan ResolveMouseCombatKeyboardPlan(
     bool left_button, bool gameplay_accepts_combat,
     bool immersive_vector_locomotion, bool forward, bool backward, bool left,
-    bool right) {
+    bool right, bool ranged_weapon_selected = false) {
   if (left_button && gameplay_accepts_combat) {
+    // ACTION_ATTACK_RANGED is plain F. The directional chords below are the
+    // retail melee grammar; sending their W/A/D components while a ranged
+    // weapon is active also moves Lara as the projectile is launched.
+    if (ranged_weapon_selected) {
+      return {MouseCombatAttack::kRanged, true, false, false, false, false,
+              false, false};
+    }
     if (backward || (left && right)) {
       return {MouseCombatAttack::kBack, true, false, false, false, true,
               false, true};

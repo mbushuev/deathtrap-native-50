@@ -8,6 +8,19 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.225 — widescreen and camera refinements
+
+- Adds automatic widescreen gameplay while preserving the proportions of
+  menus, videos and the HUD, including the stamina bar.
+- Fixes the black 3D scene on the bundled dgVoodoo rendering path.
+- Makes first-person turning and movement smooth during inventory slow motion.
+- Improves third-person follow and collision recovery during slow motion;
+  camera recovery no longer pauses when mouse input stops.
+- Fixes repeated item activation during selector slow motion and separates
+  camera input from keyboard bindings and ranged-fire movement.
+- Allows installation into any game folder without a Steam manifest or
+  Steam-specific directory layout; required game files are checked first.
+
 ## 0.0.224 — remappable controls and selector slow motion
 
 - Expands the original Keyboard Setup screen into two pages covering all

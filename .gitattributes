@@ -1,6 +1,7 @@
 *.dll binary
 *.exe binary
 *.png binary
+third_party/deathtrap-dxwrapper-release225/source/*.patch text eol=lf whitespace=-trailing-space,-space-before-tab
 *.conf text eol=crlf
 config/dgVoodoo-recommended.conf -whitespace
 *.ini text eol=crlf

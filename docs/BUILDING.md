@@ -36,22 +36,22 @@ DLL is required.
 
 ## Result
 
-The two runtime files are:
+The project build itself produces:
 
 ```text
 DINPUT.dll
 deathtrap_native.ini
 ```
 
-dgVoodoo is installed separately by the user. The verified configuration uses
-the x86 `DDraw.dll`, `D3DImm.dll` and `dgVoodoo.conf`; `D3D9.dll` is optional
-and is not loaded by Deathtrap's DirectDraw path. Version 2.86 is the runtime
-compatibility baseline; 2.86.2 is the validated reference, not a hard-coded
-binary dependency.
+The complete package also includes the tested Deathtrap dxwrapper `DDraw.dll`
+and `dxwrapper.dll`, plus the unmodified dgVoodoo 2.86.2 x86 `D3D9.dll` and
+`D3DImm.dll`. At runtime the tested chain is dxwrapper Dd7to9 -> dgVoodoo D3D9
+-> D3D11. Both configurations are part of the verified payload; users do not
+install dgVoodoo separately.
 
-Copying these two files manually is incomplete unless the required bindings
-are also merged into `ASYLUM/keys.cfg`. Build the complete distributable ZIP,
-including the installer and documentation, with:
+Copying only the two build outputs is incomplete: the wrapper chain and the
+required `ASYLUM/keys.cfg` bindings are also required. Build the complete
+distributable ZIP, including the installer and documentation, with:
 
 ```powershell
 .\scripts\package-release.ps1 -OutputDirectory artifacts

@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current development version: **0.0.224**
+Current development version: **0.0.225**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -8,7 +8,7 @@ Current development version: **0.0.224**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.224.png" alt="Deathtrap Native 50 v0.0.224" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.225.png" alt="Deathtrap Native 50 v0.0.225" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -23,20 +23,22 @@ validated through extensive manual playtesting and automated tests.
 Verified and tested with the
 [Steam release of Deathtrap Dungeon](https://store.steampowered.com/app/245010/Deathtrap_Dungeon/).
 
-The release is ready to install as-is. The required dgVoodoo runtime and the
-tested graphics configuration are already included—there is nothing to
-download or configure before the first launch.
+The release includes the Deathtrap widescreen layer,
+dgVoodoo runtime and graphics configurations are already included—there is
+nothing to download or configure before the first launch.
 
 This project is not affiliated with or endorsed by Square Enix, Eidos
 Interactive, Asylum Studios, Ian Livingstone or the developers of dgVoodoo.
 It contains no game assets, game executables or soundtrack files. The release
-redistributes only the two unmodified dgVoodoo runtime DLLs required by this
-game, under dgVoodoo's published redistribution terms.
+redistributes only the required wrapper runtime files under their published
+redistribution terms.
 
 ## Highlights
 
 - Approximately 50 FPS native presentation while preserving the original game
   speed, AI, combat, collision, animation and audio clocks.
+- True Hor+ widescreen gameplay with correctly scaled and positioned 4:3 HUD,
+  menus and movies, including the original run/stamina bar.
 - Freely controlled modern third-person orbit camera for mouse and right stick,
   with collision handling and support for the game's authored camera shots.
 - Camera-relative Xbox-compatible controller movement with faster, more
@@ -84,8 +86,8 @@ The current release supports:
 - the original 32-bit game process;
 - the tested game binaries below, or another build with a compatible internal
   layout;
-- the bundled, tested dgVoodoo2 2.86.2 x86 DirectDraw/D3DImm runtime using its
-  D3D11 backend.
+- the tested Deathtrap Dd7to9 native-canvas layer feeding the bundled,
+  unmodified dgVoodoo2 2.86.2 x86 D3D9 runtime and D3D11 backend.
 
 | File | Tested Steam SHA-256 |
 |---|---|
@@ -98,12 +100,11 @@ fan patches and modified executables have not been verified and may work
 partially, fail to activate, crash or corrupt game state. The DLL retains a
 structural safety check before applying fixed-address hooks.
 
-[dgVoodoo2](https://github.com/dege-diosg/dgVoodoo2) is an independent runtime.
-The release bundles the unmodified x86 `DDraw.dll` and `D3DImm.dll` from
-dgVoodoo 2.86.2 together with the exact tested `dgVoodoo.conf`. `D3D9.dll` and
-`dgVoodooCpl.exe` are not needed for the verified DirectDraw path and are not
-included. Advanced users may still download the complete dgVoodoo package and
-change the configuration after installation.
+[dxwrapper](https://github.com/elishacloud/dxwrapper) supplies the
+Deathtrap-specific Dd7to9 layer used by the widescreen renderer. Its local
+D3D9 output is handled by the unmodified x86 `D3D9.dll` from
+[dgVoodoo2](https://github.com/dege-diosg/dgVoodoo2) 2.86.2. dgVoodoo remains
+the final D3D11 backend.
 
 ## Download and verification
 
@@ -127,13 +128,21 @@ payload/
   DINPUT.dll
   deathtrap_native.ini
   keys.cfg
+  dxwrapper.ini
   dgVoodoo.conf
+  dxwrapper/
+    DDraw.dll                Deathtrap native-canvas Dd7to9 stub
+    dxwrapper.dll            Deathtrap native-canvas implementation
   dgVoodoo/
-    DDraw.dll                dgVoodoo 2.86.2 x86
     D3DImm.dll               dgVoodoo 2.86.2 x86
+    D3D9.dll                 dgVoodoo 2.86.2 x86
 optional/
   dgVoodoo-General.png       visual reference for the General tab
   dgVoodoo-DirectX.png       visual reference for the DirectX tab
+source/
+  dxwrapper/
+    README.md                 exact base and reproduction instructions
+    deathtrap-dxwrapper.patch Deathtrap-specific source modifications
 ```
 
 `THIRD_PARTY_NOTICES.txt` is required by the licences of code statically linked
@@ -157,11 +166,11 @@ That is the complete normal installation. `INSTALL.cmd` checks the game,
 backs up any existing patch, dgVoodoo, control and rendering files, and then
 installs the complete tested setup.
 
-The installed tested preset uses `3x` internal DirectX resolution, `8x` MSAA,
-`16x` anisotropic filtering, automatic mipmaps and forced VSync. These values
-make a large visual difference compared with unscaled dgVoodoo defaults. If
-performance is insufficient, use `2x` resolution and `4x` MSAA instead; keep
-the D3D11 FL11 output API unchanged.
+The installed preset creates one aspect-correct render target, 1800 pixels
+high at the default scale of 3, and fits it to the display. It is not necessarily
+the monitor's native resolution. dgVoodoo resolution forcing and MSAA are deliberately
+left application-controlled so the native canvas is not enlarged a second
+time; 16x texture filtering, automatic mipmaps and forced VSync remain enabled.
 
 ### Optional: tune dgVoodoo settings
 
@@ -187,15 +196,17 @@ supported by the native rendering path.
 
 ![Recommended dgVoodoo DirectX settings](docs/images/dgvoodoo-directx.png)
 
-`<SteamLibrary>` is a placeholder for any Steam library. The installer:
+`<SteamLibrary>` in examples is a placeholder. The game folder may be anywhere;
+no Steam directory layout or manifest is required. The installer:
 
-- identifies the Steam installation and warns if its game hashes differ from
+- checks `DD_CD.EXE`, `Dungeon.dll`, `ASYLUM/keys.cfg` and `ASYLUM/config.dat`
+  before making changes, and warns if the game hashes differ from
   the tested build without blocking installation;
 - verifies the bundled dgVoodoo runtime hashes and required D3D11 setting;
-- backs up the installed patch DLL/configuration, `DDraw.dll`, `D3DImm.dll`,
-  `dgVoodoo.conf`, `ASYLUM/keys.cfg` and `ASYLUM/config.dat` before changing
-  them;
-- installs the tested dgVoodoo 2.86.2 x86 runtime and high-quality profile;
+- backs up the installed patch and wrapper files, including `DINPUT.dll`,
+  `DDraw.dll`, `dxwrapper.dll`, `D3D9.dll`, both wrapper configurations and
+  the retail control/rendering files;
+- installs the tested native-canvas layer and dgVoodoo D3D9/D3D11 backend;
 - replaces `ASYLUM/keys.cfg` with the exact keyboard, mouse and joystick
   profile tested with this DLL; the previous file remains in the rollback
   directory;

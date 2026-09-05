@@ -2,15 +2,12 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) `
     ("deathtrap-installer-hash-warning-" + [guid]::NewGuid().ToString('N'))
-$steamApps = Join-Path $testRoot 'steamapps'
-$game = Join-Path $steamApps 'common\Deathtrap Dungeon'
+$game = Join-Path $testRoot 'Custom games\Dungeon copy'
 
 try {
-    New-Item -ItemType Directory -Path $game -Force | Out-Null
-    [System.IO.File]::WriteAllText(
-        (Join-Path $steamApps 'appmanifest_245010.acf'),
-        '"AppState" { "appid" "245010" }')
-    foreach ($name in @('Dungeon.dll', 'DD_CD.EXE', 'DDraw.dll', 'D3DImm.dll')) {
+    New-Item -ItemType Directory -Path (Join-Path $game 'ASYLUM') -Force | Out-Null
+    foreach ($name in @('Dungeon.dll', 'DD_CD.EXE', 'DDraw.dll', 'D3DImm.dll',
+                        'ASYLUM\keys.cfg', 'ASYLUM\config.dat')) {
         [System.IO.File]::WriteAllText(
             (Join-Path $game $name), "deliberately unverified $name")
     }

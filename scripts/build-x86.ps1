@@ -79,6 +79,8 @@ $inputCommands = Join-Path $buildPath "$Configuration\input_command_bindings_tes
 $inputPages = Join-Path $buildPath "$Configuration\input_binding_pages_test.exe"
 $safeSave = Join-Path $buildPath "$Configuration\safe_save_test.exe"
 $selectorTime = Join-Path $buildPath "$Configuration\selector_time_dilation_test.exe"
+$selectorGameplay = Join-Path $buildPath "$Configuration\selector_gameplay_command_test.exe"
+$selectorCameraHandoff = Join-Path $buildPath "$Configuration\selector_camera_handoff_test.exe"
 if (-not (Test-Path -LiteralPath $dll)) { throw "Missing build output: $dll" }
 if (-not (Test-Path -LiteralPath $smoke)) { throw "Missing smoke test: $smoke" }
 if (-not (Test-Path -LiteralPath $cameraSpring)) { throw "Missing camera spring test: $cameraSpring" }
@@ -90,9 +92,17 @@ if (-not (Test-Path -LiteralPath $inputCommands)) { throw "Missing input command
 if (-not (Test-Path -LiteralPath $inputPages)) { throw "Missing input page test: $inputPages" }
 if (-not (Test-Path -LiteralPath $safeSave)) { throw "Missing safe save test: $safeSave" }
 if (-not (Test-Path -LiteralPath $selectorTime)) { throw "Missing selector time dilation test: $selectorTime" }
+if (-not (Test-Path -LiteralPath $selectorGameplay)) { throw "Missing selector gameplay command test: $selectorGameplay" }
+if (-not (Test-Path -LiteralPath $selectorCameraHandoff)) { throw "Missing selector camera handoff test: $selectorCameraHandoff" }
 
 & $smoke $dll
 if ($LASTEXITCODE -ne 0) { throw 'DirectInput forwarding smoke test failed.' }
+
+& (Join-Path $buildPath "$Configuration\input_device_routing_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'DirectInput device/axis ownership test failed.' }
+
+& (Join-Path $buildPath "$Configuration\widescreen_layout_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'Widescreen layout matrix test failed.' }
 
 & $cameraSpring
 if ($LASTEXITCODE -ne 0) { throw 'Camera spring-arm test failed.' }
@@ -120,6 +130,12 @@ if ($LASTEXITCODE -ne 0) { throw 'Safe save eligibility test failed.' }
 
 & $selectorTime
 if ($LASTEXITCODE -ne 0) { throw 'Selector time dilation test failed.' }
+
+& $selectorGameplay
+if ($LASTEXITCODE -ne 0) { throw 'Selector gameplay command test failed.' }
+
+& $selectorCameraHandoff
+if ($LASTEXITCODE -ne 0) { throw 'Selector camera handoff test failed.' }
 
 & (Join-Path $PSScriptRoot 'test-install-crlf.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Installer CRLF binding test failed.' }

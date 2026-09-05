@@ -7,3 +7,5 @@ EXPORTS
     DllGetClassObject=Proxy_DllGetClassObject @5 PRIVATE
     DllRegisterServer=Proxy_DllRegisterServer @6 PRIVATE
     DllUnregisterServer=Proxy_DllUnregisterServer @7 PRIVATE
+    DeathtrapWidescreenWorldRenderActive=Proxy_DeathtrapWidescreenWorldRenderActive
+    DeathtrapWidescreenAspectX1000=Proxy_DeathtrapWidescreenAspectX1000

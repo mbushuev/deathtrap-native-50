@@ -1,9 +1,9 @@
 # Third-party notices
 
-The public package also includes two unmodified runtime files from dgVoodoo
-2.86.2: the x86 `DDraw.dll` and `D3DImm.dll`. `DINPUT.dll` statically links
-MinHook 1.3.4. MinHook source is downloaded at configure time and is not
-vendored in this repository.
+The public package includes the unmodified x86 `D3D9.dll` and `D3DImm.dll`
+from dgVoodoo 2.86.2, plus a Deathtrap-specific x86 dxwrapper build derived
+from the Deathtrap dxwrapper fork. `DINPUT.dll` statically links MinHook 1.3.4.
+MinHook source is downloaded at configure time and is not vendored here.
 
 ## dgVoodoo2
 
@@ -19,15 +19,43 @@ https://dgvoodoo2.dege.freeweb.hu/dgVoodoo2/ReadmeGeneral/
 The author permits individual dgVoodoo files to be shipped with a game or game
 mod. Hosting or redistributing dgVoodoo as a standalone component requires the
 complete original ZIP package. Deathtrap Native 50 is a game-specific patch
-and redistributes only the two unmodified x86 runtime DLLs required by this
-game. It does not include the control-panel application.
+and redistributes only the unmodified x86 runtime DLLs required by this game.
+It does not include the control-panel application.
 
 Bundled version: 2.86.2
 
-- `DDraw.dll` SHA-256:
-  `9EDACB27DE03EA2D0C104DE2CE255D4C992A46E2867BCCB3713A8995D56F84A5`
 - `D3DImm.dll` SHA-256:
   `8B2850D0AF5F07CF2928AC9666192C3ADCB0290F10ED8F942F1594F3A4F51C73`
+- `D3D9.dll` SHA-256:
+  `D8D2E15BF5D0E01C89317A733492997DE8F7F562A972FE564FD17D194EE5D1F3`
+
+## dxwrapper
+
+dxwrapper
+
+Copyright (c) Elisha Riedlinger
+
+Project: https://github.com/elishacloud/dxwrapper
+
+The bundled build is Deathtrap fork revision
+f56dfb3665f711fb1f09de3d8af9d53cad66727f (file version 1.8.8618.25),
+derived from the native-canvas implementation with the world-depth correction
+made permanent. It is used
+only for DirectDraw/Direct3D 1 to D3D9 conversion. Its output is passed to the
+bundled dgVoodoo D3D9 runtime.
+
+- `DDraw.dll` SHA-256:
+  `8BAE794EB7506711F57B690CFB8660A5F008B0185E764F8CB56D5972E01A9F33`
+- `dxwrapper.dll` SHA-256:
+  `BC633D310B125C704EE489286BAB86607EFCEB2ACA6B4BC22E9B66667FD04170`
+
+The full license is included at
+`licenses/dxwrapper.txt` in the release archive and
+`third_party/deathtrap-dxwrapper-release225/License.txt` in the repository.
+The complete Deathtrap modification patch, its exact upstream base revision
+and reproduction instructions are included under `source/dxwrapper` in the
+release archive and `third_party/deathtrap-dxwrapper-release225/source` in the
+repository.
 
 ## MinHook
 

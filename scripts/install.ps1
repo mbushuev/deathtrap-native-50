@@ -4,6 +4,8 @@ param(
     [string]$DllPath = '',
     [string]$IniPath = '',
     [string]$KeysPath = '',
+    [string]$DxWrapperRuntimeDirectory = '',
+    [string]$DxWrapperConfigPath = '',
     [string]$DgVoodooRuntimeDirectory = '',
     [string]$DgVoodooConfigPath = '',
     [switch]$SkipGameHashCheck
@@ -23,25 +25,14 @@ $dungeon = Join-Path $game 'Dungeon.dll'
 $executable = Join-Path $game 'DD_CD.EXE'
 $expectedDungeon = '95FE9CE0FFF387F00704548F152E4340815213FCB3833DBE1B5C42871E7D2E56'
 $expectedExecutable = '0C644A00E62652E046C5DAD2960F0F6C8C1998F4CA065780FBD7811D9908BF1F'
-$commonDirectory = Split-Path -Parent $game
-$steamAppsDirectory = Split-Path -Parent $commonDirectory
-$manifest = Join-Path $steamAppsDirectory 'appmanifest_245010.acf'
-
-if ((Split-Path -Leaf $commonDirectory) -ine 'common' -or
-    (Split-Path -Leaf $steamAppsDirectory) -ine 'steamapps' -or
-    -not (Test-Path -LiteralPath $manifest)) {
-    throw 'GameDirectory must point to the Steam installation of Deathtrap Dungeon.'
-}
-$manifestText = Get-Content -LiteralPath $manifest -Raw
-if ($manifestText -notmatch '"appid"\s+"245010"') {
-    throw "Steam manifest does not describe Deathtrap Dungeon: $manifest"
-}
-
-if (-not (Test-Path -LiteralPath $dungeon)) {
-    throw "Dungeon.dll was not found in $game"
-}
-if (-not (Test-Path -LiteralPath $executable)) {
-    throw "DD_CD.EXE was not found in $game"
+# Validate only the files consumed by this installer, before any writes.
+# The game may be copied anywhere; Steam's layout/manifest is not required.
+foreach ($required in @('Dungeon.dll', 'DD_CD.EXE',
+                         'ASYLUM\keys.cfg', 'ASYLUM\config.dat')) {
+    $requiredPath = Join-Path $game $required
+    if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+        throw "Required game file was not found: $requiredPath"
+    }
 }
 
 function Get-FileSha256 {
@@ -85,7 +76,7 @@ if (-not $DgVoodooRuntimeDirectory) {
     $payloadRuntime = Join-Path $PSScriptRoot 'payload\dgVoodoo'
     $repositoryRuntime = Join-Path $repoRoot 'third_party\dgVoodoo2-2.86.2\x86'
     $DgVoodooRuntimeDirectory = if (
-        (Test-Path -LiteralPath (Join-Path $payloadRuntime 'DDraw.dll') -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $payloadRuntime 'D3D9.dll') -PathType Leaf) -and
         (Test-Path -LiteralPath (Join-Path $payloadRuntime 'D3DImm.dll') -PathType Leaf)
     ) {
         $payloadRuntime
@@ -96,12 +87,12 @@ if (-not $DgVoodooRuntimeDirectory) {
 $dgRuntime = (Resolve-Path -LiteralPath $DgVoodooRuntimeDirectory).Path
 $dgVoodooPayload = @(
     @{
-        Name = 'DDraw.dll'
-        Sha256 = '9EDACB27DE03EA2D0C104DE2CE255D4C992A46E2867BCCB3713A8995D56F84A5'
-    },
-    @{
         Name = 'D3DImm.dll'
         Sha256 = '8B2850D0AF5F07CF2928AC9666192C3ADCB0290F10ED8F942F1594F3A4F51C73'
+    },
+    @{
+        Name = 'D3D9.dll'
+        Sha256 = 'D8D2E15BF5D0E01C89317A733492997DE8F7F562A972FE564FD17D194EE5D1F3'
     }
 )
 foreach ($wrapper in $dgVoodooPayload) {
@@ -112,6 +103,60 @@ foreach ($wrapper in $dgVoodooPayload) {
     $actualHash = Get-FileSha256 -Path $path
     if ($actualHash -ne $wrapper.Sha256) {
         throw "Bundled dgVoodoo runtime file failed verification: $($wrapper.Name)"
+    }
+}
+if (-not $DxWrapperRuntimeDirectory) {
+    $payloadRuntime = Join-Path $PSScriptRoot 'payload\dxwrapper'
+    $repositoryRuntime = Join-Path $repoRoot `
+        'third_party\deathtrap-dxwrapper-release225\x86'
+    $DxWrapperRuntimeDirectory = if (
+        (Test-Path -LiteralPath (Join-Path $payloadRuntime 'DDraw.dll') -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $payloadRuntime 'dxwrapper.dll') -PathType Leaf)
+    ) {
+        $payloadRuntime
+    } else {
+        $repositoryRuntime
+    }
+}
+$dxRuntime = (Resolve-Path -LiteralPath $DxWrapperRuntimeDirectory).Path
+$dxWrapperPayload = @(
+    @{
+        Name = 'DDraw.dll'
+        Sha256 = '8BAE794EB7506711F57B690CFB8660A5F008B0185E764F8CB56D5972E01A9F33'
+    },
+    @{
+        Name = 'dxwrapper.dll'
+        Sha256 = 'BC633D310B125C704EE489286BAB86607EFCEB2ACA6B4BC22E9B66667FD04170'
+    }
+)
+foreach ($wrapper in $dxWrapperPayload) {
+    $path = Join-Path $dxRuntime $wrapper.Name
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "Bundled Deathtrap dxwrapper runtime file is missing: $path"
+    }
+    $actualHash = Get-FileSha256 -Path $path
+    if ($actualHash -ne $wrapper.Sha256) {
+        throw "Bundled Deathtrap dxwrapper file failed verification: $($wrapper.Name)"
+    }
+}
+if (-not $DxWrapperConfigPath) {
+    $payloadConfig = Join-Path $PSScriptRoot 'payload\dxwrapper.ini'
+    $DxWrapperConfigPath = if (Test-Path -LiteralPath $payloadConfig -PathType Leaf) {
+        $payloadConfig
+    } else {
+        Join-Path $repoRoot 'config\dxwrapper-dgvoodoo.ini'
+    }
+}
+$dxConfigSource = (Resolve-Path -LiteralPath $DxWrapperConfigPath).Path
+foreach ($requiredSetting in @(
+    '^Dd7to9\s*=\s*1\s*$',
+    '^DdrawUseExternalD3D9\s*=\s*1\s*$',
+    '^DdrawInternalResolutionScale\s*=\s*[234]\s*$',
+    '^DdrawWidescreenAspectX1000\s*=\s*1\s*$'
+)) {
+    if (-not (Select-String -LiteralPath $dxConfigSource `
+            -Pattern $requiredSetting -Quiet)) {
+        throw "Bundled dxwrapper configuration is missing: $requiredSetting"
     }
 }
 if (-not $DgVoodooConfigPath) {
@@ -223,6 +268,9 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
         'DINPUT.dll',
         'deathtrap_native.ini',
         'DDraw.dll',
+        'dxwrapper.dll',
+        'dxwrapper.ini',
+        'D3D9.dll',
         'D3DImm.dll',
         'dgVoodoo.conf',
         'ASYLUM\keys.cfg',
@@ -258,6 +306,12 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
         Copy-Item -LiteralPath (Join-Path $dgRuntime $wrapper.Name) `
             -Destination (Join-Path $game $wrapper.Name) -Force
     }
+    foreach ($wrapper in $dxWrapperPayload) {
+        Copy-Item -LiteralPath (Join-Path $dxRuntime $wrapper.Name) `
+            -Destination (Join-Path $game $wrapper.Name) -Force
+    }
+    Copy-Item -LiteralPath $dxConfigSource `
+        -Destination (Join-Path $game 'dxwrapper.ini') -Force
     Copy-Item -LiteralPath $dgConfigSource `
         -Destination (Join-Path $game 'dgVoodoo.conf') -Force
     if (-not (Test-Path -LiteralPath $keys)) {
@@ -296,7 +350,8 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
     [System.IO.File]::WriteAllText(
         $retailConfig, $configText, [System.Text.Encoding]::ASCII)
     Write-Host "Installed overlay into: $game"
-    Write-Host 'Installed the tested dgVoodoo 2.86.2 x86 runtime and configuration.'
+    Write-Host 'Installed the tested native-canvas Dd7to9 layer and configuration.'
+    Write-Host 'Installed dgVoodoo 2.86.2 x86 D3D9 as the final D3D11 backend.'
     Write-Host 'Installed the modern keyboard, mouse and XInput control profile.'
     Write-Host 'Applied the required Direct3D rendering profile.'
     Write-Host "Rollback copy: $backup"

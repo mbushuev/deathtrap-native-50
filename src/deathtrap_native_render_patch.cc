@@ -39,6 +39,8 @@
 #include "mouse_combat_routing.h"
 #include "safe_save.h"
 #include "selector_time_dilation.h"
+#include "widescreen_layout.h"
+#include "selector_gameplay_command.h"
 
 namespace {
 
@@ -76,6 +78,14 @@ constexpr uintptr_t kEngineFrameCounterRva = 0x001D24DCu;
 // reliable track identity left at playback time.
 constexpr uintptr_t kCurrentRedbookTrackRva = 0x00104C10u;
 constexpr uintptr_t kPublishedCameraMatrixRva = 0x001D4110u;
+// Active software-transform dimensions.  Gameplay temporarily widens these
+// while the world renderer emits pre-transformed vertices; menu/movie passes
+// never enter this boundary.
+constexpr uintptr_t kRenderWidthRva = 0x001D24E0u;
+constexpr uintptr_t kRenderHeightRva = 0x001D24E4u;
+constexpr size_t kRenderContextCenterXOffset = 0x08u;
+constexpr size_t kRenderContextRightOffset = 0x20u;
+constexpr size_t kRenderContextCenterOffsetXOffset = 0x58u;
 constexpr uintptr_t kRetailCameraManagerPointerRva = 0x001F11C0u;
 // Global room manager used by the retail point-sector resolver. manager+0x20
 // points at the contiguous 0x3C-byte sector collection.
@@ -725,6 +735,8 @@ bool g_debug_log = false;
 bool g_music_track_fix_enabled = true;
 bool g_safe_save_anywhere_enabled = true;
 bool g_selector_slow_motion_enabled = true;
+uint32_t g_widescreen_aspect_x1000 = 1u;
+thread_local bool g_widescreen_world_render_active = false;
 uint32_t g_selector_slow_motion_percent = 25u;
 bool g_selector_slow_motion_active = false;
 // The ordinary mode-3 ownership watchdog is deliberately shorter than a
@@ -777,6 +789,11 @@ std::atomic<bool> g_third_person_orbit_input_active{false};
 std::atomic<uint64_t> g_third_person_orbit_input_sequence{0};
 std::atomic<int32_t> g_third_person_mouse_delta_x{0};
 std::atomic<int32_t> g_third_person_mouse_delta_y{0};
+// Mouse movement sampled between selector source ticks is applied only to the
+// render camera until the next real mode-3 callback publishes the same yaw and
+// pitch through the normal collision-owned camera path.
+double g_selector_presentation_yaw_offset = 0.0;
+double g_selector_presentation_pitch_offset = 0.0;
 std::atomic<uint64_t> g_last_controller_interaction_ms{0};
 std::atomic<uint64_t> g_controller_interaction_sequence{0};
 std::atomic<uint64_t> g_last_mode3_source_tick_ms{0};
@@ -1194,6 +1211,9 @@ SuccessfulBlockImpactFn g_original_successful_block_impact = nullptr;
 OffensiveSpellLaunchFn g_original_offensive_spell_launch = nullptr;
 RangedWeaponLaunchFn g_original_ranged_weapon_launch = nullptr;
 UseConsumableFn g_original_use_consumable = nullptr;
+deathtrap::selector_gameplay::DeferredConsumables
+    g_deferred_selector_consumables;
+thread_local bool g_selector_presentation_input_poll = false;
 SavePointQueryFn g_original_save_point_query = nullptr;
 KeyboardBindingMenuFn g_original_keyboard_binding_menu = nullptr;
 RootMenuInputFn g_original_root_menu_input = nullptr;
@@ -4615,6 +4635,8 @@ void ResetThirdPersonOrbit(const char* reason) {
   g_custom_head_last_publication_ms.store(0, std::memory_order_release);
   g_owned_camera_player_fade_requested.store(
       false, std::memory_order_release);
+  g_selector_presentation_yaw_offset = 0.0;
+  g_selector_presentation_pitch_offset = 0.0;
   if (g_third_person_orbit_state.engaged) {
     AppendNativeLog("camera_orbit disengage reason=%s applications=%llu",
                     reason,
@@ -4636,8 +4658,18 @@ bool BuildThirdPersonOrbitPosition(void* controller,
     ResetThirdPersonOrbit("disabled");
     return false;
   }
-  const double control_yaw_before = g_third_person_orbit_state.yaw;
-  const double control_pitch_before = g_third_person_orbit_state.pitch;
+  // Presentation-rate selector look has already advanced the persistent
+  // control angles. This source callback now materializes those angles in the
+  // authoritative camera, so the temporary offset starts afresh.
+  const double control_yaw_before = g_third_person_orbit_state.yaw -
+      g_selector_presentation_yaw_offset;
+  const double control_pitch_before = g_third_person_orbit_state.pitch -
+      g_selector_presentation_pitch_offset;
+  const bool presentation_mouse_moved =
+      std::abs(g_selector_presentation_yaw_offset) > 0.000001 ||
+      std::abs(g_selector_presentation_pitch_offset) > 0.000001;
+  g_selector_presentation_yaw_offset = 0.0;
+  g_selector_presentation_pitch_offset = 0.0;
   // This function is reached only from the verified mode-3 dispatcher hook.
   // Do not re-check controller+0x27C after the retail callback: fixed/rail
   // branches rewrite that byte to 0/1 even though execution is still inside
@@ -4870,9 +4902,10 @@ bool BuildThirdPersonOrbitPosition(void* controller,
   g_third_person_orbit_state.control_pitch_step =
       g_third_person_orbit_state.pitch - control_pitch_before;
   g_third_person_orbit_state.motion_active_this_tick =
-      player_motion > 8.0 || stick_moved || mouse_moved;
+      player_motion > 8.0 || stick_moved || mouse_moved ||
+      presentation_mouse_moved;
   g_third_person_orbit_state.orbit_input_active_this_tick =
-      stick_moved || mouse_moved;
+      stick_moved || mouse_moved || presentation_mouse_moved;
   const uint64_t orbit_now_ms = GetTickCount64();
   if (g_third_person_orbit_state.orbit_input_active_this_tick) {
     g_third_person_orbit_state.last_orbit_activity_ms = orbit_now_ms;
@@ -8804,13 +8837,20 @@ bool ResolveOwnedCameraSpringArm(
   // immediately through the unchanged hard-safe path.
   const bool user_orbit_close_recovery =
       state.orbit_input_active_this_tick && previous_radius < 512.0;
-  // Keep a collision-contracted ordinary orbit radially stable while the
-  // user is turning. Inward safety remains immediate, but a clear sector no
-  // longer extends the arm just before the next wall sector contracts it.
-  // Near-pivot input deliberately keeps its prompt escape path.
-  const bool user_orbit_radius_hold =
-      state.orbit_input_active_this_tick && !user_orbit_close_recovery &&
-      previous_radius + 0.5 < desired_distance;
+  // Orbit input is also an explicit request to search for a usable camera ray.
+  // The old implementation held every collision-contracted radius for the
+  // complete duration of mouse movement. A camera that touched one wall could
+  // therefore remain glued to Lara even after the user had rotated onto a
+  // clear view. Two consecutive clear samples (about 120 ms at the native
+  // rate) reject a single portal/mesh flicker while still allowing the arm to
+  // recover during a deliberate turn. Renewed obstruction continues to use
+  // the immediate hard-safe contraction above.
+  const bool user_orbit_clear_recovery =
+      state.orbit_input_active_this_tick && !user_orbit_close_recovery;
+  const bool responsive_recovery =
+      deathtrap::selector_time::UseResponsiveRecovery(
+          g_selector_slow_motion_active,
+          user_orbit_close_recovery || user_orbit_clear_recovery);
   const CameraSpringArmStep step = StepCameraSpringArm(
       desired_distance,
       obstruction_present ? std::min(safe_distance, desired_distance)
@@ -8820,23 +8860,22 @@ bool ResolveOwnedCameraSpringArm(
       state.owned_collision_blocked_release_ticks,
       state.owned_collision_blocked_candidate_distance,
       state.owned_collision_blocker_key, blocker_key,
-      user_orbit_close_recovery
+      responsive_recovery
           ? 2u
           : near_pivot_recovery
           ? kOwnedCameraNearPivotClearTicksBeforeRelease
           : 10u,
-      user_orbit_close_recovery
+      responsive_recovery
           ? 2u
           : near_pivot_recovery
           ? kOwnedCameraNearPivotBlockedTicksBeforeRelease
           : 8u,
-      user_orbit_close_recovery
+      responsive_recovery
           ? 96.0
           : near_pivot_recovery ? kOwnedCameraNearPivotReleaseStep : 64.0,
       false, predictive_safe_distance,
       kOwnedCameraPredictiveContractionStep,
-      kOwnedCameraBlockedReleaseMargin,
-      user_orbit_radius_hold);
+      kOwnedCameraBlockedReleaseMargin, false);
   state.owned_collision_radius = step.radius;
   state.owned_collision_clear_ticks = step.clear_ticks;
   state.owned_collision_blocked_release_ticks =
@@ -11529,7 +11568,7 @@ void* __cdecl HookRangedWeaponLaunch(void* actor, void* launch_context,
   return projectile;
 }
 
-void __cdecl HookUseConsumable(int32_t item_id) {
+void ExecuteOriginalConsumable(int32_t item_id) {
   uintptr_t player = 0;
   SafeReadValue(g_dungeon_base + kUiOwnerPointerRva, &player);
   int32_t before = 0;
@@ -11556,6 +11595,45 @@ void __cdecl HookUseConsumable(int32_t item_id) {
         after / kHealthFixedScale,
         static_cast<unsigned long long>(kUseConsumableRva),
         g_xinput_healing_vibration_ms);
+  }
+}
+
+void __cdecl HookUseConsumable(int32_t item_id) {
+  const DeathtrapNativePresentationStage stage =
+      g_active_presentation_trace.stage;
+  if (g_selector_presentation_input_poll ||
+      stage == DeathtrapNativePresentationStage::kMidpoint) {
+    if (g_deferred_selector_consumables.ObserveSynthetic(item_id)) {
+      AppendNativeLog(
+          "selector gameplay defer kind=consumable item=%d tick=%llu "
+          "source=%s",
+          item_id,
+          static_cast<unsigned long long>(g_active_presentation_trace.tick),
+          g_selector_presentation_input_poll ? "presentation_input"
+                                             : "midpoint_render");
+    }
+    return;
+  }
+  if (stage == DeathtrapNativePresentationStage::kExact) {
+    g_deferred_selector_consumables.ObserveExact(item_id);
+  }
+  ExecuteOriginalConsumable(item_id);
+}
+
+void ApplyDeferredSelectorGameplayCommands() {
+  int32_t item_id = 0;
+  while (g_deferred_selector_consumables.Pop(&item_id)) {
+    if (!DeathtrapGameplayReady(false)) {
+      AppendNativeLog(
+          "selector gameplay discard kind=consumable item=%d reason=gameplay",
+          item_id);
+      continue;
+    }
+    AppendNativeLog(
+        "selector gameplay apply kind=consumable item=%d tick=%llu",
+        item_id,
+        static_cast<unsigned long long>(g_active_presentation_trace.tick));
+    ExecuteOriginalConsumable(item_id);
   }
 }
 
@@ -12073,7 +12151,10 @@ void PollOpenControllerSelectorForPresentation() {
     // The normal gameplay bridge remains source-tick owned. Only the already
     // open selector observes intermediate right-stick/release samples so the
     // wheel stays responsive while the world scheduler is slowed.
+    const bool previous_poll = g_selector_presentation_input_poll;
+    g_selector_presentation_input_poll = true;
     UpdateControllerSelector(state.Gamepad, true);
+    g_selector_presentation_input_poll = previous_poll;
   }
 }
 
@@ -15542,6 +15623,88 @@ Matrix3x4 MultiplyAffine(const Matrix3x4& local,
   return world;
 }
 
+bool BuildLocalFromWorld(const Matrix3x4& world,
+                         const Matrix3x4& parent,
+                         Matrix3x4* local) {
+  if (!local) {
+    return false;
+  }
+
+  double parent_rotation[3][3]{};
+  for (size_t row = 0; row < 3u; ++row) {
+    for (size_t column = 0; column < 3u; ++column) {
+      parent_rotation[row][column] =
+          static_cast<double>(parent.values[row * 3u + column]) /
+          kMatrixFixedScale;
+    }
+  }
+  const double determinant =
+      parent_rotation[0][0] *
+          (parent_rotation[1][1] * parent_rotation[2][2] -
+           parent_rotation[1][2] * parent_rotation[2][1]) -
+      parent_rotation[0][1] *
+          (parent_rotation[1][0] * parent_rotation[2][2] -
+           parent_rotation[1][2] * parent_rotation[2][0]) +
+      parent_rotation[0][2] *
+          (parent_rotation[1][0] * parent_rotation[2][1] -
+           parent_rotation[1][1] * parent_rotation[2][0]);
+  if (!std::isfinite(determinant) || std::abs(determinant) < 1.0e-8) {
+    return false;
+  }
+
+  const double inverse_determinant = 1.0 / determinant;
+  const double inverse[3][3] = {
+      {(parent_rotation[1][1] * parent_rotation[2][2] -
+        parent_rotation[1][2] * parent_rotation[2][1]) * inverse_determinant,
+       (parent_rotation[0][2] * parent_rotation[2][1] -
+        parent_rotation[0][1] * parent_rotation[2][2]) * inverse_determinant,
+       (parent_rotation[0][1] * parent_rotation[1][2] -
+        parent_rotation[0][2] * parent_rotation[1][1]) * inverse_determinant},
+      {(parent_rotation[1][2] * parent_rotation[2][0] -
+        parent_rotation[1][0] * parent_rotation[2][2]) * inverse_determinant,
+       (parent_rotation[0][0] * parent_rotation[2][2] -
+        parent_rotation[0][2] * parent_rotation[2][0]) * inverse_determinant,
+       (parent_rotation[0][2] * parent_rotation[1][0] -
+        parent_rotation[0][0] * parent_rotation[1][2]) * inverse_determinant},
+      {(parent_rotation[1][0] * parent_rotation[2][1] -
+        parent_rotation[1][1] * parent_rotation[2][0]) * inverse_determinant,
+       (parent_rotation[0][1] * parent_rotation[2][0] -
+        parent_rotation[0][0] * parent_rotation[2][1]) * inverse_determinant,
+       (parent_rotation[0][0] * parent_rotation[1][1] -
+        parent_rotation[0][1] * parent_rotation[1][0]) * inverse_determinant}};
+
+  Matrix3x4 rebuilt{};
+  for (size_t row = 0; row < 3u; ++row) {
+    for (size_t column = 0; column < 3u; ++column) {
+      double value = 0.0;
+      for (size_t axis = 0; axis < 3u; ++axis) {
+        value +=
+            (static_cast<double>(world.values[row * 3u + axis]) /
+             kMatrixFixedScale) * inverse[axis][column];
+      }
+      if (!std::isfinite(value)) {
+        return false;
+      }
+      rebuilt.values[row * 3u + column] = ToFixed(value);
+    }
+  }
+  for (size_t column = 0; column < 3u; ++column) {
+    double value = 0.0;
+    for (size_t axis = 0; axis < 3u; ++axis) {
+      value +=
+          ((static_cast<double>(world.values[9u + axis]) -
+            static_cast<double>(parent.values[9u + axis])) /
+           kMatrixFixedScale) * inverse[axis][column];
+    }
+    if (!std::isfinite(value)) {
+      return false;
+    }
+    rebuilt.values[9u + column] = ToFixed(value);
+  }
+  *local = rebuilt;
+  return true;
+}
+
 void CaptureNode(uintptr_t node, SceneSnapshot* snapshot,
                  std::unordered_set<uintptr_t>* visited) {
   while (node && snapshot->nodes.size() < kMaximumSceneNodes) {
@@ -16145,6 +16308,24 @@ void ProbeCameraState(void* context, const SceneSnapshot& scene,
   }
 }
 
+// Match the owned source camera: room sphere sweep followed by scene meshes.
+// Presentation must not switch to a different footprint/clearance authority.
+bool ResolveSelectorOrbitPosition(
+    const SceneSnapshot& scene, const SceneSnapshot& stable,
+    const std::array<int32_t, 3>& focus,
+    const std::array<int32_t, 3>& requested, uintptr_t sector,
+    std::array<int32_t, 3>* resolved) {
+  deathtrap_camera::RoomSweepResult room;
+  if (!resolved || !SweepOwnedCameraAgainstRooms(
+          focus, requested, sector, &room, resolved)) return false;
+  OwnedCameraSceneSweepResult mesh;
+  if (!SweepOwnedCameraAgainstSceneMeshesInSnapshots(
+          scene, stable, focus, *resolved, &mesh)) return false;
+  if (mesh.blocked) *resolved = mesh.position;
+  return CameraTargetMeetsMinimumDistance(
+      focus, *resolved, kThirdPersonMinimumCameraDistance);
+}
+
 InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
                                            const SceneSnapshot& previous,
                                            SceneSnapshot& current,
@@ -16454,6 +16635,107 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
     MidpointNode midpoint;
     midpoint.local = entry.second.local;
     midpoint.world = entry.second.world;
+    if (!deathtrap::selector_time::InterpolateCameraAcrossSourceTicks(
+            g_selector_slow_motion_active) &&
+        entry.first == current.camera) {
+      // Presentation-rate mouse look has already shown the latest camera
+      // angle. Interpolating the camera from the preceding sparse source
+      // snapshot would replay that same arc backwards after every 4 Hz source
+      // callback. Keep the camera at the current accepted source pose while
+      // the rest of the scene remains interpolated; the render-only selector
+      // offset continues forward from this exact pose.
+      midpoint.ready = true;
+      midpoint.world_interpolated = false;
+      auto selector_focus = current.camera_focus;
+      // Keep the accepted angular endpoint, but do not hold the radial
+      // distance for the complete slowed source interval. Head view has no
+      // third-person arm and must never enter this interpolation.
+      const auto old_camera = previous.nodes.find(current.camera);
+      if (CustomHeadViewSelected() &&
+          g_custom_head_publication_active.load(std::memory_order_acquire) &&
+          previous.camera == current.camera &&
+          old_camera != previous.nodes.end() &&
+          old_camera->second.parent == entry.second.parent) {
+        const auto& old_world = old_camera->second.world;
+        const Vec3 old_eye{double(old_world.values[9]),
+                           double(old_world.values[10]),
+                           double(old_world.values[11])};
+        const Vec3 new_eye{double(midpoint.world.values[9]),
+                           double(midpoint.world.values[10]),
+                           double(midpoint.world.values[11])};
+        CameraMeshHitDiagnostic hit;
+        double hit_distance = 0.0;
+        // Use the same temporal collision guard as normal camera movement.
+        // Keep the accepted endpoint if the straight segment is obstructed.
+        if (!CameraTemporalChordIntersectsSceneObjects(
+                current, previous, old_eye, new_eye, &hit, &hit_distance)) {
+          const auto eye = InterpolateHeadCameraTranslation(
+              {old_eye.x, old_eye.y, old_eye.z},
+              {new_eye.x, new_eye.y, new_eye.z}, phase);
+          for (size_t axis = 0; axis < 3u; ++axis) {
+            const int32_t coordinate = int32_t(std::lround(eye[axis]));
+            midpoint.local.values[9u + axis] +=
+                coordinate - midpoint.world.values[9u + axis];
+            midpoint.world.values[9u + axis] = coordinate;
+          }
+        }
+      }
+      if (!CustomHeadViewSelected() && current.camera_focus_valid &&
+          previous.camera_focus_valid && previous.camera == current.camera &&
+          old_camera != previous.nodes.end() &&
+          g_third_person_orbit_state.owned_publication_active &&
+          !g_third_person_orbit_state.owned_near_pivot_view_active &&
+          !RetailFirstPersonActive()) {
+        const auto& old_world = old_camera->second.world;
+        const double old_radius = std::hypot(std::hypot(
+            double(old_world.values[9]) - previous.camera_focus[0],
+            double(old_world.values[11]) - previous.camera_focus[2]),
+            double(old_world.values[10]) - previous.camera_focus[1]);
+        const auto radial = InterpolateCameraRadiusAtCurrentAngle(
+            old_radius,
+            {double(current.camera_focus[0]), double(current.camera_focus[1]),
+             double(current.camera_focus[2])},
+            {double(midpoint.world.values[9]), double(midpoint.world.values[10]),
+             double(midpoint.world.values[11])}, phase);
+        const auto moving_focus = InterpolateHeadCameraTranslation(
+            {double(previous.camera_focus[0]), double(previous.camera_focus[1]),
+             double(previous.camera_focus[2])},
+            {double(current.camera_focus[0]), double(current.camera_focus[1]),
+             double(current.camera_focus[2])}, phase);
+        std::array<int32_t, 3> requested = {
+            int32_t(std::lround(radial[0] + moving_focus[0] - current.camera_focus[0])),
+            int32_t(std::lround(radial[1] + moving_focus[1] - current.camera_focus[1])),
+            int32_t(std::lround(radial[2] + moving_focus[2] - current.camera_focus[2]))};
+        const std::array<int32_t, 3> phase_focus = {
+            int32_t(std::lround(moving_focus[0])),
+            int32_t(std::lround(moving_focus[1])),
+            int32_t(std::lround(moving_focus[2]))};
+        std::array<int32_t, 3> resolved{};
+        if (ResolveSelectorOrbitPosition(current, previous, phase_focus,
+                requested, current.camera_sector, &resolved)) {
+            selector_focus = phase_focus;
+            for (size_t axis = 0; axis < 3u; ++axis) {
+              midpoint.local.values[9u + axis] +=
+                  resolved[axis] - midpoint.world.values[9u + axis];
+              midpoint.world.values[9u + axis] = resolved[axis];
+            }
+        }
+      }
+      if (deathtrap::selector_time::RoutePresentationCameraBasis(
+              g_selector_slow_motion_active,
+              current.camera_focus_valid)) {
+        // HookRenderer needs this focus to apply the mouse angle sampled for
+        // this particular synthetic frame. Previously the held-camera branch
+        // skipped the only assignment, so eleven selector frames kept the old
+        // angle and only the exact frame jumped to the new one.
+        g_active_presentation_trace.midpoint_camera_focus =
+            selector_focus;
+        g_active_presentation_trace.midpoint_camera_focus_valid = true;
+      }
+      ++stats.exact;
+      midpoint_nodes.emplace(entry.first, midpoint);
+      continue;
+    }
     const auto previous_it = previous.nodes.find(entry.first);
     if (previous_it == previous.nodes.end()) {
       ++stats.exact;
@@ -16842,7 +17124,9 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
     }
   }
   for (const auto& entry : midpoint_nodes) {
-    if (!entry.second.world_interpolated) {
+    if (!deathtrap::selector_time::WritePresentationMatrix(
+            entry.second.world_interpolated, g_selector_slow_motion_active,
+            entry.first == current.camera)) {
       continue;
     }
     if (SafeWrite(reinterpret_cast<void*>(entry.first + kMatrixOffset),
@@ -17268,22 +17552,160 @@ void RenderOriginalWithPlayerTransparency(void* context,
                                            uintptr_t player_root) {
   const std::vector<PlayerRenderFlagRollback> rollback =
       ApplyPlayerHalfTransparency(player_root);
+
+  int32_t original_width = 0;
+  int32_t original_height = 0;
+  std::array<int32_t, 3> original_context_x{};
+  bool widescreen_context = false;
+  bool widescreen_width_written = false;
+  const uint32_t widescreen_aspect_x1000 =
+      DeathtrapWidescreenAspectX1000();
+  if (widescreen_aspect_x1000 > 1333u && g_dungeon_base && context &&
+      player_root &&
+      SafeRead(g_dungeon_base + kRenderWidthRva,
+               &original_width, sizeof(original_width)) &&
+      SafeRead(g_dungeon_base + kRenderHeightRva,
+               &original_height, sizeof(original_height)) &&
+      original_width > 0 && original_height > 0) {
+    const int32_t widescreen_width = WidescreenLogicalWidth(
+        original_height, widescreen_aspect_x1000);
+    const int32_t extra_width = widescreen_width - original_width;
+    const std::array<size_t, 3> offsets = {
+        kRenderContextCenterXOffset,
+        kRenderContextRightOffset,
+        kRenderContextCenterOffsetXOffset};
+    bool context_read = extra_width > 0;
+    for (size_t index = 0; index < offsets.size() && context_read; ++index) {
+      context_read = SafeRead(
+          reinterpret_cast<const uint8_t*>(context) + offsets[index],
+          &original_context_x[index], sizeof(original_context_x[index]));
+    }
+    if (context_read) {
+      const std::array<int32_t, 3> widescreen_context_x = {
+          original_context_x[0] + extra_width / 2,
+          original_context_x[1] + extra_width,
+          original_context_x[2] + extra_width / 2};
+      widescreen_width_written = SafeWrite(
+          g_dungeon_base + kRenderWidthRva,
+          &widescreen_width, sizeof(widescreen_width));
+      widescreen_context = widescreen_width_written;
+      for (size_t index = 0;
+           index < offsets.size() && widescreen_context; ++index) {
+        widescreen_context = SafeWrite(
+            reinterpret_cast<uint8_t*>(context) + offsets[index],
+            &widescreen_context_x[index], sizeof(widescreen_context_x[index]));
+      }
+    }
+  }
+
+  const bool previous_widescreen_world_render_active =
+      g_widescreen_world_render_active;
+  g_widescreen_world_render_active = WorldPassMarker(
+      widescreen_aspect_x1000, widescreen_context, context != nullptr,
+      player_root != 0);
   g_original_renderer(context);
+  g_widescreen_world_render_active =
+      previous_widescreen_world_render_active;
+
+  if (widescreen_width_written) {
+    const std::array<size_t, 3> offsets = {
+        kRenderContextCenterXOffset,
+        kRenderContextRightOffset,
+        kRenderContextCenterOffsetXOffset};
+    for (size_t index = 0; index < offsets.size(); ++index) {
+      SafeWrite(reinterpret_cast<uint8_t*>(context) + offsets[index],
+                &original_context_x[index], sizeof(original_context_x[index]));
+    }
+    SafeWrite(g_dungeon_base + kRenderWidthRva,
+              &original_width, sizeof(original_width));
+  }
   RestorePlayerRenderFlags(rollback);
 }
 
 struct RenderOnlyCameraBasisBackup {
   uintptr_t camera = 0;
+  uintptr_t sector = 0;
   Matrix3x4 world{};
   Matrix3x4 published{};
+  bool sector_valid = false;
   bool valid = false;
 };
 
+bool SelectorPresentationLookActive() {
+  return g_selector_slow_motion_active &&
+      (std::abs(g_selector_presentation_yaw_offset) > 0.000001 ||
+       std::abs(g_selector_presentation_pitch_offset) > 0.000001);
+}
+
+void PollSelectorPresentationMouseLook() {
+  if (!deathtrap::selector_time::PollPresentationLook(
+          g_selector_slow_motion_active, KeyboardSelectorOpen(),
+          CurrentCustomCameraViewMode() == CustomCameraViewMode::kModernThirdPerson,
+          CustomHeadViewSelected(), RetailFirstPersonActive())) {
+    return;
+  }
+  int32_t delta_x = 0;
+  int32_t delta_y = 0;
+  if (!PollDeathtrapPresentationMouseDelta(&delta_x, &delta_y)) {
+    return;
+  }
+
+  const double previous_yaw = g_third_person_orbit_state.yaw;
+  const double previous_pitch = g_third_person_orbit_state.pitch;
+  const double horizontal_sign =
+      g_third_person_orbit_invert_x ? -1.0 : 1.0;
+  const double vertical_sign =
+      CustomHeadViewSelected()
+          ? ImmersivePhysicalMouseVerticalSign(g_third_person_orbit_invert_y)
+          : (g_third_person_orbit_invert_y ? -1.0 : 1.0);
+  g_third_person_orbit_state.yaw +=
+      static_cast<double>(delta_x) * horizontal_sign *
+      g_third_person_mouse_horizontal_radians;
+  if (g_third_person_orbit_state.yaw > kOrbitPi ||
+      g_third_person_orbit_state.yaw < -kOrbitPi) {
+    g_third_person_orbit_state.yaw = std::remainder(
+        g_third_person_orbit_state.yaw, 2.0 * kOrbitPi);
+  }
+  g_third_person_orbit_state.pitch = std::clamp(
+      g_third_person_orbit_state.pitch +
+          static_cast<double>(delta_y) * vertical_sign *
+              g_third_person_mouse_vertical_radians,
+      CustomHeadViewSelected() ? g_custom_head_min_pitch_radians
+                               : g_third_person_orbit_min_pitch_radians,
+      CustomHeadViewSelected() ? g_custom_head_max_pitch_radians
+                               : g_third_person_orbit_max_pitch_radians);
+
+  g_selector_presentation_yaw_offset += std::remainder(
+      g_third_person_orbit_state.yaw - previous_yaw, 2.0 * kOrbitPi);
+  g_selector_presentation_pitch_offset +=
+      g_third_person_orbit_state.pitch - previous_pitch;
+  g_third_person_orbit_state.mouse_delta_x_this_tick = delta_x;
+  g_third_person_orbit_state.mouse_delta_y_this_tick = delta_y;
+  g_third_person_orbit_state.motion_active_this_tick = true;
+  g_third_person_orbit_state.orbit_input_active_this_tick = true;
+  g_third_person_orbit_state.last_orbit_activity_ms = GetTickCount64();
+  g_third_person_heading_reference_microradians.store(
+      static_cast<int32_t>(std::lround(
+          g_third_person_orbit_state.yaw * 1000000.0)),
+      std::memory_order_release);
+  g_third_person_heading_reference_valid.store(true,
+                                                std::memory_order_release);
+}
+
 bool StationaryOrbitRenderBasisEligible() {
+  const bool presentation_look = SelectorPresentationLookActive();
+  if (CustomHeadViewSelected()) {
+    return presentation_look &&
+        g_custom_head_publication_active.load(std::memory_order_acquire) &&
+        !RetailFirstPersonActive() &&
+        !g_scripted_camera_override_active.load(std::memory_order_acquire);
+  }
   return g_third_person_orbit_state.owned_publication_active &&
-      g_third_person_orbit_state.orbit_input_active_this_tick &&
-      g_third_person_orbit_state.focus_motion_this_tick <= 1.0 &&
-      g_third_person_orbit_state.owned_collision_radius >= 512.0 &&
+      deathtrap::selector_time::UseContinuousOrbitBasis(
+       g_selector_slow_motion_active, presentation_look,
+       g_third_person_orbit_state.orbit_input_active_this_tick &&
+        g_third_person_orbit_state.focus_motion_this_tick <= 1.0 &&
+        g_third_person_orbit_state.owned_collision_radius >= 512.0) &&
       !g_third_person_orbit_state.owned_near_pivot_view_active &&
       CurrentCustomCameraViewMode() ==
           CustomCameraViewMode::kModernThirdPerson &&
@@ -17293,17 +17715,22 @@ bool StationaryOrbitRenderBasisEligible() {
 
 bool ApplyStationaryOrbitRenderBasis(
     uintptr_t camera, const std::array<int32_t, 3>& focus,
-    RenderOnlyCameraBasisBackup* backup) {
+    RenderOnlyCameraBasisBackup* backup, Matrix3x4* applied_world,
+    uintptr_t* applied_sector) {
   if (!camera || !backup || !g_dungeon_base ||
       !StationaryOrbitRenderBasisEligible()) {
     return false;
   }
   Matrix3x4 world{};
   Matrix3x4 published{};
+  uintptr_t sector = 0;
   if (!SafeRead(reinterpret_cast<const void*>(camera + kMatrixOffset),
-                &world, sizeof(world)) ||
+                 &world, sizeof(world)) ||
       !SafeRead(g_dungeon_base + kPublishedCameraMatrixRva,
-                &published, sizeof(published)) ||
+                 &published, sizeof(published)) ||
+      !SafeReadValue(reinterpret_cast<const void*>(
+                         camera + kCameraNodeSectorOffset),
+                     &sector) ||
       std::memcmp(&world, &published, sizeof(world)) != 0) {
     return false;
   }
@@ -17311,12 +17738,81 @@ bool ApplyStationaryOrbitRenderBasis(
       static_cast<double>(world.values[9]),
       static_cast<double>(world.values[10]),
       static_cast<double>(world.values[11])};
+  std::array<double, 3> render_position = position;
+  if (SelectorPresentationLookActive() && !CustomHeadViewSelected()) {
+    const double dx = position[0] - static_cast<double>(focus[0]);
+    const double dy = position[1] - static_cast<double>(focus[1]);
+    const double dz = position[2] - static_cast<double>(focus[2]);
+    const double radius = std::hypot(std::hypot(dx, dz), dy);
+    if (std::isfinite(radius) &&
+        radius >= kThirdPersonMinimumCameraDistance) {
+      const double yaw = std::atan2(dx, dz) +
+          g_selector_presentation_yaw_offset;
+      const double pitch = std::clamp(
+          std::asin(std::clamp(dy / radius, -1.0, 1.0)) +
+              g_selector_presentation_pitch_offset,
+          g_third_person_orbit_min_pitch_radians,
+          g_third_person_orbit_max_pitch_radians);
+      const double horizontal = radius * std::cos(pitch);
+      const std::array<int32_t, 3> requested = {
+          focus[0] + static_cast<int32_t>(
+                         std::lround(std::sin(yaw) * horizontal)),
+          focus[1] + static_cast<int32_t>(
+                         std::lround(std::sin(pitch) * radius)),
+          focus[2] + static_cast<int32_t>(
+                         std::lround(std::cos(yaw) * horizontal))};
+      std::array<int32_t, 3> resolved = requested;
+      if (ResolveSelectorOrbitPosition(g_previous_snapshot, g_older_snapshot,
+                                       focus, requested, sector, &resolved)) {
+        render_position = {
+            static_cast<double>(resolved[0]),
+            static_cast<double>(resolved[1]),
+            static_cast<double>(resolved[2])};
+      }
+    }
+  }
+  std::array<double, 3> render_focus = {
+      static_cast<double>(focus[0]), static_cast<double>(focus[1]),
+      static_cast<double>(focus[2])};
+  if (CustomHeadViewSelected()) {
+    // The head camera looks along its control direction, never back at the
+    // third-person pivot. Keep the collision-accepted eye position unchanged.
+    const auto pose = BuildImmersiveFirstPersonPose(
+        {0, 0, 0}, g_third_person_orbit_state.yaw,
+        g_third_person_orbit_state.pitch, 0, 0);
+    if (!pose.valid) return false;
+    auto forward = ImmersiveFirstPersonLookAtVector(pose.forward);
+    // Match the accepted native matrix's forward convention at zero offset.
+    // Do not assume the retail angle builder and continuous look-at builder
+    // use the same forward sign (the head mount explicitly reverses it).
+    const auto baseline_pose = BuildImmersiveFirstPersonPose(
+        {0, 0, 0},
+        g_third_person_orbit_state.yaw - g_selector_presentation_yaw_offset,
+        g_third_person_orbit_state.pitch - g_selector_presentation_pitch_offset,
+        0, 0);
+    const auto baseline_forward =
+        ImmersiveFirstPersonLookAtVector(baseline_pose.forward);
+    double alignment = 0.0;
+    double native_length_squared = 0.0;
+    for (size_t axis = 0; axis < 3u; ++axis) {
+      const double component = double(world.values[6u + axis]);
+      alignment += component * baseline_forward[axis];
+      native_length_squared += component * component;
+    }
+    if (!baseline_pose.valid || native_length_squared < 1.0 ||
+        std::abs(alignment) / std::sqrt(native_length_squared) < 0.98) {
+      return false;  // An unrelated/cut camera must retain its accepted pose.
+    }
+    if (alignment < 0.0) {
+      for (double& component : forward) component = -component;
+    }
+    for (size_t axis = 0; axis < 3u; ++axis) {
+      render_focus[axis] = render_position[axis] + forward[axis] * 1400.0;
+    }
+  }
   const CameraContinuousLookAtBasis basis =
       BuildCameraContinuousLookAtBasis(
-          position,
-          {static_cast<double>(focus[0]),
-           static_cast<double>(focus[1]),
-           static_cast<double>(focus[2])});
+          render_position, render_focus);
   if (!basis.valid) {
     return false;
   }
@@ -17328,21 +17824,40 @@ bool ApplyStationaryOrbitRenderBasis(
           ToFixed(basis.rows[row][column]);
     }
   }
+  render_world.values[9] =
+      static_cast<int32_t>(std::lround(render_position[0]));
+  render_world.values[10] =
+      static_cast<int32_t>(std::lround(render_position[1]));
+  render_world.values[11] =
+      static_cast<int32_t>(std::lround(render_position[2]));
   backup->camera = camera;
+  backup->sector = sector;
   backup->world = world;
   backup->published = published;
+  backup->sector_valid = true;
   const bool node_written = SafeWrite(
       reinterpret_cast<void*>(camera + kMatrixOffset),
       &render_world, sizeof(render_world));
   const bool published_written = node_written && SafeWrite(
       g_dungeon_base + kPublishedCameraMatrixRva,
       &render_world, sizeof(render_world));
-  if (!published_written) {
+  uintptr_t render_sector = 0;
+  const bool sector_written = published_written && PublishLiveCameraSector(
+      camera, sector, &render_sector);
+  if (!sector_written) {
     SafeWrite(reinterpret_cast<void*>(camera + kMatrixOffset),
               &world, sizeof(world));
     SafeWrite(g_dungeon_base + kPublishedCameraMatrixRva,
               &published, sizeof(published));
+    SafeWrite(reinterpret_cast<void*>(camera + kCameraNodeSectorOffset),
+              &sector, sizeof(sector));
     return false;
+  }
+  if (applied_world) {
+    *applied_world = render_world;
+  }
+  if (applied_sector) {
+    *applied_sector = render_sector;
   }
   backup->valid = true;
 
@@ -17360,21 +17875,53 @@ void RestoreStationaryOrbitRenderBasis(
   const bool published_restored = SafeWrite(
       g_dungeon_base + kPublishedCameraMatrixRva,
       &backup.published, sizeof(backup.published));
-  if ((!node_restored || !published_restored) && g_debug_log) {
+  const bool sector_restored = !backup.sector_valid || SafeWrite(
+      reinterpret_cast<void*>(backup.camera + kCameraNodeSectorOffset),
+      &backup.sector, sizeof(backup.sector));
+  if ((!node_restored || !published_restored || !sector_restored) &&
+      g_debug_log) {
     AppendNativeLog(
-        "camera_render_basis_restore node=%08llX result=%u/%u",
+        "camera_render_basis_restore node=%08llX result=%u/%u/%u",
         static_cast<unsigned long long>(backup.camera),
-        node_restored ? 1u : 0u, published_restored ? 1u : 0u);
+        node_restored ? 1u : 0u, published_restored ? 1u : 0u,
+        sector_restored ? 1u : 0u);
   }
 }
 
-void RenderOriginalWithStationaryOrbitBasis(
+bool RenderOriginalWithStationaryOrbitBasis(
     void* context, uintptr_t player_root, uintptr_t camera,
-    const std::array<int32_t, 3>& focus) {
+    const std::array<int32_t, 3>& focus, Matrix3x4* applied_world = nullptr,
+    uintptr_t* applied_sector = nullptr) {
   RenderOnlyCameraBasisBackup backup;
-  ApplyStationaryOrbitRenderBasis(camera, focus, &backup);
+  const bool applied = ApplyStationaryOrbitRenderBasis(
+      camera, focus, &backup, applied_world, applied_sector);
+  // Bounded evidence at the renderer boundary, not just interpolation math.
+  // Separate budgets keep third-person sampling from consuming the head-view
+  // and near-pivot samples. At most 72 lines per process, no per-frame flush.
+  static uint32_t selector_camera_samples[3]{};
+  const size_t sample_mode = CustomHeadViewSelected() ? 2u :
+      (g_third_person_orbit_state.owned_near_pivot_view_active ? 1u : 0u);
+  if (g_selector_slow_motion_active &&
+      selector_camera_samples[sample_mode] < 24u) {
+    Matrix3x4 visible{};
+    if (SafeRead(reinterpret_cast<const void*>(camera + kMatrixOffset),
+                 &visible, sizeof(visible))) {
+      ++selector_camera_samples[sample_mode];
+      AppendNativeLog(
+          "selector_camera_render mode=%u near=%u stage=%u applied=%u "
+          "offset=%.6f/%.6f pos=%d/%d/%d forward=%d/%d/%d",
+          static_cast<uint32_t>(CurrentCustomCameraViewMode()),
+          g_third_person_orbit_state.owned_near_pivot_view_active ? 1u : 0u,
+          static_cast<uint32_t>(g_active_presentation_trace.stage),
+          applied ? 1u : 0u, g_selector_presentation_yaw_offset,
+          g_selector_presentation_pitch_offset,
+          visible.values[9], visible.values[10], visible.values[11],
+          visible.values[6], visible.values[7], visible.values[8]);
+    }
+  }
   RenderOriginalWithPlayerTransparency(context, player_root);
   RestoreStationaryOrbitRenderBasis(backup);
+  return applied;
 }
 
 void __cdecl HookRenderer(void* context) {
@@ -18067,6 +18614,9 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   g_active_presentation_trace.tick = source_tick;
   g_active_presentation_trace.player = current.player;
   g_active_presentation_trace.camera = current.camera;
+  if (selector_time.active) {
+    PollSelectorPresentationMouseLook();
+  }
   const InterpolatedPassResult first_pass = RenderInterpolatedPass(
       context, older, g_previous_snapshot, current, first_phase,
       true, source_tick);
@@ -18263,6 +18813,7 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
     if (selector_time.active) {
       PollOpenControllerSelectorForPresentation();
       PollOpenKeyboardSelectorForPresentation();
+      PollSelectorPresentationMouseLook();
     }
     const double phase = static_cast<double>(phase_index) /
                          static_cast<double>(presentation_passes);
@@ -18284,6 +18835,9 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   // the remaining final fraction of the native six-count scheduler period.
   RestoreScene(current);
   PublishSnapshotCameraMatrix(current);
+  if (selector_time.active) {
+    PollSelectorPresentationMouseLook();
+  }
   g_active_presentation_trace.stage = DeathtrapNativePresentationStage::kExact;
   g_active_presentation_trace.exact_scene = &current;
   if (current.player_contact_manifold_projection_valid) {
@@ -18305,10 +18859,14 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   // This must be the final state mutation in the presentation transaction.
   // Applying it earlier lets RestoreScene undo the selector change.
   ApplyPendingKeyboardSelectorCommand();
+  ApplyDeferredSelectorGameplayCommands();
 }
 
 void InitializePatchState() {
   g_debug_log = ConfiguredDebugLog();
+  g_widescreen_aspect_x1000 = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"Rendering", L"WidescreenAspectX1000", 1),
+      0, 10000));
   g_music_track_fix_enabled =
       ConfiguredInteger(L"Audio", L"FixMusicTracks", 1) != 0;
   g_safe_save_anywhere_enabled =
@@ -19115,12 +19673,84 @@ bool DeathtrapGameplayAcceptsMouseCombat() {
          !g_xinput_menu_mode.load(std::memory_order_acquire);
 }
 
+bool DeathtrapRangedWeaponSelected() {
+  if (!g_dungeon_base) {
+    return false;
+  }
+  int32_t weapon_id = -1;
+  return SafeReadValue(g_dungeon_base + kActiveCloseCombatWeaponRva,
+                       &weapon_id) &&
+      weapon_id >= 8 && weapon_id <= 13;
+}
+
 DeathtrapNativePresentationStage GetDeathtrapNativePresentationStage() {
   return g_active_presentation_trace.stage;
 }
 
 uint64_t GetDeathtrapNativePresentationTick() {
   return g_active_presentation_trace.tick;
+}
+
+bool DeathtrapWidescreenWorldRenderActive() {
+  return g_widescreen_world_render_active;
+}
+
+uint32_t DeathtrapWidescreenAspectX1000() {
+  if (g_widescreen_aspect_x1000 == 0u) {
+    return 0u;
+  }
+  if (g_widescreen_aspect_x1000 > 1u) {
+    return g_widescreen_aspect_x1000;
+  }
+
+  HWND window = GetForegroundWindow();
+  DWORD process_id = 0;
+  if (window) {
+    GetWindowThreadProcessId(window, &process_id);
+  }
+  if (process_id != GetCurrentProcessId()) {
+    window = nullptr;
+  }
+  if (!window) {
+    struct WindowSearch {
+      DWORD process_id = 0;
+      HWND window = nullptr;
+    } search{GetCurrentProcessId(), nullptr};
+    EnumWindows(
+        [](HWND candidate, LPARAM parameter) -> BOOL {
+          auto* search = reinterpret_cast<WindowSearch*>(parameter);
+          DWORD candidate_process_id = 0;
+          GetWindowThreadProcessId(candidate, &candidate_process_id);
+          if (candidate_process_id == search->process_id &&
+              IsWindowVisible(candidate) &&
+              GetWindow(candidate, GW_OWNER) == nullptr) {
+            search->window = candidate;
+            return FALSE;
+          }
+          return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&search));
+    window = search.window;
+  }
+
+  const HMONITOR monitor = MonitorFromWindow(
+      window, window ? MONITOR_DEFAULTTONEAREST : MONITOR_DEFAULTTOPRIMARY);
+  MONITORINFO info = {};
+  info.cbSize = sizeof(info);
+  int32_t width = 0;
+  int32_t height = 0;
+  if (monitor && GetMonitorInfoW(monitor, &info)) {
+    width = info.rcMonitor.right - info.rcMonitor.left;
+    height = info.rcMonitor.bottom - info.rcMonitor.top;
+  }
+  if (width <= 0 || height <= 0) {
+    width = GetSystemMetrics(SM_CXSCREEN);
+    height = GetSystemMetrics(SM_CYSCREEN);
+  }
+  if (width <= 0 || height <= 0) {
+    return 0u;
+  }
+  return MonitorAspectX1000(width, height);
 }
 
 DeathtrapControllerSelectorStatus GetDeathtrapControllerSelectorStatus() {

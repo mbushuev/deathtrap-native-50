@@ -1028,26 +1028,36 @@ int main() {
   ExpectNear(step.radius, 772.0,
              "blocked recovery stops before buffered boundary");
 
+  // Deliberate orbit input must be allowed to recover a camera that was
+  // contracted by an earlier wall. The production path uses a two-sample
+  // confirmation and a bounded 96-unit step for this case.
   step = StepCameraSpringArm(
-      1400.0, 1400.0, 900.0, false, 12u, 0u, 900.0, 0u, 0u,
-      10u, 8u, 64.0, false,
-      std::numeric_limits<double>::quiet_NaN(), 0.0, 48.0, true);
+      1400.0, 1400.0, 900.0, false, 0u, 0u, 900.0, 0u, 0u,
+      2u, 2u, 96.0, false,
+      std::numeric_limits<double>::quiet_NaN(), 0.0, 48.0, false);
   ExpectNear(step.radius, 900.0,
-             "active orbit holds clear-sector radius");
+              "active orbit confirms first clear-sector sample");
+  step = StepCameraSpringArm(
+      1400.0, 1400.0, step.radius, false, step.clear_ticks,
+      step.blocked_release_ticks, step.blocked_candidate_distance,
+      step.blocker_key, 0u, 2u, 2u, 96.0, false,
+      std::numeric_limits<double>::quiet_NaN(), 0.0, 48.0, false);
+  ExpectNear(step.radius, 996.0,
+              "active orbit recovers after stable clear ray");
   step = StepCameraSpringArm(
       1400.0, 1200.0, step.radius, true, step.clear_ticks,
       step.blocked_release_ticks, step.blocked_candidate_distance,
-      step.blocker_key, kWallBlocker, 10u, 8u, 64.0, false,
-      std::numeric_limits<double>::quiet_NaN(), 0.0, 48.0, true);
-  ExpectNear(step.radius, 900.0,
-             "active orbit holds outward blocked sample");
+      step.blocker_key, kWallBlocker, 2u, 2u, 96.0, false,
+      std::numeric_limits<double>::quiet_NaN(), 0.0, 48.0, false);
+  ExpectNear(step.radius, 996.0,
+              "active orbit confirms outward blocked sample");
   step = StepCameraSpringArm(
       1400.0, 700.0, step.radius, true, step.clear_ticks,
       step.blocked_release_ticks, step.blocked_candidate_distance,
-      step.blocker_key, kWallBlocker, 10u, 8u, 64.0, false,
-      std::numeric_limits<double>::quiet_NaN(), 0.0, 48.0, true);
+      step.blocker_key, kWallBlocker, 2u, 2u, 96.0, false,
+      std::numeric_limits<double>::quiet_NaN(), 0.0, 48.0, false);
   ExpectNear(step.radius, 700.0,
-             "active orbit preserves immediate inward safety");
+              "active orbit preserves immediate inward safety");
   for (uint32_t clear_tick = 0; clear_tick < 10u; ++clear_tick) {
     step = StepCameraSpringArm(
         1400.0, 1400.0, step.radius, false, step.clear_ticks,
