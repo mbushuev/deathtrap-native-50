@@ -126,8 +126,12 @@ try {
     if ((Get-TestHash $oldDll) -ne (Get-TestHash (Join-Path $payload 'DINPUT.dll'))) {
         throw 'Installer did not replace the old DLL with the payload DLL.'
     }
-    if ((Get-TestHash $oldIni) -ne (Get-TestHash (Join-Path $payload 'deathtrap_native.ini'))) {
-        throw 'Installer did not replace the old configuration with the payload configuration.'
+    $installedIni = [System.IO.File]::ReadAllText($oldIni)
+    if ($installedIni -eq 'previous installed configuration' -or
+            $installedIni -notmatch '(?m)^Mode=borderless\s*$' -or
+            $installedIni -notmatch '(?m)^WindowWidth=([1-9][0-9]{2,})\s*$' -or
+            $installedIni -notmatch '(?m)^WindowHeight=([1-9][0-9]{2,})\s*$') {
+        throw 'Installer did not install a native-resolution display configuration.'
     }
     foreach ($wrapper in @('D3D9.dll', 'D3DImm.dll')) {
         if ((Get-TestHash (Join-Path $game $wrapper)) -ne

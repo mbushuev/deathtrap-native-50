@@ -1,4 +1,4 @@
-# Installing and running the overlay
+# Installing, display modes and running the patch
 
 ## 1. Requirements
 
@@ -8,15 +8,16 @@
 - the bundled dgVoodoo2 2.86.2 **x86** DirectX runtime;
 - Windows 10 or 11 and a D3D11-capable GPU driver.
 
-`<SteamLibrary>` below means the root of any Steam library. No drive letter or
-personal installation path is compiled into the DLL or scripts.
+`<GameDirectory>` below means the directory containing `DD_CD.EXE`. The game
+may be installed anywhere; no drive letter, Steam-library layout or manifest
+path is compiled into the DLL or scripts.
 
 ## 2. Final file layout
 
 The final relevant game-directory layout is:
 
 ```text
-<SteamLibrary>\steamapps\common\Deathtrap Dungeon\
+<GameDirectory>\
 |-- DD_CD.EXE
 |-- Dungeon.dll
 |-- DDraw.dll                 tested Deathtrap dxwrapper Dd7to9 stub
@@ -34,7 +35,40 @@ The final relevant game-directory layout is:
 Do not copy the x64 dgVoodoo wrappers. `DD_CD.EXE` is a 32-bit process and
 cannot load them.
 
-## 3. Bundled dgVoodoo configuration
+## 3. Display mode and size
+
+The installer queries the current primary display mode in physical pixels and
+writes the result to the installed `deathtrap_native.ini`. This avoids Windows
+DPI scaling turning a 125% or 150% desktop into smaller logical coordinates.
+The runtime itself is Per-Monitor DPI Aware V2. For example, a 2880x1800
+primary display produces:
+
+```ini
+[Display]
+Mode=borderless
+WindowWidth=2880
+WindowHeight=1800
+```
+
+`Mode=borderless` is the tested default. The final window fills the current
+monitor without entering exclusive fullscreen or changing the monitor's video
+mode. The width and height values do not restrict borderless mode.
+
+`Mode=windowed` creates a centered framed window with an exact client area of
+`WindowWidth` by `WindowHeight`. For example:
+
+```ini
+[Display]
+Mode=windowed
+WindowWidth=1280
+WindowHeight=720
+```
+
+Restart the game after changing these values. Do not combine the two modes by
+forcing fullscreen, fake fullscreen or a resolution in dgVoodoo: the
+Deathtrap-specific dxwrapper layer is the sole owner of the final game window.
+
+## 4. Bundled dgVoodoo configuration
 
 The public archive contains the exact x86 dgVoodoo 2.86.2 runtime and profile
 used during project testing. `INSTALL.cmd` installs both automatically. A
@@ -62,17 +96,19 @@ build because it may select D3D12.
 The installer preserves any previous `dxwrapper.ini`, `dgVoodoo.conf`,
 `DDraw.dll`, `dxwrapper.dll`, `D3D9.dll` and `D3DImm.dll` in its timestamped
 rollback directory before replacing them.
-Advanced users can download the complete dgVoodoo package separately and
-copy only `dgVoodooCpl.exe` beside `DD_CD.EXE`. Running it there loads the
-installed `dgVoodoo.conf`, allowing resolution, filtering, antialiasing and
-other options to be changed after the tested setup works. Keep the bundled x86
-runtime DLLs and `OutputAPI = d3d11_fl11_0`.
+Advanced users can download the complete dgVoodoo package separately and copy
+only `dgVoodooCpl.exe` beside `DD_CD.EXE`. Running it there loads the installed
+`dgVoodoo.conf` and allows advanced graphics options such as filtering and
+antialiasing to be inspected or changed. Keep the bundled x86 runtime DLLs,
+General **Windowed**, DirectX resolution **Unforced**, and
+`OutputAPI = d3d11_fl11_0`. Display mode and window size belong in
+`deathtrap_native.ini`, not dgVoodoo.
 
 The tested preset uses:
 
-- one monitor-sized render target created by the native-canvas layer;
+- one aspect-correct render target created by the native-canvas layer;
 - `Resolution = unforced`;
-- `Antialiasing = appdriven`;
+- `Antialiasing = 8x`;
 - `Filtering = 16` (16x anisotropic);
 - `Mipmapping = autogen_point`;
 - `ForceVerticalSync = true`;
@@ -90,7 +126,7 @@ multiplier wastes memory and can make the game unplayable.
 
 ![Recommended dgVoodoo DirectX settings](images/dgvoodoo-directx.png)
 
-## 4. Install the overlay
+## 5. Install the patch
 
 The public release archive has this layout:
 
@@ -129,8 +165,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 The script:
 
-1. verifies the Steam App ID, compares `Dungeon.dll` and `DD_CD.EXE` with the
-   tested hashes, and continues with a warning if they differ;
+1. verifies only the required game files, compares `Dungeon.dll` and
+   `DD_CD.EXE` with the tested hashes, and continues with a warning if they
+   differ;
 2. verifies the bundled dxwrapper and dgVoodoo runtime hashes and D3D11
    configuration;
 3. backs up existing patch files, dgVoodoo runtime/configuration,
@@ -143,7 +180,9 @@ The script:
    preserved by step 3;
 6. replaces, de-duplicates or adds the required game rendering values without
    changing progress, volume or other unrelated settings;
-7. replaces `dgVoodoo.conf` only after backing up the previous file.
+7. detects the current primary monitor resolution in physical pixels and
+   writes it as the installed window-size default;
+8. replaces `dgVoodoo.conf` only after backing up the previous file.
 
 Use `-WhatIf` to validate the directory without modifying it.
 
@@ -153,7 +192,7 @@ installation must copy both runtime files and place the bundled `keys.cfg` at
 the DLL and action profile are tested as one unit; recover the previous file
 from the timestamped rollback directory if needed.
 
-## 5. Launch the game
+## 6. Launch the game
 
 Any of these launch paths is valid:
 
@@ -177,7 +216,7 @@ The game imports legacy DirectInput, so Windows loads our `DINPUT.dll`; the DLL
 then forwards the original DirectInput exports and activates the native render
 patch. No command-line argument is required.
 
-## 6. First-run verification
+## 7. First-run verification
 
 The normal configuration is:
 
@@ -185,6 +224,11 @@ The normal configuration is:
 [NativeRender]
 Enabled=1
 Subframes=3
+
+[Display]
+Mode=borderless
+WindowWidth=<detected physical width>
+WindowHeight=<detected physical height>
 
 [Diagnostics]
 DebugLog=0
@@ -241,10 +285,10 @@ performs the same toggle. This is independent of the original Tab/R3
 first-person camera: the custom view keeps ordinary walking, running, attacks,
 the character body and the equipped weapon visible. Its eye height and forward
 offset are configured by `HeadHeight` and `HeadForwardOffset` under `[Camera]`.
-They are offsets from the game's stable player-focus anchor, not from the
-character's feet; the shipped body-visible placement is `60` up and `120`
-forward. Unlike the controller coordinate pointers, this anchor stays rigidly
-attached to the interpolated render root during forward and reverse movement.
+The shipped placement is `10` units above and `55` units forward from the
+resolved animated head centre. Unlike the controller coordinate pointers, the
+accepted anchor stays rigidly attached to the interpolated render root during
+forward and reverse movement.
 
 The installer updates `ASYLUM/keys.cfg` before launch. Horizontal mouse motion
 uses the game's original normal turn actions. Holding Shift adds the retail
@@ -508,7 +552,7 @@ F10/SELECT head view while close to a wall and confirm that body, arms and
 weapon remain fully visible. The resulting per-process file in `logs` is
 sufficient; no debug option or deep camera probe needs to be enabled.
 
-## 7. Common failures
+## 8. Common failures
 
 - **No change after pressing F11:** compare the `Dungeon.dll` hash with the
   tested value and confirm that `DINPUT.dll` is beside the original
@@ -518,5 +562,14 @@ sufficient; no debug option or deep camera probe needs to be enabled.
   `bestavailable` are not supported by this build.
 - **The game does not start:** verify that all injected and dgVoodoo DLLs are
   x86, then restore the installer's timestamped backup.
-- **The installer rejects the directory:** select the actual Steam App ID
-  `245010` installation under a Steam library's `steamapps\common` directory.
+- **The installer rejects the directory:** select the directory that directly
+  contains `DD_CD.EXE`, `Dungeon.dll`, `ASYLUM\keys.cfg` and
+  `ASYLUM\config.dat`. It does not need to be inside a Steam library.
+- **Borderless is the wrong size or Windows DPI scaling changes the geometry:**
+  reinstall the current build so the physical primary-monitor dimensions are
+  written again, then confirm `Mode=borderless`. The support log records both
+  physical display and DPI geometry.
+- **The desktop changes resolution or a second scaler appears:** restore the
+  bundled wrapper profiles. dgVoodoo must remain Windowed with DirectX
+  resolution Unforced, and `FullscreenWindowMode` must remain disabled in
+  `dxwrapper.ini`.

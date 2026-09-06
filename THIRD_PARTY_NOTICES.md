@@ -37,17 +37,16 @@ Copyright (c) Elisha Riedlinger
 
 Project: https://github.com/elishacloud/dxwrapper
 
-The bundled build is Deathtrap fork revision
-f56dfb3665f711fb1f09de3d8af9d53cad66727f (file version 1.8.8618.25),
-derived from the native-canvas implementation with the world-depth correction
-made permanent. It is used
-only for DirectDraw/Direct3D 1 to D3D9 conversion. Its output is passed to the
-bundled dgVoodoo D3D9 runtime.
+The bundled build applies the included Deathtrap-specific source patch to the
+documented upstream base (file version 1.8.8618.25). It contains the
+native-canvas implementation, permanent world-depth correction and final
+window presentation support. It is used only for DirectDraw/Direct3D 1 to D3D9
+conversion. Its output is passed to the bundled dgVoodoo D3D9 runtime.
 
 - `DDraw.dll` SHA-256:
   `8BAE794EB7506711F57B690CFB8660A5F008B0185E764F8CB56D5972E01A9F33`
 - `dxwrapper.dll` SHA-256:
-  `BC633D310B125C704EE489286BAB86607EFCEB2ACA6B4BC22E9B66667FD04170`
+  `A01EC795A633643CEA61A7CDC62EE97793D1674733D31E8240CE98C33E145841`
 
 The full license is included at
 `licenses/dxwrapper.txt` in the release archive and

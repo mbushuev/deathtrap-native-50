@@ -334,7 +334,12 @@ void MaybeLogMouseSupportSummary(bool camera_consumes) {
       : 0;
   const long clip_width = have_clip ? clip.right - clip.left : 0;
   const long clip_height = have_clip ? clip.bottom - clip.top : 0;
-  const bool clip_client_mismatch = have_clip && have_client_rect &&
+  // A framed window deliberately leaves the OS cursor free on the desktop.
+  // Only borderless mode expects DirectInput's clip rectangle to match the
+  // complete client area; reporting the desktop clip as an error in windowed
+  // mode obscures real stale-coordinate failures.
+  const bool clip_client_mismatch = !DeathtrapDisplayMode() && have_clip &&
+      have_client_rect &&
       (std::abs(clip_width - client_width) > 2 ||
        std::abs(clip_height - client_height) > 2);
   const int32_t mismatch_state = clip_client_mismatch ? 1 : 0;
@@ -1420,5 +1425,21 @@ extern "C" BOOL WINAPI Proxy_DeathtrapWidescreenWorldRenderActive() {
 }
 
 extern "C" DWORD WINAPI Proxy_DeathtrapWidescreenAspectX1000() {
+  InitializeDeathtrapNativeRenderPatch();
   return DeathtrapWidescreenAspectX1000();
+}
+
+extern "C" DWORD WINAPI Proxy_DeathtrapDisplayMode() {
+  InitializeDeathtrapNativeRenderPatch();
+  return DeathtrapDisplayMode();
+}
+
+extern "C" DWORD WINAPI Proxy_DeathtrapWindowWidth() {
+  InitializeDeathtrapNativeRenderPatch();
+  return DeathtrapWindowWidth();
+}
+
+extern "C" DWORD WINAPI Proxy_DeathtrapWindowHeight() {
+  InitializeDeathtrapNativeRenderPatch();
+  return DeathtrapWindowHeight();
 }

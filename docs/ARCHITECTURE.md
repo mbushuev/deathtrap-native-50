@@ -23,9 +23,25 @@ installer verifies every runtime hash before installation.
 
 The game continues to see 800x600. During the exact world-render boundary
 exported by `DINPUT.dll`, the engine emits a wider Hor+ world. The Dd7to9 layer
-maps it into a monitor-sized physical target while mapping menus, movies and
-HUD draws into a centered 4:3 safe area. This is the same native-canvas path
-used by the tested release configuration.
+maps it into one aspect-correct physical target while mapping menus, movies
+and HUD draws into a centered 4:3 safe area. This is the same native-canvas
+path used by the tested release configuration.
+
+## Presentation ownership
+
+`DINPUT.dll` reads `[Display]` from `deathtrap_native.ini` and exports the
+selected mode and window dimensions. The Deathtrap-specific dxwrapper consumes
+those values before it creates the D3D9 device and is the sole owner of the
+final window:
+
+- `borderless` uses the current monitor's physical dimensions, removes the
+  frame and never enters exclusive fullscreen;
+- `windowed` creates a framed window with the exact requested client size.
+
+The process is Per-Monitor DPI Aware V2, so all values remain physical pixels
+on scaled and mixed-DPI desktops. dgVoodoo stays windowed with resolution
+unforced; it converts the existing D3D9 canvas to D3D11 but does not create a
+second fullscreen policy or resolution multiplier.
 
 ## Native rendering
 

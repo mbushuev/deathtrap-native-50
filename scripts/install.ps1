@@ -126,7 +126,7 @@ $dxWrapperPayload = @(
     },
     @{
         Name = 'dxwrapper.dll'
-        Sha256 = 'BC633D310B125C704EE489286BAB86607EFCEB2ACA6B4BC22E9B66667FD04170'
+        Sha256 = 'A01EC795A633643CEA61A7CDC62EE97793D1674733D31E8240CE98C33E145841'
     }
 )
 foreach ($wrapper in $dxWrapperPayload) {
@@ -171,6 +171,11 @@ $dgConfigSource = (Resolve-Path -LiteralPath $DgVoodooConfigPath).Path
 if (-not (Select-String -LiteralPath $dgConfigSource `
         -Pattern '^OutputAPI\s*=\s*d3d11_fl11_0\s*$' -Quiet)) {
     throw 'Bundled dgVoodoo configuration must use OutputAPI = d3d11_fl11_0.'
+}
+$dgConfigText = Get-Content -LiteralPath $dgConfigSource -Raw
+if ($dgConfigText -notmatch `
+        '(?ms)^\[DirectX\]\s*$.*?^Antialiasing\s*=\s*8x\s*$') {
+    throw 'Bundled dgVoodoo DirectX configuration must use Antialiasing = 8x.'
 }
 
 if (-not $DllPath) {
@@ -262,6 +267,109 @@ function Set-RetailConfigValue {
     return $result
 }
 
+function Get-NativePrimaryDisplayResolution {
+    # EnumDisplaySettings reports the physical current mode. Unlike
+    # SystemParameters/WinForms dimensions, it is not virtualized by the
+    # desktop's 125/150/200 percent DPI scale.
+    if (-not ('DeathtrapInstaller.DisplayMode' -as [type])) {
+        Add-Type @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+namespace DeathtrapInstaller {
+    public static class DisplayMode {
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+        private struct PointL {
+            public int X;
+            public int Y;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+        private struct DevMode {
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string DeviceName;
+            public short SpecVersion;
+            public short DriverVersion;
+            public short Size;
+            public short DriverExtra;
+            public int Fields;
+            public PointL Position;
+            public int DisplayOrientation;
+            public int DisplayFixedOutput;
+            public short Color;
+            public short Duplex;
+            public short YResolution;
+            public short TTOption;
+            public short Collate;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string FormName;
+            public short LogPixels;
+            public int BitsPerPel;
+            public int PelsWidth;
+            public int PelsHeight;
+            public int DisplayFlags;
+            public int DisplayFrequency;
+            public int ICMMethod;
+            public int ICMIntent;
+            public int MediaType;
+            public int DitherType;
+            public int Reserved1;
+            public int Reserved2;
+            public int PanningWidth;
+            public int PanningHeight;
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Ansi)]
+        private static extern bool EnumDisplaySettings(
+            string deviceName, int modeNumber, ref DevMode mode);
+
+        public static int[] CurrentPrimary() {
+            DevMode mode = new DevMode();
+            mode.Size = (short)Marshal.SizeOf(mode);
+            if (!EnumDisplaySettings(null, -1, ref mode) ||
+                    mode.PelsWidth < 640 || mode.PelsHeight < 480) {
+                throw new Win32Exception(
+                    "Unable to read the primary monitor's current mode.");
+            }
+            return new int[] { mode.PelsWidth, mode.PelsHeight };
+        }
+    }
+}
+'@
+    }
+
+    $resolution = [DeathtrapInstaller.DisplayMode]::CurrentPrimary()
+    return @{
+        Width = [int]$resolution[0]
+        Height = [int]$resolution[1]
+    }
+}
+
+function Set-NativeDisplayResolution {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][int]$Width,
+        [Parameter(Mandatory = $true)][int]$Height
+    )
+
+    $text = [System.IO.File]::ReadAllText($Path)
+    foreach ($setting in @(
+        @('WindowWidth', $Width),
+        @('WindowHeight', $Height)
+    )) {
+        $pattern = '(?m)^(\s*' + [regex]::Escape($setting[0]) +
+            '\s*=\s*)\d+\s*$'
+        if (-not [regex]::IsMatch($text, $pattern)) {
+            throw "Display setting was not found in ${Path}: $($setting[0])"
+        }
+        $text = [regex]::Replace(
+            $text, $pattern, '${1}' + [string]$setting[1], 1)
+    }
+    [System.IO.File]::WriteAllText(
+        $Path, $text, [System.Text.UTF8Encoding]::new($false))
+}
+
 if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
     New-Item -ItemType Directory -Force -Path $backup | Out-Null
     foreach ($existing in @(
@@ -302,6 +410,9 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
             [System.StringComparison]::OrdinalIgnoreCase)) {
         Copy-Item -LiteralPath $ini -Destination $iniDestination -Force
     }
+    $nativeDisplay = Get-NativePrimaryDisplayResolution
+    Set-NativeDisplayResolution -Path $iniDestination `
+        -Width $nativeDisplay.Width -Height $nativeDisplay.Height
     foreach ($wrapper in $dgVoodooPayload) {
         Copy-Item -LiteralPath (Join-Path $dgRuntime $wrapper.Name) `
             -Destination (Join-Path $game $wrapper.Name) -Force
@@ -353,6 +464,9 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
     Write-Host 'Installed the tested native-canvas Dd7to9 layer and configuration.'
     Write-Host 'Installed dgVoodoo 2.86.2 x86 D3D9 as the final D3D11 backend.'
     Write-Host 'Installed the modern keyboard, mouse and XInput control profile.'
+    Write-Host (
+        'Configured the current primary monitor resolution: ' +
+        "$($nativeDisplay.Width)x$($nativeDisplay.Height).")
     Write-Host 'Applied the required Direct3D rendering profile.'
     Write-Host "Rollback copy: $backup"
 }

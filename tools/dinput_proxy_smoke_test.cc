@@ -63,6 +63,27 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("GetProcAddress failed: %lu\n", GetLastError());
     return 4;
   }
+  using DisplayValueFn = DWORD(WINAPI*)();
+  const auto display_mode = reinterpret_cast<DisplayValueFn>(
+      GetProcAddress(proxy, "DeathtrapDisplayMode"));
+  const auto window_width = reinterpret_cast<DisplayValueFn>(
+      GetProcAddress(proxy, "DeathtrapWindowWidth"));
+  const auto window_height = reinterpret_cast<DisplayValueFn>(
+      GetProcAddress(proxy, "DeathtrapWindowHeight"));
+  if (!display_mode || !window_width || !window_height) {
+    std::printf("Display configuration exports are missing: %lu\n",
+                GetLastError());
+    return 6;
+  }
+  const DWORD configured_mode = display_mode();
+  const DWORD configured_width = window_width();
+  const DWORD configured_height = window_height();
+  if (configured_mode > 1 || configured_width < 640 ||
+      configured_height < 480) {
+    std::printf("Invalid display configuration: mode=%lu window=%lux%lu\n",
+                configured_mode, configured_width, configured_height);
+    return 7;
+  }
   LPDIRECTINPUTA direct_input = nullptr;
   const HRESULT result = create(GetModuleHandleW(nullptr), 0x0700,
                                 &direct_input, nullptr);
@@ -81,11 +102,13 @@ int wmain(int argc, wchar_t** argv) {
   FreeLibrary(proxy);
   const bool support_log = VerifyAutomaticSupportLog(argv[1]);
   std::printf("DirectInputCreateA=0x%08lX object=%s mouse=0x%08lX "
-              "state_probe=0x%08lX support_log=%s\n",
+              "state_probe=0x%08lX support_log=%s display=%s:%lux%lu\n",
               static_cast<unsigned long>(result),
               direct_input ? "created" : "null",
               static_cast<unsigned long>(mouse_result),
               static_cast<unsigned long>(state_result),
-              support_log ? "verified" : "missing");
+              support_log ? "verified" : "missing",
+              configured_mode == 1 ? "windowed" : "borderless",
+              configured_width, configured_height);
   return SUCCEEDED(result) && SUCCEEDED(mouse_result) && support_log ? 0 : 5;
 }

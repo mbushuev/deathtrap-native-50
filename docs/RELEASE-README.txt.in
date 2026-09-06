@@ -30,14 +30,39 @@ INSTALL.cmd backs up any existing patch, dgVoodoo, control and rendering files,
 then installs the complete tested setup. The archive includes the tested
 Deathtrap Dd7to9 native-canvas layer and unmodified dgVoodoo 2.86.2 x86 D3D9
 backend. It uses D3D11 FL11 with an aspect-correct canvas (1800 pixels high at
-the default scale of 3), fitted to the display, without a second
-resolution multiplier or forced MSAA, with 16x texture filtering, automatic
-mipmaps and VSync.
+the default internal scale of 3), 8x MSAA, 16x texture filtering, automatic
+mipmaps and VSync. dgVoodoo resolution remains unforced so the canvas is never
+scaled a second time.
+
+DISPLAY MODE AND WINDOW SIZE
+
+The installer detects the current primary monitor in physical pixels and
+writes that size to deathtrap_native.ini. The default mode is a desktop-sized
+borderless window with no exclusive-fullscreen resolution switch:
+
+[Display]
+Mode=borderless
+WindowWidth=2880
+WindowHeight=1800
+
+The dimensions above are an example; the installed values match the machine
+on which INSTALL.cmd runs. Borderless always fills the current monitor.
+
+For a normal centered framed window, change Mode to windowed and set the exact
+client size you want, for example:
+
+[Display]
+Mode=windowed
+WindowWidth=1280
+WindowHeight=720
+
+Restart the game after changing display settings.
 
 OPTIONAL DGVOODOO TUNING
 
-No tuning is required to run the patch. To change resolution, antialiasing,
-filtering or other wrapper options, download the complete official dgVoodoo
+No tuning is required to run the patch. Display mode and window size are owned
+by deathtrap_native.ini. To inspect or change advanced wrapper options such as
+antialiasing or texture filtering, download the complete official dgVoodoo
 package from:
 
 https://github.com/dege-diosg/dgVoodoo2/releases
@@ -45,10 +70,12 @@ https://github.com/dege-diosg/dgVoodoo2/releases
 Copy only dgVoodooCpl.exe beside DD_CD.EXE and the installed dgVoodoo.conf,
 then run it and apply your preferred settings to the game directory. The
 required x86 runtime DLLs are already installed by this patch. Do not replace
-them with x64 wrappers, and keep OutputAPI set to d3d11_fl11_0.
+them with x64 wrappers. Keep the General tab set to Windowed, DirectX
+resolution set to Unforced, and OutputAPI set to d3d11_fl11_0.
 
-For lower-end systems, try 2x resolution and 4x antialiasing. Reference
-screenshots are included as optional\dgVoodoo-General.png and
+For lower-end systems, reduce Antialiasing (MSAA) to 4x or 2x; do not apply a
+dgVoodoo resolution multiplier. Reference screenshots are included as
+optional\dgVoodoo-General.png and
 optional\dgVoodoo-DirectX.png.
 
 The tested Steam Dungeon.dll SHA-256 is:

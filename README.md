@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current development version: **0.0.225**
+Current development version: **0.0.226**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -8,7 +8,7 @@ Current development version: **0.0.225**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.225.png" alt="Deathtrap Native 50 v0.0.225" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.226.png" alt="Deathtrap Native 50 v0.0.226" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -23,9 +23,9 @@ validated through extensive manual playtesting and automated tests.
 Verified and tested with the
 [Steam release of Deathtrap Dungeon](https://store.steampowered.com/app/245010/Deathtrap_Dungeon/).
 
-The release includes the Deathtrap widescreen layer,
-dgVoodoo runtime and graphics configurations are already included—there is
-nothing to download or configure before the first launch.
+The release already includes the Deathtrap-specific widescreen layer, the
+dgVoodoo runtime and the tested graphics configuration. There is nothing else
+to download or configure before the first launch.
 
 This project is not affiliated with or endorsed by Square Enix, Eidos
 Interactive, Asylum Studios, Ian Livingstone or the developers of dgVoodoo.
@@ -39,6 +39,8 @@ redistribution terms.
   speed, AI, combat, collision, animation and audio clocks.
 - True Hor+ widescreen gameplay with correctly scaled and positioned 4:3 HUD,
   menus and movies, including the original run/stamina bar.
+- DPI-correct borderless presentation by default, plus an INI-selectable
+  centered window with an exact client size.
 - Freely controlled modern third-person orbit camera for mouse and right stick,
   with collision handling and support for the game's authored camera shots.
 - Camera-relative Xbox-compatible controller movement with faster, more
@@ -166,16 +168,48 @@ That is the complete normal installation. `INSTALL.cmd` checks the game,
 backs up any existing patch, dgVoodoo, control and rendering files, and then
 installs the complete tested setup.
 
-The installed preset creates one aspect-correct render target, 1800 pixels
-high at the default scale of 3, and fits it to the display. It is not necessarily
-the monitor's native resolution. dgVoodoo resolution forcing and MSAA are deliberately
-left application-controlled so the native canvas is not enlarged a second
-time; 16x texture filtering, automatic mipmaps and forced VSync remain enabled.
+The installer detects the current primary monitor in physical pixels (not
+DPI-scaled logical pixels) and records that size in `deathtrap_native.ini`.
+The default `borderless` mode uses a desktop-sized borderless window without
+switching the monitor's physical video mode. The native-canvas layer creates
+one aspect-correct world target, 1800 pixels high at the default internal scale
+of 3, expands only 3D gameplay to the monitor aspect and keeps menus, movies
+and the complete HUD in their original proportions.
 
-### Optional: tune dgVoodoo settings
+dgVoodoo stays windowed and leaves resolution `Unforced`, so it does not scale
+that canvas a second time. The tested profile enables 8x MSAA, 16x anisotropic
+filtering, automatic mipmaps and VSync.
 
-This is not required to run the patch. If you want to change resolution,
-antialiasing, filtering, fullscreen behavior or other wrapper options:
+### Display mode and window size
+
+The presentation mode is controlled only by the installed
+`deathtrap_native.ini`. For example, on a 2880x1800 primary monitor the
+installer writes:
+
+```ini
+[Display]
+Mode=borderless
+WindowWidth=2880
+WindowHeight=1800
+```
+
+- `Mode=borderless` is the default. It fills the current monitor without an
+  exclusive-fullscreen mode switch; `WindowWidth` and `WindowHeight` do not
+  limit its size.
+- `Mode=windowed` creates a centered framed window whose client area is exactly
+  `WindowWidth` by `WindowHeight`. For example, use `1280` by `720` for a
+  720p window.
+
+The installer replaces the dimensions from the template with the detected
+primary-monitor resolution. They therefore also provide a sensible starting
+size if the user later changes `Mode` to `windowed`. Restart the game after
+changing any display value.
+
+### Optional: tune advanced dgVoodoo settings
+
+This is not required to run the patch. Display mode and window dimensions must
+be changed in `deathtrap_native.ini`, as described above. To inspect or change
+advanced wrapper options such as antialiasing or texture filtering:
 
 1. Download the complete package from the
    [official dgVoodoo releases page](https://github.com/dege-diosg/dgVoodoo2/releases).
@@ -185,8 +219,11 @@ antialiasing, filtering, fullscreen behavior or other wrapper options:
    directory.
 
 The patch already installs the required x86 runtime DLLs. Do not replace them
-with x64 wrappers. Keep `OutputAPI = d3d11_fl11_0`; other output APIs are not
-supported by the native rendering path.
+with x64 wrappers. Keep the General tab set to **Windowed**, keep DirectX
+resolution **Unforced**, and keep `OutputAPI = d3d11_fl11_0`; other output APIs
+are not supported by the native rendering path. Do not use dgVoodoo to select
+fullscreen or a resolution multiplier because the Deathtrap layer owns the
+final window and native canvas.
 
 **General tab**
 
@@ -212,6 +249,8 @@ no Steam directory layout or manifest is required. The installer:
   directory;
 - normalizes the required game rendering values, including hardware D3D,
   mipmapping and subtractive shadows;
+- detects the current primary monitor in physical pixels and records it as the
+  default window size;
 - replaces `dgVoodoo.conf` with the tested profile after preserving the old
   file in the rollback directory.
 
@@ -328,7 +367,7 @@ separate MinHook runtime DLL is needed. See [Building](docs/BUILDING.md) and
 ## Release process
 
 `VERSION` is the single source of truth for CMake, DLL metadata, package names
-and Git tags. Pushing a matching tag such as `v0.0.218` runs the Windows build,
+and Git tags. Pushing a matching tag such as `v0.0.226` runs the Windows build,
 all deterministic tests, creates a versioned ZIP and checksum, and opens a
 draft GitHub Release for final human review.
 

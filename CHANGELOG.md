@@ -8,6 +8,18 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.226 — DPI-safe borderless and windowed modes
+
+- Adds `borderless` and `windowed` presentation modes selectable in
+  `deathtrap_native.ini`.
+- Detects the primary monitor's physical resolution during installation and
+  uses Per-Monitor DPI Awareness V2 to avoid Windows scaling mismatches.
+- Keeps borderless presentation out of exclusive fullscreen and provides an
+  exact, centered client size for framed-window mode.
+- Keeps mouse camera control working in windowed mode.
+- Updates the tested dgVoodoo profile to windowed, unforced resolution with
+  8x MSAA, and refreshes the setup documentation and screenshots.
+
 ## 0.0.225 — widescreen and camera refinements
 
 - Adds automatic widescreen gameplay while preserving the proportions of

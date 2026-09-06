@@ -1,12 +1,5 @@
-diff --git a/Dllmain/BuildNo.rc b/Dllmain/BuildNo.rc
-index a91ea38074c63506f67e278507198d199aeb54b1..6acaf79e1f7af14afed737dd11d1d3132a2fbe89 100644
---- a/Dllmain/BuildNo.rc
-+++ b/Dllmain/BuildNo.rc
-@@ -1 +1 @@
--#define BUILD_NUMBER 8615 
-+#define BUILD_NUMBER 8618 
 diff --git a/Settings/AllSettings.ini b/Settings/AllSettings.ini
-index af9530b8deae8f078f0342e0dec3a85ca6f704c9..5c603f273fc7b3c2f862eaefc6044d5d525f0889 100644
+index af9530b8..5c603f27 100644
 --- a/Settings/AllSettings.ini
 +++ b/Settings/AllSettings.ini
 @@ -65,11 +65,23 @@ DirectShowEmulation        = 0
@@ -34,7 +27,7 @@ index af9530b8deae8f078f0342e0dec3a85ca6f704c9..5c603f273fc7b3c2f862eaefc6044d5d
  DdrawAllowMultiSampling    = 0
  DdrawForceMipMapAutoGen    = 0
 diff --git a/Settings/Settings.h b/Settings/Settings.h
-index 01c6731b08034a3fec633aff85f7fa2b600485a2..869c7d123d4acf96e64f7b042b8036bc2ed8c688 100644
+index 01c6731b..869c7d12 100644
 --- a/Settings/Settings.h
 +++ b/Settings/Settings.h
 @@ -43,6 +43,8 @@ inline std::ostream& operator<<(std::ostream& os, const DHEX& dhex) {
@@ -99,7 +92,7 @@ index 01c6731b08034a3fec633aff85f7fa2b600485a2..869c7d123d4acf96e64f7b042b8036bc
  	DWORD D3d8HookSystem32 = 0;					// Hooks the d3d8.dll file in the Windows System32 folder
  	bool D3d9HookSystem32 = false;				// Hooks the d3d9.dll file in the Windows System32 folder
 diff --git a/Settings/Settings.ini b/Settings/Settings.ini
-index 0ff9362584a93a205e8499753027ba9a7afb8d83..7937b620458ac595af6a2ef1510a026414afde95 100644
+index 0ff93625..7937b620 100644
 --- a/Settings/Settings.ini
 +++ b/Settings/Settings.ini
 @@ -51,10 +51,22 @@ DdrawUseDirect3D9Caps      = 0
@@ -126,7 +119,7 @@ index 0ff9362584a93a205e8499753027ba9a7afb8d83..7937b620458ac595af6a2ef1510a0264
  DdrawForceMipMapAutoGen    = 0
  DdrawClampVertexZDepth     = 0
 diff --git a/Stub/stub.vcxproj b/Stub/stub.vcxproj
-index 88337a1e8dd5da95e3749a5faefc85ed97036116..2c68efcfd44779c7f9241ef63b6f80c8709a0095 100644
+index 88337a1e..2c68efcf 100644
 --- a/Stub/stub.vcxproj
 +++ b/Stub/stub.vcxproj
 @@ -137,6 +137,7 @@ copy /Y "$(TargetDir)$(TargetName).dll" "$(TargetDir)Build\Stub\winmmbase.dll" &
@@ -144,15 +137,8 @@ index 88337a1e8dd5da95e3749a5faefc85ed97036116..2c68efcfd44779c7f9241ef63b6f80c8
 -</Project>
 \ No newline at end of file
 +</Project>
-diff --git a/d3d8/BuildNo.rc b/d3d8/BuildNo.rc
-index e12e4969f7f1c5c587292114485f8c009e144051..87be5804cd7da8b3c1b53ed7710a929568a21d2e 100644
---- a/d3d8/BuildNo.rc
-+++ b/d3d8/BuildNo.rc
-@@ -1 +1 @@
--#define  FILEVERSION 1.15.1.0   
-+#define  FILEVERSION 1.15.1.0   
 diff --git a/d3d9/d3d9.cpp b/d3d9/d3d9.cpp
-index 1f77e6354fb0281f83863c2f5cad8ffec39724b3..ad1ed3e14e55ef403c753e542008c3e4bbe0fbda 100644
+index 1f77e635..ad1ed3e1 100644
 --- a/d3d9/d3d9.cpp
 +++ b/d3d9/d3d9.cpp
 @@ -31,10 +31,17 @@ static HMODULE GetSystemD3d9()
@@ -178,7 +164,7 @@ index 1f77e6354fb0281f83863c2f5cad8ffec39724b3..ad1ed3e14e55ef403c753e542008c3e4
  
  	return h_d3d9;
 diff --git a/ddraw/IDirect3DDeviceX.cpp b/ddraw/IDirect3DDeviceX.cpp
-index 6aa0b54ad6b86d06b07d112739696567f2eff879..b7be1addc8afb82a8206b20c4a517a101e272601 100644
+index 6aa0b54a..b7be1add 100644
 --- a/ddraw/IDirect3DDeviceX.cpp
 +++ b/ddraw/IDirect3DDeviceX.cpp
 @@ -22,6 +22,72 @@ const DWORD ReserveCount = 64;
@@ -814,7 +800,7 @@ index 6aa0b54ad6b86d06b07d112739696567f2eff879..b7be1addc8afb82a8206b20c4a517a10
  			lpVertices = VertexCache.data();
  		}
 diff --git a/ddraw/IDirect3DDeviceX.h b/ddraw/IDirect3DDeviceX.h
-index f1e0b1e8d0f5f020ae5ca4ab8063a638e4ff6a9f..5c0fc98e4c8e658beb9456fd563efe319493b65d 100644
+index f1e0b1e8..5c0fc98e 100644
 --- a/ddraw/IDirect3DDeviceX.h
 +++ b/ddraw/IDirect3DDeviceX.h
 @@ -212,6 +212,7 @@ private:
@@ -835,7 +821,7 @@ index f1e0b1e8d0f5f020ae5ca4ab8063a638e4ff6a9f..5c0fc98e4c8e658beb9456fd563efe31
  	void UpdateVertices(DWORD& dwVertexTypeDesc, LPVOID& lpVertices, DWORD dwVertexStart, DWORD dwNumVertices);
  
 diff --git a/ddraw/IDirect3DTypes.cpp b/ddraw/IDirect3DTypes.cpp
-index 50f5c73f8869e46344e697230925e1b5ee465cd5..ac143930b25a3440cd493f2832ab2f5e2636f8f3 100644
+index 50f5c73f..ac143930 100644
 --- a/ddraw/IDirect3DTypes.cpp
 +++ b/ddraw/IDirect3DTypes.cpp
 @@ -360,6 +360,41 @@ void ConvertDeviceDesc(D3DDEVICEDESC& Desc, const D3DDEVICEDESC7& Desc7)
@@ -881,7 +867,7 @@ index 50f5c73f8869e46344e697230925e1b5ee465cd5..ac143930b25a3440cd493f2832ab2f5e
  	if (Desc.dwSize >= D3DDEVICEDESC5_SIZE)
  	{
 diff --git a/ddraw/IDirect3DTypes.h b/ddraw/IDirect3DTypes.h
-index f1ff1e9b1f551f7a63afb04adfd1c34d865d7fb2..2bf376a7550f5f63dda809e787ac32493122995e 100644
+index f1ff1e9b..2bf376a7 100644
 --- a/ddraw/IDirect3DTypes.h
 +++ b/ddraw/IDirect3DTypes.h
 @@ -14,6 +14,7 @@
@@ -893,7 +879,7 @@ index f1ff1e9b1f551f7a63afb04adfd1c34d865d7fb2..2bf376a7550f5f63dda809e787ac3249
  #define D3DDEVICEDESC1_SIZE 172
  #define D3DDEVICEDESC5_SIZE 204
 diff --git a/ddraw/IDirectDrawSurfaceX.cpp b/ddraw/IDirectDrawSurfaceX.cpp
-index 0ebaa3ca6e9aa0e04f66f0847374442c80614400..0ed6343245c8539389dded8135ff1b5d03cb11bb 100644
+index 0ebaa3ca..0ed63432 100644
 --- a/ddraw/IDirectDrawSurfaceX.cpp
 +++ b/ddraw/IDirectDrawSurfaceX.cpp
 @@ -1319,8 +1319,13 @@ HRESULT m_IDirectDrawSurfaceX::Flip(LPDIRECTDRAWSURFACE7 lpDDSurfaceTargetOverri
@@ -1039,7 +1025,7 @@ index 0ebaa3ca6e9aa0e04f66f0847374442c80614400..0ed6343245c8539389dded8135ff1b5d
  
  	return DD_OK;
 diff --git a/ddraw/IDirectDrawSurfaceX.h b/ddraw/IDirectDrawSurfaceX.h
-index b132eb1e617f7543d9965e846c308bffe5ed2e13..44a63655086df62817d15ac5cf05fadee0459072 100644
+index b132eb1e..44a63655 100644
 --- a/ddraw/IDirectDrawSurfaceX.h
 +++ b/ddraw/IDirectDrawSurfaceX.h
 @@ -615,6 +615,8 @@ public:
@@ -1052,10 +1038,59 @@ index b132eb1e617f7543d9965e846c308bffe5ed2e13..44a63655086df62817d15ac5cf05fade
  	LPDIRECT3DTEXTURE9 GetD9PaletteTexture() const { return primary.PaletteTexture; }
  	m_IDirect3DTextureX* GetAttachedTexture() { return attached3DTexture; }
 diff --git a/ddraw/IDirectDrawX.cpp b/ddraw/IDirectDrawX.cpp
-index bffe020535dffdf7b5b52d957ab033f64432bf8b..e61f8be4a8428a22fdacb57063ea0716f9d9c22e 100644
+index bffe0205..d93acc85 100644
 --- a/ddraw/IDirectDrawX.cpp
 +++ b/ddraw/IDirectDrawX.cpp
-@@ -512,8 +512,30 @@ HRESULT m_IDirectDrawX::CreateSurface2(LPDDSURFACEDESC2 lpDDSurfaceDesc2, LPDIRE
+@@ -28,6 +28,48 @@
+ #include "Shaders\FixUpVertexShader.h"
+ 
+ namespace {
++	using DeathtrapDisplayValueFn = DWORD(WINAPI*)();
++
++	void ApplyDeathtrapPresentationMode()
++	{
++		static bool Applied = false;
++		if (Applied)
++		{
++			return;
++		}
++		Applied = true;
++
++		HMODULE Dinput = GetModuleHandleW(L"DINPUT.dll");
++		if (!Dinput)
++		{
++			return;
++		}
++		const auto QueryMode = reinterpret_cast<DeathtrapDisplayValueFn>(
++			GetProcAddress(Dinput, "DeathtrapDisplayMode"));
++		const auto QueryWidth = reinterpret_cast<DeathtrapDisplayValueFn>(
++			GetProcAddress(Dinput, "DeathtrapWindowWidth"));
++		const auto QueryHeight = reinterpret_cast<DeathtrapDisplayValueFn>(
++			GetProcAddress(Dinput, "DeathtrapWindowHeight"));
++		if (!QueryMode || !QueryWidth || !QueryHeight)
++		{
++			return;
++		}
++
++		const bool Windowed = QueryMode() == 1;
++		const DWORD WindowWidth = QueryWidth();
++		const DWORD WindowHeight = QueryHeight();
++		Config.EnableWindowMode = true;
++		Config.FullscreenWindowMode = false;
++		Config.WindowModeBorder = Windowed;
++		Config.DdrawUseNativeResolution = !Windowed;
++		Config.DdrawOverrideWidth = Windowed ? WindowWidth : 0;
++		Config.DdrawOverrideHeight = Windowed ? WindowHeight : 0;
++
++		Logging::Log() << "DeathtrapPresentation mode="
++			<< (Windowed ? "windowed" : "borderless")
++			<< " window=" << WindowWidth << "x" << WindowHeight;
++	}
++
+ 	// Store a list of ddraw devices
+ 	std::vector<m_IDirectDrawX*> DDrawVector;
+ 
+@@ -512,8 +554,30 @@ HRESULT m_IDirectDrawX::CreateSurface2(LPDDSURFACEDESC2 lpDDSurfaceDesc2, LPDIRE
  		// Check for existing primary surface
  		if ((lpDDSurfaceDesc2->ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE) && GetPrimarySurface())
  		{
@@ -1088,7 +1123,15 @@ index bffe020535dffdf7b5b52d957ab033f64432bf8b..e61f8be4a8428a22fdacb57063ea0716
  		}
  
  		// Validate backbuffer
-@@ -3064,6 +3086,31 @@ bool m_IDirectDrawX::IsInScene()
+@@ -2520,6 +2584,7 @@ void m_IDirectDrawX::InitInterface(DWORD DirectXVersion)
+ 	AddRef(DirectXVersion);
+ 
+ 	ScopedCriticalSection ThreadLockDD(DdrawWrapper::GetDDCriticalSection());
++	ApplyDeathtrapPresentationMode();
+ 
+ 	DDrawVector.push_back(this);
+ 
+@@ -3064,6 +3129,31 @@ bool m_IDirectDrawX::IsInScene()
  	return false;
  }
  
@@ -1120,7 +1163,7 @@ index bffe020535dffdf7b5b52d957ab033f64432bf8b..e61f8be4a8428a22fdacb57063ea0716
  UINT m_IDirectDrawX::GetAdapterIndex() const
  {
  	return d3d9AdapterIndex;
-@@ -5400,7 +5447,14 @@ HRESULT m_IDirectDrawX::CopyPrimarySurface(m_IDirectDrawSurfaceX* pPrimarySurfac
+@@ -5400,7 +5490,14 @@ HRESULT m_IDirectDrawX::CopyPrimarySurface(m_IDirectDrawSurfaceX* pPrimarySurfac
  	// Get source rect
  	RECT* pSrcRect = nullptr;
  	RECT SrcRect = { 0, 0, (LONG)pPrimarySurface->GetD9Width(), (LONG)pPrimarySurface->GetD9Height() };
@@ -1136,7 +1179,7 @@ index bffe020535dffdf7b5b52d957ab033f64432bf8b..e61f8be4a8428a22fdacb57063ea0716
  	{
  		// Clip rect
  		RECT ClientRect = {};
-@@ -5428,6 +5482,42 @@ HRESULT m_IDirectDrawX::CopyPrimarySurface(m_IDirectDrawSurfaceX* pPrimarySurfac
+@@ -5428,6 +5525,42 @@ HRESULT m_IDirectDrawX::CopyPrimarySurface(m_IDirectDrawSurfaceX* pPrimarySurfac
  		pDestRect = &DestRect;
  	}
  
@@ -1180,7 +1223,7 @@ index bffe020535dffdf7b5b52d957ab033f64432bf8b..e61f8be4a8428a22fdacb57063ea0716
  	HRESULT hr = d3d9Device->StretchRect(pRenderTarget, pSrcRect, pDestBuffer, pDestRect, D3DTEXF_NONE);
  	if (FAILED(hr))
 diff --git a/ddraw/IDirectDrawX.h b/ddraw/IDirectDrawX.h
-index 66d1de49219c518ad170705984a6664ce636a88e..88b3da19e1d83ae3f705b94e30d3defd9bbf263e 100644
+index 66d1de49..88b3da19 100644
 --- a/ddraw/IDirectDrawX.h
 +++ b/ddraw/IDirectDrawX.h
 @@ -223,6 +223,7 @@ public:
@@ -1192,7 +1235,7 @@ index 66d1de49219c518ad170705984a6664ce636a88e..88b3da19e1d83ae3f705b94e30d3defd
  	// Direct3D9 interfaces
  	UINT GetAdapterIndex() const;
 diff --git a/ddraw/ddraw.h b/ddraw/ddraw.h
-index e3be09633551153c903881717dd92ebb3c99ed17..157270da941b4bb2aafe7cf9ecf3e59276c3fdb4 100644
+index e3be0963..157270da 100644
 --- a/ddraw/ddraw.h
 +++ b/ddraw/ddraw.h
 @@ -112,6 +112,8 @@ namespace DdrawWrapper
@@ -1205,7 +1248,7 @@ index e3be09633551153c903881717dd92ebb3c99ed17..157270da941b4bb2aafe7cf9ecf3e592
  
  extern AddressLookupTableDdraw<void> ProxyAddressLookupTableDdraw;
 diff --git a/dxwrapper.vcxproj b/dxwrapper.vcxproj
-index ea3937b72a5efcd00cb0222298b65e3bb944b1aa..270bad44eab453a46c7f38564494cb0081bdd3cc 100644
+index ea3937b7..270bad44 100644
 --- a/dxwrapper.vcxproj
 +++ b/dxwrapper.vcxproj
 @@ -78,6 +78,7 @@

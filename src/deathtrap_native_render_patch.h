@@ -152,6 +152,12 @@ bool DeathtrapWidescreenWorldRenderActive();
 // larger value is a manual override.
 uint32_t DeathtrapWidescreenAspectX1000();
 
+// User-facing presentation mode from deathtrap_native.ini. 0 is a
+// desktop-sized borderless window and 1 is a centered, framed window.
+uint32_t DeathtrapDisplayMode();
+uint32_t DeathtrapWindowWidth();
+uint32_t DeathtrapWindowHeight();
+
 // Read-only presentation state for the controller's four-category selector.
 // The D3D11 layer uses this to draw an eight-direction marker after the game
 // has rendered its original inventory row.

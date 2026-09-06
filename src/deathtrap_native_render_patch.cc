@@ -736,6 +736,9 @@ bool g_music_track_fix_enabled = true;
 bool g_safe_save_anywhere_enabled = true;
 bool g_selector_slow_motion_enabled = true;
 uint32_t g_widescreen_aspect_x1000 = 1u;
+bool g_display_windowed = false;
+uint32_t g_display_window_width = 1280u;
+uint32_t g_display_window_height = 720u;
 thread_local bool g_widescreen_world_render_active = false;
 uint32_t g_selector_slow_motion_percent = 25u;
 bool g_selector_slow_motion_active = false;
@@ -2225,6 +2228,21 @@ int ConfiguredInteger(const wchar_t* section, const wchar_t* key,
   return GetPrivateProfileIntW(section, key, default_value, ini.c_str());
 }
 
+std::wstring ConfiguredText(const wchar_t* section, const wchar_t* key,
+                            const wchar_t* default_value) {
+  const std::wstring ini = ConfigurationPath();
+  wchar_t value[64] = {};
+  GetPrivateProfileStringW(section, key, default_value, value,
+                           static_cast<DWORD>(std::size(value)), ini.c_str());
+  std::wstring result(value);
+  const size_t first = result.find_first_not_of(L" \t\r\n");
+  if (first == std::wstring::npos) {
+    return default_value ? std::wstring(default_value) : std::wstring();
+  }
+  const size_t last = result.find_last_not_of(L" \t\r\n");
+  return result.substr(first, last - first + 1u);
+}
+
 bool PatchMessageLifetimeImmediate(uintptr_t rva, uint32_t expected,
                                    uint32_t ticks) {
   if (!g_dungeon_base || ticks == 0u) {
@@ -2484,6 +2502,10 @@ void LogCompactSupportEnvironment(uint32_t subframes) {
       fullscreen.c_str(), scaling.c_str(), capture.c_str(),
       cursor_scale.c_str(), free_mouse.c_str(), directx_resolution.c_str(),
       antialiasing.c_str());
+  AppendDeathtrapSupportLog(
+      "support_display mode=%s window=%ux%u",
+      g_display_windowed ? "windowed" : "borderless",
+      g_display_window_width, g_display_window_height);
 }
 
 void AppendNativeLogBlock(const std::string& block) {
@@ -18864,6 +18886,13 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
 
 void InitializePatchState() {
   g_debug_log = ConfiguredDebugLog();
+  const std::wstring display_mode =
+      ConfiguredText(L"Display", L"Mode", L"borderless");
+  g_display_windowed = _wcsicmp(display_mode.c_str(), L"windowed") == 0;
+  g_display_window_width = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"Display", L"WindowWidth", 1280), 640, 7680));
+  g_display_window_height = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"Display", L"WindowHeight", 720), 480, 4320));
   g_widescreen_aspect_x1000 = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"Rendering", L"WidescreenAspectX1000", 1),
       0, 10000));
@@ -19641,11 +19670,14 @@ bool DeathtrapModernCameraConsumesMouse() {
   }
   CURSORINFO cursor = {};
   cursor.cbSize = sizeof(cursor);
-  if (GetCursorInfo(&cursor) && (cursor.flags & CURSOR_SHOWING) != 0u) {
+  if (!g_display_windowed && GetCursorInfo(&cursor) &&
+      (cursor.flags & CURSOR_SHOWING) != 0u) {
     // Pause/options screens may retain every gameplay pointer used by
     // DeathtrapGameplayReady.  Their visible native cursor is the reliable
-    // frontend ownership signal, including mouse-only runs where no XInput
-    // Start transition exists.
+    // frontend ownership signal in borderless mode, including mouse-only runs
+    // where no XInput Start transition exists.  The legacy game leaves the
+    // system cursor visible over a framed window even during gameplay, so
+    // windowed mode must use the mode-3 watchdog and native gameplay test.
     return false;
   }
   // menu_mode is a pause/frontend override maintained by the XInput bridge.
@@ -19666,7 +19698,8 @@ bool DeathtrapGameplayAcceptsMouseCombat() {
   }
   CURSORINFO cursor = {};
   cursor.cbSize = sizeof(cursor);
-  if (GetCursorInfo(&cursor) && (cursor.flags & CURSOR_SHOWING) != 0u) {
+  if (!g_display_windowed && GetCursorInfo(&cursor) &&
+      (cursor.flags & CURSOR_SHOWING) != 0u) {
     return false;
   }
   return !g_xinput_controller_present.load(std::memory_order_acquire) ||
@@ -19701,6 +19734,11 @@ uint32_t DeathtrapWidescreenAspectX1000() {
   }
   if (g_widescreen_aspect_x1000 > 1u) {
     return g_widescreen_aspect_x1000;
+  }
+  if (g_display_windowed && g_display_window_width != 0u &&
+      g_display_window_height != 0u) {
+    return MonitorAspectX1000(static_cast<int32_t>(g_display_window_width),
+                              static_cast<int32_t>(g_display_window_height));
   }
 
   HWND window = GetForegroundWindow();
@@ -19751,6 +19789,18 @@ uint32_t DeathtrapWidescreenAspectX1000() {
     return 0u;
   }
   return MonitorAspectX1000(width, height);
+}
+
+uint32_t DeathtrapDisplayMode() {
+  return g_display_windowed ? 1u : 0u;
+}
+
+uint32_t DeathtrapWindowWidth() {
+  return g_display_window_width;
+}
+
+uint32_t DeathtrapWindowHeight() {
+  return g_display_window_height;
 }
 
 DeathtrapControllerSelectorStatus GetDeathtrapControllerSelectorStatus() {

@@ -62,19 +62,13 @@ file. See [Publishing GitHub releases](RELEASING.md).
 
 ## Verification
 
-The build script performs these checks:
-
-1. the DLL is built for x86;
-2. the DirectInput export proxy loads;
-3. `DirectInputCreateA` returns success and creates an object;
-4. the deterministic camera spring-arm and room-collision tests pass;
-5. the immersive first-person eye/orientation pose tests pass;
-6. all CD tracks `2..16` map to the fifteen Steam MP3 indices `0..14`;
-7. the control-binding installer preserves CRLF without producing `CR-CR-LF`;
-8. unknown game hashes produce warnings without blocking installation;
-9. a packaged payload upgrades an existing installation only after preserving
-   its DLL, configuration and control file in the rollback directory;
-10. the verified binary is copied to `dist/DINPUT.dll`.
+The build script verifies the x86 DirectInput proxy, DirectInput device/axis
+ownership, widescreen layout matrix, camera spring and room collision,
+immersive first person, music routing, mouse combat, input binding pages, safe
+saving, selector time dilation and selector/camera handoff. It also exercises
+clean and upgrade installs, hash-warning behavior, CRLF preservation, the
+bundled dgVoodoo profile, physical display-size detection and rollback before
+copying the verified binary to `dist/DINPUT.dll`.
 
 For a diagnostic game run, set `DebugLog=1`. Return it to `0` after validation
 because synchronous file logging is intentionally excluded from normal play.

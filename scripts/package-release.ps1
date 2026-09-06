@@ -28,6 +28,12 @@ $config = Get-Content -LiteralPath $configPath -Raw
 if ($config -notmatch '(?m)^DebugLog=0\s*$') {
     throw 'Release configuration must set Diagnostics/DebugLog=0.'
 }
+$dgVoodooConfigPath = Join-Path $repoRoot 'config\dgVoodoo-recommended.conf'
+$dgVoodooConfig = Get-Content -LiteralPath $dgVoodooConfigPath -Raw
+if ($dgVoodooConfig -notmatch `
+        '(?ms)^\[DirectX\]\s*$.*?^Antialiasing\s*=\s*8x\s*$') {
+    throw 'Release dgVoodoo DirectX configuration must use Antialiasing = 8x.'
+}
 
 $dgVoodooFiles = @(
     @{
@@ -57,7 +63,7 @@ $dxWrapperFiles = @(
     },
     @{
         Path = 'third_party\deathtrap-dxwrapper-release225\x86\dxwrapper.dll'
-        Sha256 = 'BC633D310B125C704EE489286BAB86607EFCEB2ACA6B4BC22E9B66667FD04170'
+        Sha256 = 'A01EC795A633643CEA61A7CDC62EE97793D1674733D31E8240CE98C33E145841'
     }
 )
 foreach ($dxWrapperFile in $dxWrapperFiles) {
