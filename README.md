@@ -4,7 +4,7 @@ Current development version: **0.0.227**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
-  <a href="https://ko-fi.com/utkiduck"><img src="assets/ko-fi-support.png" alt="Support Deathtrap Native 50 on Ko-fi" height="28"></a>
+  <a href="https://ko-fi.com/utkiduck"><img src="assets/ko-fi-support.png" alt="Leave an optional tip for Deathtrap Native 50 on Ko-fi" height="28"></a>
 </p>
 
 <p align="center">
@@ -71,13 +71,16 @@ redistribution terms.
 See the [user-facing changelog](CHANGELOG.md) for the complete consolidated
 list of changes from the original Steam release.
 
-## Support development
+## Support the project
 
-Deathtrap Native 50 is completely free, and no features or downloads are
-locked behind donations. If you enjoy the patch and voluntarily want to help
-support continued fixes, development-tool and AI-subscription costs, or future
-game-modernization projects, you can donate through
-[Ko-fi](https://ko-fi.com/utkiduck).
+Deathtrap Native 50 and all of its downloads and features are completely free.
+If you find this already-published patch useful, you may leave an optional tip
+through [Ko-fi](https://ko-fi.com/utkiduck).
+
+Tips do not unlock downloads, features, support, rewards, or access to future
+work.
+
+[![Support this project on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/utkiduck)
 
 ## Compatibility
 
