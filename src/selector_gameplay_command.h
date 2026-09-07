@@ -6,6 +6,12 @@
 
 namespace deathtrap::selector_gameplay {
 
+inline bool RequiresExactSelectorDispatch(int32_t item_id) {
+  // Firefly is selected from the spell row, but selection itself immediately
+  // executes and consumes it. The other seven spell IDs only equip a spell.
+  return item_id == 0x0E;
+}
+
 // The retail selector dispatches item actions from the same routine that
 // draws its rows.  Synthetic presentation passes may therefore observe an
 // input edge before the next exact gameplay render.  Keep those actions out

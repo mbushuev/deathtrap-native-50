@@ -67,6 +67,11 @@ constexpr uintptr_t kUiSelectorModeRva = 0x001086FCu;
 constexpr uintptr_t kUiMessageStateRva = 0x001D41C8u;
 constexpr uintptr_t kUiMessageEntriesRva = 0x001D4360u;
 constexpr uintptr_t kUiMessageLifetimeImmediateRva = 0x0008F6AFu;
+constexpr uintptr_t kUiMessageRendererRva = 0x0008F4C0u;
+constexpr uintptr_t kPstMessageRendererRva = 0x00077FF0u;
+constexpr uintptr_t kUiViewportPointerRva = 0x001F11B4u;
+constexpr size_t kUiViewportLeftOffset = 0x18u;
+constexpr size_t kUiViewportRightOffset = 0x20u;
 constexpr uintptr_t kPstMessageStateRva = 0x001F0A90u;
 constexpr uintptr_t kPstMessageLifetimeImmediateRva = 0x000781C8u;
 constexpr uintptr_t kUiCountdownStateRva = 0x001D89F0u;
@@ -1125,6 +1130,7 @@ using RenderPresentWaitFn = void(__cdecl*)(void* context, int wait);
 using SchedulerRateSetterFn = void(__cdecl*)(int rate);
 using RendererFn = void(__cdecl*)(void* context);
 using InventorySlotDrawFn = void(__cdecl*)(void* slot);
+using UiMessageRendererFn = void(__cdecl*)();
 using RenderCacheUpdateFn = void(__cdecl*)(void* owner);
 using BackendFlipFn = void(__cdecl*)();
 using DamageHandlerFn = int(__cdecl*)(void* target, int32_t requested_damage,
@@ -1139,6 +1145,7 @@ using OffensiveSpellLaunchFn = void*(__cdecl*)(void* actor,
 using RangedWeaponLaunchFn = void*(__cdecl*)(void* actor,
                                              void* launch_context,
                                              void* launch_output);
+using SelectSpellFn = void(__cdecl*)(int32_t spell_id);
 using UseConsumableFn = void(__cdecl*)(int32_t item_id);
 using SavePointQueryFn = int(__cdecl*)(int32_t* gold_cost);
 using KeyboardBindingMenuFn = void(__cdecl*)();
@@ -1204,6 +1211,8 @@ SchedulerRateSetterFn g_scheduler_rate_setter = nullptr;
 RendererFn g_renderer = nullptr;
 RendererFn g_original_renderer = nullptr;
 InventorySlotDrawFn g_original_inventory_slot_draw = nullptr;
+UiMessageRendererFn g_original_ui_message_renderer = nullptr;
+UiMessageRendererFn g_original_pst_message_renderer = nullptr;
 RenderCacheUpdateFn g_scene_cache_update = nullptr;
 RenderCacheUpdateFn g_camera_cache_update = nullptr;
 RenderCacheUpdateFn g_camera_node_local_update = nullptr;
@@ -1213,10 +1222,14 @@ MeleeAttackWindowFn g_original_melee_attack_window = nullptr;
 SuccessfulBlockImpactFn g_original_successful_block_impact = nullptr;
 OffensiveSpellLaunchFn g_original_offensive_spell_launch = nullptr;
 RangedWeaponLaunchFn g_original_ranged_weapon_launch = nullptr;
+SelectSpellFn g_original_select_spell = nullptr;
 UseConsumableFn g_original_use_consumable = nullptr;
 deathtrap::selector_gameplay::DeferredConsumables
     g_deferred_selector_consumables;
+deathtrap::selector_gameplay::DeferredConsumables
+    g_deferred_selector_immediate_spells;
 thread_local bool g_selector_presentation_input_poll = false;
+thread_local int32_t g_centered_ui_context_compensation_x = 0;
 SavePointQueryFn g_original_save_point_query = nullptr;
 KeyboardBindingMenuFn g_original_keyboard_binding_menu = nullptr;
 RootMenuInputFn g_original_root_menu_input = nullptr;
@@ -11642,7 +11655,57 @@ void __cdecl HookUseConsumable(int32_t item_id) {
   ExecuteOriginalConsumable(item_id);
 }
 
+void __cdecl HookSelectSpell(int32_t spell_id) {
+  // Firefly (0x0E) is unlike the seven projectile spells: selecting it calls
+  // its illumination effect immediately and clears the active spell again.
+  // A selector draw can observe the key/release edge during a synthetic
+  // presentation pass, whose scene rollback then erases that effect after the
+  // inventory count has already changed. Defer only this immediate spell;
+  // ordinary spell selection remains byte-for-byte retail.
+  if (!deathtrap::selector_gameplay::RequiresExactSelectorDispatch(
+          spell_id)) {
+    g_original_select_spell(spell_id);
+    return;
+  }
+
+  const DeathtrapNativePresentationStage stage =
+      g_active_presentation_trace.stage;
+  if (g_selector_presentation_input_poll ||
+      stage == DeathtrapNativePresentationStage::kMidpoint) {
+    if (g_deferred_selector_immediate_spells.ObserveSynthetic(spell_id)) {
+      AppendNativeLog(
+          "selector gameplay defer kind=immediate_spell item=%d tick=%llu "
+          "source=%s",
+          spell_id,
+          static_cast<unsigned long long>(g_active_presentation_trace.tick),
+          g_selector_presentation_input_poll ? "presentation_input"
+                                             : "midpoint_render");
+    }
+    return;
+  }
+  if (stage == DeathtrapNativePresentationStage::kExact) {
+    g_deferred_selector_immediate_spells.ObserveExact(spell_id);
+  }
+  g_original_select_spell(spell_id);
+}
+
 void ApplyDeferredSelectorGameplayCommands() {
+  int32_t spell_id = 0;
+  while (g_deferred_selector_immediate_spells.Pop(&spell_id)) {
+    if (!DeathtrapGameplayReady(false)) {
+      AppendNativeLog(
+          "selector gameplay discard kind=immediate_spell item=%d "
+          "reason=gameplay",
+          spell_id);
+      continue;
+    }
+    AppendNativeLog(
+        "selector gameplay apply kind=immediate_spell item=%d tick=%llu",
+        spell_id,
+        static_cast<unsigned long long>(g_active_presentation_trace.tick));
+    g_original_select_spell(spell_id);
+  }
+
   int32_t item_id = 0;
   while (g_deferred_selector_consumables.Pop(&item_id)) {
     if (!DeathtrapGameplayReady(false)) {
@@ -17570,6 +17633,73 @@ void RestorePlayerRenderFlags(
   }
 }
 
+void RenderCenteredUiMessages(UiMessageRendererFn original_renderer) {
+  const int32_t compensation = g_centered_ui_context_compensation_x;
+  if (compensation <= 0 || !g_dungeon_base) {
+    original_renderer();
+    return;
+  }
+
+  // Dungeon.dll+0x8F4C0 and +0x77FF0 are the two centered message renderers
+  // reached from the retail HUD pass. The latter owns the six-slot queue used
+  // by item pickups, applied-effect names, and PST/level-script notifications;
+  // the former owns the separate three-slot formatted-message queue. During
+  // gameplay the widescreen renderer has
+  // already moved the complete original render context right by half of the
+  // added width. Centering a message in the expanded viewport adds the same
+  // gutter a second time.
+  // Shift only the two viewport bounds consumed by the retail alignment
+  // helper, then restore them before the rest of the HUD is rendered.
+  uintptr_t viewport = 0;
+  int32_t original_left = 0;
+  int32_t original_right = 0;
+  if (!SafeReadValue(g_dungeon_base + kUiViewportPointerRva, &viewport) ||
+      !viewport ||
+      !SafeReadValue(
+          reinterpret_cast<const void*>(viewport + kUiViewportLeftOffset),
+          &original_left) ||
+      !SafeReadValue(
+          reinterpret_cast<const void*>(viewport + kUiViewportRightOffset),
+          &original_right)) {
+    original_renderer();
+    return;
+  }
+
+  const int32_t compensated_left = original_left - compensation;
+  const int32_t compensated_right = original_right - compensation;
+  const bool left_written = SafeWrite(
+      reinterpret_cast<void*>(viewport + kUiViewportLeftOffset),
+      &compensated_left, sizeof(compensated_left));
+  const bool right_written = left_written && SafeWrite(
+      reinterpret_cast<void*>(viewport + kUiViewportRightOffset),
+      &compensated_right, sizeof(compensated_right));
+  if (!right_written) {
+    if (left_written) {
+      SafeWrite(reinterpret_cast<void*>(viewport + kUiViewportLeftOffset),
+                &original_left, sizeof(original_left));
+    }
+    original_renderer();
+    return;
+  }
+
+  __try {
+    original_renderer();
+  } __finally {
+    SafeWrite(reinterpret_cast<void*>(viewport + kUiViewportLeftOffset),
+              &original_left, sizeof(original_left));
+    SafeWrite(reinterpret_cast<void*>(viewport + kUiViewportRightOffset),
+              &original_right, sizeof(original_right));
+  }
+}
+
+void __cdecl HookUiMessageRenderer() {
+  RenderCenteredUiMessages(g_original_ui_message_renderer);
+}
+
+void __cdecl HookPstMessageRenderer() {
+  RenderCenteredUiMessages(g_original_pst_message_renderer);
+}
+
 void RenderOriginalWithPlayerTransparency(void* context,
                                            uintptr_t player_root) {
   const std::vector<PlayerRenderFlagRollback> rollback =
@@ -17580,6 +17710,7 @@ void RenderOriginalWithPlayerTransparency(void* context,
   std::array<int32_t, 3> original_context_x{};
   bool widescreen_context = false;
   bool widescreen_width_written = false;
+  int32_t centered_ui_context_compensation = 0;
   const uint32_t widescreen_aspect_x1000 =
       DeathtrapWidescreenAspectX1000();
   if (widescreen_aspect_x1000 > 1333u && g_dungeon_base && context &&
@@ -17617,15 +17748,25 @@ void RenderOriginalWithPlayerTransparency(void* context,
             reinterpret_cast<uint8_t*>(context) + offsets[index],
             &widescreen_context_x[index], sizeof(widescreen_context_x[index]));
       }
+      if (widescreen_context) {
+        centered_ui_context_compensation =
+            CenteredUiContextCompensation(widescreen_width, original_width);
+      }
     }
   }
 
   const bool previous_widescreen_world_render_active =
       g_widescreen_world_render_active;
+  const int32_t previous_centered_ui_context_compensation =
+      g_centered_ui_context_compensation_x;
   g_widescreen_world_render_active = WorldPassMarker(
       widescreen_aspect_x1000, widescreen_context, context != nullptr,
       player_root != 0);
+  g_centered_ui_context_compensation_x =
+      centered_ui_context_compensation;
   g_original_renderer(context);
+  g_centered_ui_context_compensation_x =
+      previous_centered_ui_context_compensation;
   g_widescreen_world_render_active =
       previous_widescreen_world_render_active;
 
@@ -20117,6 +20258,57 @@ bool InstallDeathtrapNativeRenderHooks() {
     return false;
   }
 
+  // The retail HUD pass contains two centered message paths. Compensate their
+  // duplicated half-gutter without changing corner HUD, menus, movies, the
+  // left-anchored text-entry path, or world geometry.
+  void* const ui_message_target =
+      g_dungeon_base + kUiMessageRendererRva;
+  const MH_STATUS create_ui_message = MH_CreateHook(
+      ui_message_target, reinterpret_cast<void*>(&HookUiMessageRenderer),
+      reinterpret_cast<void**>(&g_original_ui_message_renderer));
+  if (create_ui_message == MH_OK ||
+      create_ui_message == MH_ERROR_ALREADY_CREATED) {
+    const MH_STATUS enable_ui_message = MH_EnableHook(ui_message_target);
+    if (enable_ui_message == MH_OK ||
+        enable_ui_message == MH_ERROR_ENABLED) {
+      AppendNativeLog(
+          "widescreen centered_ui_message_hook=active rva=%08llX",
+          static_cast<unsigned long long>(kUiMessageRendererRva));
+    } else {
+      AppendNativeLog(
+          "widescreen centered_ui_message_hook=enable_failed status=%d",
+          static_cast<int>(enable_ui_message));
+    }
+  } else {
+    AppendNativeLog(
+        "widescreen centered_ui_message_hook=create_failed status=%d",
+        static_cast<int>(create_ui_message));
+  }
+
+  void* const pst_message_target =
+      g_dungeon_base + kPstMessageRendererRva;
+  const MH_STATUS create_pst_message = MH_CreateHook(
+      pst_message_target, reinterpret_cast<void*>(&HookPstMessageRenderer),
+      reinterpret_cast<void**>(&g_original_pst_message_renderer));
+  if (create_pst_message == MH_OK ||
+      create_pst_message == MH_ERROR_ALREADY_CREATED) {
+    const MH_STATUS enable_pst_message = MH_EnableHook(pst_message_target);
+    if (enable_pst_message == MH_OK ||
+        enable_pst_message == MH_ERROR_ENABLED) {
+      AppendNativeLog(
+          "widescreen centered_pst_message_hook=active rva=%08llX",
+          static_cast<unsigned long long>(kPstMessageRendererRva));
+    } else {
+      AppendNativeLog(
+          "widescreen centered_pst_message_hook=enable_failed status=%d",
+          static_cast<int>(enable_pst_message));
+    }
+  } else {
+    AppendNativeLog(
+        "widescreen centered_pst_message_hook=create_failed status=%d",
+        static_cast<int>(create_pst_message));
+  }
+
   void* const renderer_target = g_dungeon_base + kRendererRva;
   const MH_STATUS create_renderer = MH_CreateHook(
       renderer_target, reinterpret_cast<void*>(&HookRenderer),
@@ -20310,6 +20502,34 @@ bool InstallDeathtrapNativeRenderHooks() {
   } else {
     AppendNativeLog("game_event consumable_hook=create_failed status=%d",
                     static_cast<int>(create_consumable));
+  }
+
+  // Firefly is spell ID 0x0E, but selecting it executes and consumes the
+  // illumination effect immediately instead of merely equipping a projectile
+  // spell. Keep that one command outside synthetic selector renders, using the
+  // same exact-pass transaction boundary as immediate F4 items.
+  void* const select_spell_target = g_dungeon_base + kSelectSpellRva;
+  const MH_STATUS create_select_spell = MH_CreateHook(
+      select_spell_target, reinterpret_cast<void*>(&HookSelectSpell),
+      reinterpret_cast<void**>(&g_original_select_spell));
+  if (create_select_spell == MH_OK ||
+      create_select_spell == MH_ERROR_ALREADY_CREATED) {
+    const MH_STATUS enable_select_spell =
+        MH_EnableHook(select_spell_target);
+    if (enable_select_spell == MH_OK ||
+        enable_select_spell == MH_ERROR_ENABLED) {
+      AppendNativeLog(
+          "selector immediate_spell_hook=active rva=%08llX id=14",
+          static_cast<unsigned long long>(kSelectSpellRva));
+    } else {
+      AppendNativeLog(
+          "selector immediate_spell_hook=enable_failed status=%d",
+          static_cast<int>(enable_select_spell));
+    }
+  } else {
+    AppendNativeLog(
+        "selector immediate_spell_hook=create_failed status=%d",
+        static_cast<int>(create_select_spell));
   }
 
   // Preserve only the measured collision-projection callbacks required by

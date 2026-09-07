@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current development version: **0.0.226**
+Current development version: **0.0.227**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -8,7 +8,7 @@ Current development version: **0.0.226**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.226.png" alt="Deathtrap Native 50 v0.0.226" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.227.png" alt="Deathtrap Native 50 v0.0.227" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original

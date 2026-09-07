@@ -4,6 +4,14 @@
 
 int main() {
   using deathtrap::selector_gameplay::DeferredConsumables;
+  using deathtrap::selector_gameplay::RequiresExactSelectorDispatch;
+
+  if (!RequiresExactSelectorDispatch(0x0E) ||
+      RequiresExactSelectorDispatch(0x0F) ||
+      RequiresExactSelectorDispatch(0x15)) {
+    std::cerr << "immediate spell classification is incorrect\n";
+    return 1;
+  }
 
   DeferredConsumables commands;
   if (!commands.ObserveSynthetic(0x16) ||

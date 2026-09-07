@@ -27,4 +27,13 @@ int main() {
       WorldPassMarker(1600, false, true, true) ||
       WorldPassMarker(1600, true, true, false)) return 3;
   if (MonitorAspectX1000(0, 0) != 0) return 4;
+  // A centered HUD element rendered inside the widened world context needs
+  // exactly one inverse half-gutter. At 1920x1080 the logical canvas is
+  // 853x480, so the compensation is 106 logical pixels (about 240 physical).
+  const int32_t wide_1080 =
+      WidescreenLogicalWidth(480, MonitorAspectX1000(1920, 1080));
+  if (wide_1080 != 853 ||
+      CenteredUiContextCompensation(wide_1080, 640) != 106 ||
+      CenteredUiContextCompensation(640, 640) != 0 ||
+      CenteredUiContextCompensation(600, 640) != 0) return 5;
 }

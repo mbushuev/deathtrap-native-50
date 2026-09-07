@@ -8,6 +8,14 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.227 — Firefly and widescreen message fixes
+
+- Fixes the Firefly spell during selector slow motion so its illumination
+  effect is applied once and the item is not consumed by a discarded
+  presentation pass.
+- Corrects the horizontal position of centered pickup names, applied-effect
+  notifications and level-script messages during widescreen gameplay.
+
 ## 0.0.226 — DPI-safe borderless and windowed modes
 
 - Adds `borderless` and `windowed` presentation modes selectable in

@@ -10,6 +10,10 @@ inline uint32_t MonitorAspectX1000(int32_t width, int32_t height) {
 inline int32_t WidescreenLogicalWidth(int32_t height, uint32_t aspect) {
   return static_cast<int32_t>((int64_t(height) * aspect + 500) / 1000);
 }
+inline int32_t CenteredUiContextCompensation(int32_t expanded_width,
+                                             int32_t original_width) {
+  return std::max(0, expanded_width - original_width) / 2;
+}
 inline bool WorldPassMarker(uint32_t aspect, bool expanded,
                             bool context, bool player) {
   return context && player && (aspect <= 1333 || expanded);
