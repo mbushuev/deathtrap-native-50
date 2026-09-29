@@ -768,6 +768,15 @@ CameraProbeSnapshot g_camera_probe_previous;
 std::string g_camera_probe_log_buffer;
 bool g_third_person_orbit_enabled = false;
 bool g_immersive_first_person_enabled = true;
+bool g_keyboard_mouse_camera_relative_movement = false;
+std::atomic<int32_t> g_keyboard_camera_relative_movement_x{0};
+std::atomic<int32_t> g_keyboard_camera_relative_movement_y{0};
+std::atomic<bool> g_keyboard_camera_relative_intent{false};
+std::atomic<DeathtrapMouseAttackFacingPhase>
+    g_third_person_mouse_attack_facing_phase{
+        DeathtrapMouseAttackFacingPhase::kIdle};
+std::atomic<int32_t> g_third_person_mouse_attack_facing_target{0};
+std::atomic<uint64_t> g_third_person_mouse_attack_facing_started_ms{0};
 std::atomic<int32_t> g_immersive_keyboard_movement_x{0};
 std::atomic<int32_t> g_immersive_keyboard_movement_y{0};
 std::atomic<int32_t> g_immersive_xinput_movement_x_milli{0};
@@ -12443,6 +12452,17 @@ bool ReadLivePlayerHeading(int32_t* heading,
   return true;
 }
 
+bool LivePlayerUsesGroundStateDispatcher() {
+  uintptr_t controller = 0;
+  uintptr_t dispatcher = 0;
+  return ResolveLivePlayerMovementController(nullptr, &controller) &&
+      controller &&
+      SafeReadValue(reinterpret_cast<const void*>(controller + 0x2ECu),
+                    &dispatcher) &&
+      dispatcher == reinterpret_cast<uintptr_t>(g_dungeon_base) +
+                        kPlayerStateDispatcherRva;
+}
+
 bool CameraRelativeDesiredHeading(const NormalizedStick2& stick,
                                   int32_t* heading) {
   if (!heading || stick.magnitude <= 0.0 ||
@@ -12457,6 +12477,73 @@ bool CameraRelativeDesiredHeading(const NormalizedStick2& stick,
   const CameraRelativeHeadingTarget target = CameraRelativeHeadingFromOrbit(
       camera_yaw, stick.x, stick.y, kPlayerHeadingUnitsPerTurn,
       g_xinput_camera_relative_invert_y);
+  if (!target.valid) {
+    return false;
+  }
+  *heading = target.heading;
+  return true;
+}
+
+bool KeyboardCameraRelativeRuntimeAvailable() {
+  return g_keyboard_mouse_camera_relative_movement &&
+      g_third_person_orbit_enabled && IsGameForeground() &&
+      CurrentCustomCameraViewMode() ==
+          CustomCameraViewMode::kModernThirdPerson &&
+      !CustomHeadViewSelected() && !RetailFirstPersonActive() &&
+      !g_scripted_camera_override_active.load(std::memory_order_acquire) &&
+      g_player_state_dispatcher_hook_installed.load(
+          std::memory_order_acquire) &&
+      LivePlayerUsesGroundStateDispatcher() &&
+      g_third_person_heading_reference_valid.load(
+          std::memory_order_acquire) &&
+      DeathtrapGameplayReady(true) && DeathtrapModernCameraConsumesMouse();
+}
+
+bool KeyboardCameraRelativeDesiredHeading(int32_t* heading,
+                                          double* magnitude) {
+  if (!heading || !magnitude ||
+      !g_keyboard_camera_relative_intent.load(std::memory_order_acquire) ||
+      !KeyboardCameraRelativeRuntimeAvailable()) {
+    return false;
+  }
+  const int32_t lateral = std::clamp(
+      g_keyboard_camera_relative_movement_x.load(std::memory_order_acquire),
+      -1, 1);
+  const int32_t longitudinal = std::clamp(
+      g_keyboard_camera_relative_movement_y.load(std::memory_order_acquire),
+      -1, 1);
+  if (lateral == 0 && longitudinal == 0) {
+    return false;
+  }
+  const double camera_yaw =
+      static_cast<double>(g_third_person_heading_reference_microradians.load(
+          std::memory_order_acquire)) /
+      1000000.0;
+  const CameraRelativeHeadingTarget target = CameraRelativeHeadingFromOrbit(
+      camera_yaw, static_cast<double>(lateral),
+      static_cast<double>(longitudinal), kPlayerHeadingUnitsPerTurn, true);
+  if (!target.valid) {
+    return false;
+  }
+  *heading = target.heading;
+  *magnitude = std::min(
+      1.0, std::hypot(static_cast<double>(lateral),
+                      static_cast<double>(longitudinal)));
+  return true;
+}
+
+bool ResolveMouseAttackCameraFacingHeading(int32_t* heading) {
+  if (!heading || !KeyboardCameraRelativeRuntimeAvailable()) {
+    return false;
+  }
+  const double camera_yaw =
+      static_cast<double>(g_third_person_heading_reference_microradians.load(
+          std::memory_order_acquire)) /
+      1000000.0;
+  // Use the same runtime-verified longitudinal basis as keyboard W so a
+  // directionless click faces the course visible through the orbit camera.
+  const CameraRelativeHeadingTarget target = CameraRelativeHeadingFromOrbit(
+      camera_yaw, 0.0, 1.0, kPlayerHeadingUnitsPerTurn, true);
   if (!target.valid) {
     return false;
   }
@@ -12617,6 +12704,123 @@ bool ApplyCanonicalPlayerHeading(uintptr_t controller, int32_t target) {
   }
   return ApplyCanonicalPlayerHeadingDelta(
       controller, PlayerHeadingDelta(target, current));
+}
+
+void CancelMouseAttackCameraFacing(const char* reason) {
+  g_third_person_mouse_attack_facing_phase.store(
+      DeathtrapMouseAttackFacingPhase::kCanceled,
+      std::memory_order_release);
+  AppendDeathtrapSupportLog(
+      "mouse_combat camera_facing=canceled reason=%s",
+      reason ? reason : "unknown");
+  if (g_debug_log) {
+    AppendNativeLog("mouse_combat camera_facing phase=canceled reason=%s",
+                    reason ? reason : "unknown");
+  }
+}
+
+void UpdateMouseAttackCameraFacing(void* outer_player) {
+  const DeathtrapMouseAttackFacingPhase phase =
+      g_third_person_mouse_attack_facing_phase.load(
+          std::memory_order_acquire);
+  if (phase == DeathtrapMouseAttackFacingPhase::kIdle ||
+      phase == DeathtrapMouseAttackFacingPhase::kReady ||
+      phase == DeathtrapMouseAttackFacingPhase::kCanceled) {
+    return;
+  }
+
+  const uint64_t now_ms = GetTickCount64();
+  const uint64_t started_ms =
+      g_third_person_mouse_attack_facing_started_ms.load(
+          std::memory_order_acquire);
+  if (!started_ms || now_ms - started_ms > 3000u) {
+    CancelMouseAttackCameraFacing("timeout");
+    return;
+  }
+  if (!KeyboardCameraRelativeRuntimeAvailable()) {
+    CancelMouseAttackCameraFacing("camera_context");
+    return;
+  }
+
+  uintptr_t expected_outer = 0;
+  uintptr_t controller = 0;
+  uintptr_t live_controller = 0;
+  int32_t current_heading = 0;
+  if (!outer_player || !g_player_turn_writer ||
+      !SafeReadValue(g_dungeon_base + kUiOwnerPointerRva,
+                     &expected_outer) ||
+      expected_outer != reinterpret_cast<uintptr_t>(outer_player) ||
+      !SafeReadValue(reinterpret_cast<const void*>(
+                         expected_outer + kPlayerMovementControllerOffset),
+                     &controller) ||
+      !ReadLivePlayerHeading(&current_heading, &live_controller) ||
+      live_controller != controller) {
+    return;
+  }
+
+  int32_t target =
+      g_third_person_mouse_attack_facing_target.load(
+          std::memory_order_acquire);
+  if (phase == DeathtrapMouseAttackFacingPhase::kPending) {
+    if (!ResolveMouseAttackCameraFacingHeading(&target)) {
+      CancelMouseAttackCameraFacing("heading_reference");
+      return;
+    }
+    g_third_person_mouse_attack_facing_target.store(
+        target, std::memory_order_release);
+  }
+
+  const int32_t error = PlayerHeadingDelta(target, current_heading);
+  // Attack-facing is a short, input-blocking alignment rather than sustained
+  // locomotion steering. Give only this transaction a three-times-faster cap
+  // so a half-turn completes in roughly four player ticks without changing
+  // ordinary keyboard or controller movement.
+  const double turn_degrees = std::clamp(
+      g_xinput_movement_turn_degrees_per_tick * 1.5, 28.0, 45.0);
+  const int32_t maximum_step = std::max(
+      1, static_cast<int32_t>(std::lround(
+             turn_degrees * kPlayerHeadingUnitsPerTurn / 360.0)));
+  constexpr int32_t kReadyTolerance = 4;
+  const deathtrap::input::MouseAttackFacingStep step =
+      deathtrap::input::ResolveMouseAttackFacingStep(
+          error, maximum_step, kReadyTolerance);
+  const bool applied = step.heading_delta == 0 ||
+      ApplyCanonicalPlayerHeadingDelta(controller, step.heading_delta);
+  if (!applied) {
+    CancelMouseAttackCameraFacing("heading_write");
+    return;
+  }
+  if (step.ready) {
+    g_third_person_mouse_attack_facing_phase.store(
+        DeathtrapMouseAttackFacingPhase::kReady,
+        std::memory_order_release);
+    AppendDeathtrapSupportLog(
+        "mouse_combat camera_facing=ready current=%d target=%d error=%d "
+        "step=%d",
+        current_heading, target, error, step.heading_delta);
+    if (g_debug_log) {
+      AppendNativeLog(
+          "mouse_combat camera_facing phase=ready current=%d target=%d "
+          "error=%d step=%d controller=%p",
+          current_heading, target, error, step.heading_delta,
+          reinterpret_cast<void*>(controller));
+    }
+    return;
+  }
+  const DeathtrapMouseAttackFacingPhase next_phase =
+      step.heading_delta < 0
+          ? DeathtrapMouseAttackFacingPhase::kTurnLeft
+          : DeathtrapMouseAttackFacingPhase::kTurnRight;
+  g_third_person_mouse_attack_facing_phase.store(
+      next_phase, std::memory_order_release);
+  if (g_debug_log && phase != next_phase) {
+    AppendNativeLog(
+        "mouse_combat camera_facing phase=%s current=%d target=%d error=%d "
+        "step=%d",
+        next_phase == DeathtrapMouseAttackFacingPhase::kTurnLeft
+            ? "turn_left" : "turn_right",
+        current_heading, target, error, step.heading_delta);
+  }
 }
 
 bool ResolveImmersiveLocomotionPlan(ImmersiveLocomotionPlan* plan) {
@@ -12807,6 +13011,10 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
   if (!g_original_player_state_dispatcher) {
     return;
   }
+  // Physical mouse attacks advance toward their fixed click-time camera course
+  // through one bounded canonical heading step per player tick. The retail
+  // attack remains latched until the exact target has been published.
+  UpdateMouseAttackCameraFacing(outer_player);
   // The complete 0x810A0 movement stage owns immersive heading/root routing.
   // Do not let this nested dispatcher start a shorter transaction or steer
   // the temporary collision course back toward the visible body heading.
@@ -12814,9 +13022,16 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
     g_original_player_state_dispatcher(outer_player);
     return;
   }
+  int32_t keyboard_target = 0;
+  double keyboard_magnitude = 0.0;
+  const bool keyboard_camera_relative =
+      KeyboardCameraRelativeDesiredHeading(&keyboard_target,
+                                           &keyboard_magnitude);
+  const bool xinput_camera_relative =
+      g_xinput_camera_relative_intent.load(std::memory_order_acquire);
   uintptr_t validated_controller = 0;
   if (outer_player && g_player_turn_writer &&
-      g_xinput_camera_relative_intent.load(std::memory_order_acquire)) {
+      (keyboard_camera_relative || xinput_camera_relative)) {
     uintptr_t expected_outer = 0;
     uintptr_t controller = 0;
     uintptr_t live_controller = 0;
@@ -12827,22 +13042,26 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
         SafeReadValue(reinterpret_cast<const void*>(
                           expected_outer + kPlayerMovementControllerOffset),
                       &controller) &&
-        controller == g_xinput_movement_controller.load(
-                          std::memory_order_acquire) &&
+        (keyboard_camera_relative ||
+         controller == g_xinput_movement_controller.load(
+                           std::memory_order_acquire)) &&
         ReadLivePlayerHeading(&current_heading, &live_controller) &&
         live_controller == controller) {
       validated_controller = controller;
-      const int32_t target = g_xinput_desired_heading.load(
-          std::memory_order_acquire);
-      const double magnitude = static_cast<double>(
-          g_xinput_movement_magnitude_milli.load(
-              std::memory_order_acquire)) / 1000.0;
+      const int32_t target = keyboard_camera_relative
+          ? keyboard_target
+          : g_xinput_desired_heading.load(std::memory_order_acquire);
+      const double magnitude = keyboard_camera_relative
+          ? keyboard_magnitude
+          : static_cast<double>(g_xinput_movement_magnitude_milli.load(
+                std::memory_order_acquire)) / 1000.0;
       const double scaled_turn_degrees =
           g_xinput_movement_turn_degrees_per_tick *
           (0.55 + 0.45 * std::clamp(magnitude, 0.0, 1.0));
       const int32_t maximum_step = std::max(
           1, static_cast<int32_t>(std::lround(
-                 scaled_turn_degrees * kPlayerHeadingUnitsPerTurn / 360.0)));
+                 scaled_turn_degrees * kPlayerHeadingUnitsPerTurn /
+                 360.0)));
       const CameraRelativeHeadingStep steering =
           StepCameraRelativeHeading(target, current_heading,
                                     kPlayerHeadingUnitsPerTurn,
@@ -12855,8 +13074,9 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
       if (g_debug_log &&
           (g_xinput_camera_relative_turn_calls % 60u) == 1u) {
         AppendNativeLog(
-            "xinput movement dispatcher_heading current=%d target=%d "
+            "movement dispatcher_heading source=%s current=%d target=%d "
             "error=%d step=%d magnitude=%.3f controller=%p",
+            keyboard_camera_relative ? "keyboard" : "xinput",
             current_heading, target, steering.heading_error,
             steering.heading_delta, magnitude,
             reinterpret_cast<void*>(controller));
@@ -19094,6 +19314,8 @@ void InitializePatchState() {
       ConfiguredInteger(L"Camera", L"ThirdPersonOrbit", 1) != 0;
   g_immersive_first_person_enabled =
       ConfiguredInteger(L"Camera", L"ImmersiveFirstPerson", 1) != 0;
+  g_keyboard_mouse_camera_relative_movement =
+      ConfiguredInteger(L"KeyboardMouse", L"CameraRelativeMovement", 1) != 0;
   g_third_person_orbit_invert_x =
       ConfiguredInteger(L"Camera", L"InvertX", 0) != 0;
   g_third_person_orbit_invert_y =
@@ -19320,7 +19542,8 @@ void InitializePatchState() {
       "base_bindings=%u hold_ms=%u deadzones=%d/%d axis_lock=%u%% "
       "third_person_stick_speed=%u%% "
       "radial=%d center_y=%d "
-      "camera_relative_movement=%u invert_y=%u turn=%.0fdeg "
+      "camera_relative_movement=%u keyboard_camera_relative=%u "
+      "invert_y=%u turn=%.0fdeg "
       "vibration=%u/%u%% action=%u/%u/%u/%ums event=%u/%u/%u/%u/%u/"
       "%u/%ums heavy=%uhp/%ums "
       "available=%u camera_probe=%u orbit=%u immersive_first_person=%u "
@@ -19341,6 +19564,7 @@ void InitializePatchState() {
       g_xinput_selector_radius,
       g_xinput_selector_center_y,
       g_xinput_camera_relative_movement ? 1u : 0u,
+      g_keyboard_mouse_camera_relative_movement ? 1u : 0u,
       g_xinput_camera_relative_invert_y ? 1u : 0u,
       g_xinput_movement_turn_degrees_per_tick,
       g_xinput_vibration_enabled ? 1u : 0u,
@@ -19709,6 +19933,51 @@ bool DeathtrapImmersiveFirstPersonActive() {
 bool DeathtrapImmersiveVectorLocomotionActive() {
   return g_immersive_root_motion_hooks_installed.load(
       std::memory_order_acquire);
+}
+
+bool DeathtrapThirdPersonKeyboardCameraRelativeAvailable() {
+  return KeyboardCameraRelativeRuntimeAvailable();
+}
+
+void SubmitDeathtrapThirdPersonKeyboardMovement(int32_t lateral,
+                                                int32_t longitudinal) {
+  const int32_t clamped_lateral = std::clamp(lateral, -1, 1);
+  const int32_t clamped_longitudinal = std::clamp(longitudinal, -1, 1);
+  const bool active = clamped_lateral != 0 || clamped_longitudinal != 0;
+  g_keyboard_camera_relative_movement_x.store(
+      active ? clamped_lateral : 0, std::memory_order_release);
+  g_keyboard_camera_relative_movement_y.store(
+      active ? clamped_longitudinal : 0, std::memory_order_release);
+  g_keyboard_camera_relative_intent.store(active,
+                                           std::memory_order_release);
+}
+
+void RequestDeathtrapThirdPersonMouseAttackFacing() {
+  if (KeyboardCameraRelativeRuntimeAvailable()) {
+    g_third_person_mouse_attack_facing_started_ms.store(
+        GetTickCount64(), std::memory_order_release);
+    g_third_person_mouse_attack_facing_phase.store(
+        DeathtrapMouseAttackFacingPhase::kPending,
+        std::memory_order_release);
+    AppendDeathtrapSupportLog("mouse_combat camera_facing=pending");
+  }
+}
+
+DeathtrapMouseAttackFacingPhase
+GetDeathtrapThirdPersonMouseAttackFacingPhase() {
+  return g_third_person_mouse_attack_facing_phase.load(
+      std::memory_order_acquire);
+}
+
+void CompleteDeathtrapThirdPersonMouseAttackFacing(
+    DeathtrapMouseAttackFacingPhase expected_phase) {
+  DeathtrapMouseAttackFacingPhase expected = expected_phase;
+  if (g_third_person_mouse_attack_facing_phase.compare_exchange_strong(
+          expected, DeathtrapMouseAttackFacingPhase::kIdle,
+          std::memory_order_acq_rel, std::memory_order_acquire)) {
+    g_third_person_mouse_attack_facing_started_ms.store(
+        0, std::memory_order_release);
+  }
 }
 
 void SubmitDeathtrapImmersiveKeyboardMovement(int32_t lateral,
@@ -20188,6 +20457,7 @@ bool InstallDeathtrapNativeRenderHooks() {
   // render and collision headings in one transaction.
   if (g_third_person_orbit_enabled &&
       (g_xinput_camera_relative_movement ||
+       g_keyboard_mouse_camera_relative_movement ||
        g_immersive_first_person_enabled)) {
     if (g_immersive_first_person_enabled) {
       InstallImmersiveRootMotionHooks();

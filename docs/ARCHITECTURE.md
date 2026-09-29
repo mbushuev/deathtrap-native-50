@@ -132,7 +132,19 @@ the keyboard-state boundary into the verified retail `F+direction` grammar.
 A directionless click and `LMB+W` emit `F+W` for the normal attack, `LMB+A/D`
 emit the two side attacks, and `LMB+S` emits `F+A+D` for the original turning
 attack. The translator is gated out of menus and selectors and never mutates
-the live action table. Right mouse remains a static `ACTION_PARRY` binding in
+the live action table. With opt-in camera-relative keyboard movement active, a
+physical left-button press also latches the resolved retail attack chord and
+queues a camera-facing turn. While it is pending, the keyboard boundary holds
+the attack and suppresses competing W/S/A/D input. The common player-state
+dispatcher revalidates camera ownership and submits one bounded shortest-angle
+delta per tick through the canonical dual heading writer. Its dedicated cap is
+three times the initial acceptance-test value and does not change movement
+steering. No synthetic A/D is
+published: doing so enters the camera-relative locomotion grammar and produces
+an orbit instead of an in-place turn. The final remainder lands exactly on the
+fixed click-time target, then the latched attack is released on the next input
+poll. Held samples do not republish the request, so an attack is never
+continuously steered. Right mouse remains a static `ACTION_PARRY` binding in
 `keys.cfg`.
 
 XInput publishes `RT` and the coherent left-stick sector into this same
@@ -223,6 +235,19 @@ The shipped `MovementTurnDegreesPerTick=30` limit corresponds to about 500
 degrees per second at the original simulation rate. A half-turn therefore
 converges in approximately six source ticks: fast enough to avoid a broad
 running circle, but still bounded and submitted through the retail writer.
+
+The opt-in keyboard/mouse route reuses that same dispatcher and writer without
+entering the joystick bridge. The DirectInput keyboard boundary resolves the
+user's remapped W/S/A/D actions before controller commands are merged, retains
+native W as the root-motion action, and publishes an independent discrete
+camera-space vector. The dispatcher derives its heading from the latest orbit
+yaw using the runtime-verified inverted longitudinal basis, matching the
+existing controller bridge so W points away from the camera. It
+revalidates modern third-person gameplay, the live ground-state dispatcher,
+camera ownership, selector state, scripted-camera suspension and heading
+availability before writing. Combat,
+jump/climb, walk/step, explicit sidestep, selector and camera-transition chords
+bypass the transform and retain their retail keyboard grammar.
 
 The installer also gives every directional jump a native-axis equivalent.
 Camera-relative movement intentionally publishes only `JOY_VERT_FORWARDS`, so

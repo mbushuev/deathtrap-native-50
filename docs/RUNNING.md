@@ -478,6 +478,34 @@ Running engages at `RunThresholdPercent=50` and
 disengages only below `RunReleaseThresholdPercent=30`; this hysteresis prevents
 noisy diagonal samples from interrupting a run with a one-tick walk transition.
 
+Keyboard/mouse users get the same camera-space course selection by default with
+`KeyboardMouse/CameraRelativeMovement=1`. The DirectInput proxy observes the
+user's remapped movement actions before controller commands are merged. In
+modern third person it replaces an ordinary W/S/A/D vector with native W as the
+root-motion driver and publishes the discrete camera-space vector independently
+from XInput. The common `+0x82750` dispatcher recomputes the target against the
+latest mouse-orbit heading and uses the same bounded `+0x44DD0` writer. W moves
+away from the camera, S toward it, A screen-left and D screen-right; diagonals
+combine both components and the actor turns toward the selected course. Shift
+continues to select the native running action.
+
+The keyboard route fails closed unless the persistent modern third-person
+camera owns active gameplay, a fresh mode-3 callback and a valid heading
+reference are present, and the live player is using the hooked common ground-
+state dispatcher. It releases ownership while airborne, in retail or immersive
+first person, menus, selectors and scripted camera reveals. Attack/F or
+mouse-attack chords, Space jump/climb, Ctrl
+walk/step, J/K sidestep, selector, pause and camera-toggle chords pass through
+unchanged, preserving directional melee/parry and jump behavior. A physical
+left-button press is the sole exception: it latches that attack, turns toward
+the fixed click-time camera heading at up to 45 degrees per player tick, lands on
+the exact course, and then releases the retail attack. Quick clicks remain
+latched until the turn finishes; holding the button does not steer an
+in-progress attack, and controller combat remains unchanged.
+Set `KeyboardMouse/CameraRelativeMovement=0` to restore the original
+character-relative keyboard route. The movement turn limit is the existing
+`XInput/MovementTurnDegreesPerTick` value even if XInput itself is disabled.
+
 The ranged and consumable categories never activate on release. Keep their
 D-pad direction held, choose a slot, and press A to equip or use it; B or
 release cancels. This prevents accidental ranged changes, chalk marks or

@@ -8,6 +8,21 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.228 — Camera-relative controls and camera-facing attacks
+
+- Enables camera-relative `W`/`S`/`A`/`D` movement by default in modern third
+  person, including correctly normalized diagonals, while retaining native
+  running, root motion and collision. Set `CameraRelativeMovement=0` under
+  `[KeyboardMouse]` in `deathtrap_native.ini` to restore the original
+  character-relative keyboard movement.
+- Smoothly turns the character toward the camera heading captured on a
+  physical left click, then releases the selected retail attack once facing
+  is ready. Quick clicks are preserved, while holding the button does not
+  continuously steer the character.
+- Keeps directional attack chords, steps, jumps, explicit sidesteps,
+  selectors, first-person modes, menus and controller input on their existing
+  paths, with focused regression coverage for movement and attack routing.
+
 ## 0.0.227 — Firefly and widescreen message fixes
 
 - Fixes the Firefly spell during selector slow motion so its illumination

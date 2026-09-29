@@ -18,7 +18,9 @@ int main() {
   using deathtrap::input::MouseCombatAttack;
   using deathtrap::input::ResolveControllerCombatDirection;
   using deathtrap::input::ResolveControllerJoystickMovement;
+  using deathtrap::input::ResolveMouseAttackFacingStep;
   using deathtrap::input::ResolveMouseCombatKeyboardPlan;
+  using deathtrap::input::ShouldQueueMouseAttackCameraFacing;
 
   const auto centered =
       ResolveControllerCombatDirection(0.1, -0.1, 0.25);
@@ -68,6 +70,31 @@ int main() {
       true, true, false, false, 0.8, -0.6);
   Require(!selector_joystick.override_active,
           "selector ownership must release the gameplay joystick override");
+
+  Require(ShouldQueueMouseAttackCameraFacing(true, true, true),
+          "a physical gameplay press must queue camera-facing attack aim");
+  Require(!ShouldQueueMouseAttackCameraFacing(false, true, true),
+          "a held mouse button must not continuously steer an attack");
+  Require(!ShouldQueueMouseAttackCameraFacing(true, false, true),
+          "frontend clicks must not queue attack-facing state");
+  Require(!ShouldQueueMouseAttackCameraFacing(true, true, false),
+          "an unavailable modern camera must preserve native attack facing");
+
+  const auto turn_left = ResolveMouseAttackFacingStep(-200, 40, 4);
+  Require(turn_left.heading_delta == -40 && !turn_left.ready,
+          "negative heading error must take one bounded left step");
+  const auto turn_right = ResolveMouseAttackFacingStep(200, 40, 4);
+  Require(turn_right.heading_delta == 40 && !turn_right.ready,
+          "positive heading error must take one bounded right step");
+  const auto final_remainder = ResolveMouseAttackFacingStep(17, 40, 4);
+  Require(final_remainder.heading_delta == 17 && final_remainder.ready,
+          "a sub-step remainder must land exactly and release the attack");
+  const auto within_tolerance = ResolveMouseAttackFacingStep(-3, 40, 4);
+  Require(within_tolerance.heading_delta == -3 && within_tolerance.ready,
+          "the final tolerance must still publish the exact heading");
+  const auto exact_target = ResolveMouseAttackFacingStep(0, 40, 4);
+  Require(exact_target.heading_delta == 0 && exact_target.ready,
+          "an exact target must release the attack without another turn");
 
   const auto simple_attack = ResolveMouseCombatKeyboardPlan(
       true, true, false, false, false, false, false);

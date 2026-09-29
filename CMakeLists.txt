@@ -126,6 +126,13 @@ target_include_directories(mouse_combat_routing_test PRIVATE src)
 target_compile_options(mouse_combat_routing_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
 
+add_executable(keyboard_camera_relative_test
+  tools/keyboard_camera_relative_test.cc)
+target_compile_features(keyboard_camera_relative_test PRIVATE cxx_std_17)
+target_include_directories(keyboard_camera_relative_test PRIVATE src)
+target_compile_options(keyboard_camera_relative_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
+
 add_executable(input_command_bindings_test
   tools/input_command_bindings_test.cc)
 target_compile_features(input_command_bindings_test PRIVATE cxx_std_17)

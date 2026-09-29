@@ -37,6 +37,11 @@ struct ControllerJoystickMovementPlan {
   double y = 0.0;
 };
 
+struct MouseAttackFacingStep {
+  int32_t heading_delta = 0;
+  bool ready = false;
+};
+
 constexpr double Absolute(double value) {
   return value < 0.0 ? -value : value;
 }
@@ -68,6 +73,40 @@ constexpr ControllerJoystickMovementPlan ResolveControllerJoystickMovement(
     return {true, 0.0, 0.0};
   }
   return {true, side_step ? 0.0 : x, y};
+}
+
+// A physical press may request a one-shot camera-facing body turn before the
+// retail combat chord is consumed. Held samples must not keep steering an
+// already-running attack, and controller attacks retain their own direction
+// selection path.
+constexpr bool ShouldQueueMouseAttackCameraFacing(
+    bool physical_left_button_pressed, bool gameplay_accepts_combat,
+    bool camera_relative_available) {
+  return physical_left_button_pressed && gameplay_accepts_combat &&
+      camera_relative_available;
+}
+
+// Advance a latched mouse attack toward its fixed camera heading without
+// exposing synthetic A/D to the retail movement grammar. The bounded canonical
+// delta produces a visible multi-frame turn; the final small remainder lands
+// exactly on target before the attack is released.
+constexpr MouseAttackFacingStep ResolveMouseAttackFacingStep(
+    int32_t heading_error, int32_t maximum_step,
+    int32_t ready_tolerance) {
+  const int32_t step = maximum_step < 1 ? 1 : maximum_step;
+  const int32_t tolerance = ready_tolerance < 0 ? 0 : ready_tolerance;
+  const int32_t absolute_error =
+      heading_error < 0 ? -heading_error : heading_error;
+  if (absolute_error <= tolerance) {
+    return {heading_error, true};
+  }
+  if (heading_error < -step) {
+    return {-step, false};
+  }
+  if (heading_error > step) {
+    return {step, false};
+  }
+  return {heading_error, true};
 }
 
 // Modern mouse combat is translated into the original F+direction grammar at

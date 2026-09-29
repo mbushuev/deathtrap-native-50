@@ -23,6 +23,15 @@ enum class DeathtrapNativeRenderPatchState : uint32_t {
   kWriteFailed,
 };
 
+enum class DeathtrapMouseAttackFacingPhase : uint8_t {
+  kIdle = 0,
+  kPending = 1,
+  kTurnLeft = 2,
+  kTurnRight = 3,
+  kReady = 4,
+  kCanceled = 5,
+};
+
 struct DeathtrapNativeRenderPatchStatus {
   DeathtrapNativeRenderPatchState state =
       DeathtrapNativeRenderPatchState::kNotAttempted;
@@ -113,6 +122,23 @@ bool DeathtrapRangedWeaponSelected();
 // active gameplay view.
 bool DeathtrapImmersiveFirstPersonActive();
 bool DeathtrapImmersiveVectorLocomotionActive();
+
+// Optional modern third-person keyboard locomotion. Availability is a
+// fail-closed snapshot of gameplay/camera ownership; submitted movement stays
+// separate from the XInput intent and is revalidated at the ground-state
+// dispatcher before any native heading write.
+bool DeathtrapThirdPersonKeyboardCameraRelativeAvailable();
+void SubmitDeathtrapThirdPersonKeyboardMovement(int32_t lateral,
+                                                int32_t longitudinal);
+
+// Queues one camera-facing multi-frame turn for the next physical-mouse attack.
+// The DirectInput bridge holds the retail attack chord while the render patch
+// advances bounded canonical heading steps from the player-state dispatcher.
+void RequestDeathtrapThirdPersonMouseAttackFacing();
+DeathtrapMouseAttackFacingPhase
+GetDeathtrapThirdPersonMouseAttackFacingPhase();
+void CompleteDeathtrapThirdPersonMouseAttackFacing(
+    DeathtrapMouseAttackFacingPhase expected_phase);
 
 // Publishes the complete physical-keyboard movement vector independently
 // from XInput. In immersive view the render patch routes this vector through

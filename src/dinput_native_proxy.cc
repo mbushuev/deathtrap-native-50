@@ -16,6 +16,7 @@
 #include "deathtrap_native_render_patch.h"
 #include "input_command_bindings.h"
 #include "keyboard_bindings.h"
+#include "keyboard_camera_relative.h"
 #include "mouse_combat_routing.h"
 #include "native_d3d11_present_guard.h"
 
@@ -117,6 +118,9 @@ std::atomic<uint64_t> g_support_last_summary_ms{0};
 std::atomic<int32_t> g_support_last_camera_owner{-1};
 std::atomic<int32_t> g_support_last_clip_mismatch{-1};
 std::atomic<int32_t> g_support_last_mouse_combat_route{-1};
+bool g_mouse_attack_facing_plan_latched = false;
+deathtrap::input::MouseCombatKeyboardPlan
+    g_mouse_attack_facing_latched_plan{};
 
 extern "C" {
 FARPROC g_target_DirectInputCreateA = nullptr;
@@ -233,12 +237,22 @@ bool ControllerCursorAxesOwnInput() {
 }
 
 void PublishPhysicalLeftButtonState(bool down) {
+  if (down) {
+    // Combat direction owns W/A/S/D immediately, even if the mouse device is
+    // sampled after the keyboard device in this engine tick.
+    SubmitDeathtrapThirdPersonKeyboardMovement(0, 0);
+  }
   const bool previous =
       g_physical_left_button_down.exchange(down, std::memory_order_acq_rel);
   if (down != previous) {
     if (down) {
       g_physical_left_button_press_pending.store(true,
                                                   std::memory_order_release);
+      if (deathtrap::input::ShouldQueueMouseAttackCameraFacing(
+              true, DeathtrapGameplayAcceptsMouseCombat(),
+              DeathtrapThirdPersonKeyboardCameraRelativeAvailable())) {
+        RequestDeathtrapThirdPersonMouseAttackFacing();
+      }
     }
     AppendDeathtrapSupportLog("mouse_combat physical_left=%u camera=%u",
                               down ? 1u : 0u,
@@ -452,6 +466,32 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     // merged afterwards in stable game-command space and therefore cannot be
     // changed by keyboard bindings.
     RemapPhysicalKeyboard(keyboard);
+    // Snapshot the user's remapped keyboard actions before controller commands
+    // are merged. Camera-relative keyboard movement is intentionally a
+    // separate input source and must never reinterpret an XInput fallback.
+    const bool keyboard_forward = (keyboard[DIK_W] & 0x80u) != 0u;
+    const bool keyboard_backward = (keyboard[DIK_S] & 0x80u) != 0u;
+    const bool keyboard_left = (keyboard[DIK_A] & 0x80u) != 0u;
+    const bool keyboard_right = (keyboard[DIK_D] & 0x80u) != 0u;
+    const bool keyboard_attack = (keyboard[DIK_F] & 0x80u) != 0u;
+    const bool keyboard_run = (keyboard[DIK_LSHIFT] & 0x80u) != 0u;
+    const bool keyboard_jump = (keyboard[DIK_SPACE] & 0x80u) != 0u;
+    const bool keyboard_walk_step =
+        (keyboard[DIK_LCONTROL] & 0x80u) != 0u;
+    const bool keyboard_sidestep =
+        (keyboard[DIK_J] & 0x80u) != 0u ||
+        (keyboard[DIK_K] & 0x80u) != 0u;
+    const bool keyboard_selector =
+        (keyboard[DIK_F1] & 0x80u) != 0u ||
+        (keyboard[DIK_F2] & 0x80u) != 0u ||
+        (keyboard[DIK_F3] & 0x80u) != 0u ||
+        (keyboard[DIK_F4] & 0x80u) != 0u;
+    const bool keyboard_camera_transition =
+        (keyboard[DIK_TAB] & 0x80u) != 0u ||
+        (keyboard[DIK_F10] & 0x80u) != 0u;
+    const bool keyboard_frontend_command =
+        (keyboard[DIK_P] & 0x80u) != 0u ||
+        (keyboard[DIK_ESCAPE] & 0x80u) != 0u;
     const auto controller_plan =
         deathtrap::input::ResolveRetailKeyboardPlan(
             g_xinput_gameplay_commands.load(std::memory_order_acquire));
@@ -490,10 +530,13 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     bool right = (keyboard[DIK_D] & 0x80u) != 0u;
     const bool immersive_vector = DeathtrapImmersiveFirstPersonActive() &&
         DeathtrapImmersiveVectorLocomotionActive();
-    const bool physical_left_button =
-        g_physical_left_button_down.load(std::memory_order_acquire) ||
+    const bool physical_left_button_down =
+        g_physical_left_button_down.load(std::memory_order_acquire);
+    const bool physical_left_button_pressed =
         g_physical_left_button_press_pending.exchange(
             false, std::memory_order_acq_rel);
+    const bool physical_left_button =
+        physical_left_button_down || physical_left_button_pressed;
     const uint8_t controller_combat =
         g_xinput_combat_state.load(std::memory_order_acquire);
     const bool controller_attack = (controller_combat & 0x01u) != 0u;
@@ -508,10 +551,92 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
         DeathtrapGameplayAcceptsMouseCombat();
     const bool ranged_weapon_selected =
         gameplay_accepts_combat && DeathtrapRangedWeaponSelected();
-    const auto combat_plan =
+    auto combat_plan =
         deathtrap::input::ResolveMouseCombatKeyboardPlan(
             attack_button, gameplay_accepts_combat, immersive_vector,
             forward, backward, left, right, ranged_weapon_selected);
+    DeathtrapMouseAttackFacingPhase mouse_attack_facing_phase =
+        GetDeathtrapThirdPersonMouseAttackFacingPhase();
+    const bool mouse_attack_facing_active =
+        mouse_attack_facing_phase != DeathtrapMouseAttackFacingPhase::kIdle &&
+        mouse_attack_facing_phase !=
+            DeathtrapMouseAttackFacingPhase::kCanceled;
+    if (physical_left_button_pressed && mouse_attack_facing_active &&
+        combat_plan.modifier_down) {
+      // Preserve the exact melee side/back or ranged choice made on the click
+      // edge. A quick click may be released before the native turn completes.
+      g_mouse_attack_facing_latched_plan = combat_plan;
+      g_mouse_attack_facing_plan_latched = true;
+    }
+    if (mouse_attack_facing_phase ==
+        DeathtrapMouseAttackFacingPhase::kCanceled) {
+      g_mouse_attack_facing_plan_latched = false;
+      g_mouse_attack_facing_latched_plan = {};
+      CompleteDeathtrapThirdPersonMouseAttackFacing(
+          DeathtrapMouseAttackFacingPhase::kCanceled);
+      mouse_attack_facing_phase = DeathtrapMouseAttackFacingPhase::kIdle;
+    }
+    const bool mouse_attack_facing_turning =
+        mouse_attack_facing_phase ==
+            DeathtrapMouseAttackFacingPhase::kPending ||
+        mouse_attack_facing_phase ==
+            DeathtrapMouseAttackFacingPhase::kTurnLeft ||
+        mouse_attack_facing_phase ==
+            DeathtrapMouseAttackFacingPhase::kTurnRight;
+    const bool mouse_attack_facing_owns_input =
+        mouse_attack_facing_turning ||
+        mouse_attack_facing_phase ==
+            DeathtrapMouseAttackFacingPhase::kReady;
+    if (mouse_attack_facing_phase ==
+        DeathtrapMouseAttackFacingPhase::kReady) {
+      if (g_mouse_attack_facing_plan_latched) {
+        combat_plan = g_mouse_attack_facing_latched_plan;
+      }
+      g_mouse_attack_facing_plan_latched = false;
+      g_mouse_attack_facing_latched_plan = {};
+      CompleteDeathtrapThirdPersonMouseAttackFacing(
+          DeathtrapMouseAttackFacingPhase::kReady);
+    } else if (mouse_attack_facing_turning) {
+      // Hold the retail F+direction chord until the visible native turn has
+      // reached the camera course.
+      combat_plan = {};
+    }
+    deathtrap::input::KeyboardCameraRelativeContext keyboard_camera_context;
+    const bool keyboard_camera_runtime_available =
+        DeathtrapThirdPersonKeyboardCameraRelativeAvailable();
+    // The render patch owns the detailed gameplay/camera state checks. Feed
+    // their fail-closed result through every pure routing precondition so the
+    // input transform itself remains independently testable.
+    keyboard_camera_context.feature_enabled =
+        keyboard_camera_runtime_available;
+    keyboard_camera_context.modern_third_person =
+        keyboard_camera_runtime_available;
+    keyboard_camera_context.gameplay_active =
+        keyboard_camera_runtime_available;
+    keyboard_camera_context.camera_input_owned =
+        keyboard_camera_runtime_available;
+    keyboard_camera_context.dispatcher_available =
+        keyboard_camera_runtime_available;
+    keyboard_camera_context.ground_state =
+        keyboard_camera_runtime_available;
+    keyboard_camera_context.heading_reference_valid =
+        keyboard_camera_runtime_available;
+    keyboard_camera_context.combat_modifier =
+        keyboard_attack || attack_button || mouse_attack_facing_owns_input;
+    keyboard_camera_context.run_modifier = keyboard_run;
+    keyboard_camera_context.jump_climb_modifier = keyboard_jump;
+    keyboard_camera_context.walk_step_modifier = keyboard_walk_step;
+    keyboard_camera_context.explicit_sidestep = keyboard_sidestep;
+    keyboard_camera_context.selector_command = keyboard_selector;
+    keyboard_camera_context.camera_transition = keyboard_camera_transition;
+    keyboard_camera_context.pause_command = keyboard_frontend_command;
+    const auto keyboard_camera_plan =
+        deathtrap::input::ResolveKeyboardCameraRelativePlan(
+            keyboard_camera_context, keyboard_forward, keyboard_backward,
+            keyboard_left, keyboard_right);
+    SubmitDeathtrapThirdPersonKeyboardMovement(
+        keyboard_camera_plan.active ? keyboard_camera_plan.lateral : 0,
+        keyboard_camera_plan.active ? keyboard_camera_plan.longitudinal : 0);
     if (combat_plan.submit_immersive_movement) {
       const int32_t lateral = static_cast<int32_t>(right) -
           static_cast<int32_t>(left);
@@ -544,6 +669,31 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     }
     if (combat_plan.modifier_down) {
       keyboard[DIK_F] |= 0x80u;
+    }
+    if (keyboard_camera_plan.rewrite_wasd) {
+      keyboard[DIK_W] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_S] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_A] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_D] &= static_cast<uint8_t>(~0x80u);
+      if (keyboard_camera_plan.native_forward) {
+        keyboard[DIK_W] |= 0x80u;
+      }
+    }
+    if (mouse_attack_facing_turning) {
+      // The player-state dispatcher owns the bounded camera-facing turn.
+      // Suppress every competing retail movement/combat chord until it marks
+      // the latched attack ready; synthetic A/D would enter the locomotion
+      // grammar and make the character orbit instead of turning in place.
+      keyboard[DIK_F] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_W] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_S] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_A] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_D] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_J] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_K] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_SPACE] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_LCONTROL] &= static_cast<uint8_t>(~0x80u);
+      keyboard[DIK_LSHIFT] &= static_cast<uint8_t>(~0x80u);
     }
     const int32_t route = static_cast<int32_t>(combat_plan.attack);
     if (g_support_last_mouse_combat_route.exchange(
@@ -1338,6 +1488,11 @@ bool PollDeathtrapPresentationMouseDelta(int32_t* delta_x,
 
 void SubmitDeathtrapXInputCombatState(bool attack, bool forward, bool backward,
                                       bool left, bool right) {
+  if (attack) {
+    // Keep simultaneous keyboard/controller use deterministic: RT's combat
+    // selector wins this tick and cannot inherit a stale keyboard heading.
+    SubmitDeathtrapThirdPersonKeyboardMovement(0, 0);
+  }
   const uint8_t state = static_cast<uint8_t>(
       attack ? 0x01u | (forward ? 0x02u : 0u) |
                    (backward ? 0x04u : 0u) | (left ? 0x08u : 0u) |

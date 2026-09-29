@@ -118,6 +118,13 @@ Esc                Open or leave menu; save and load through the retail menu
 Immersive first person uses A/D for pure full-speed side movement. Combine
 W/S with A/D for diagonals and hold Shift to run.
 
+Modern third-person camera-relative keyboard movement is on by default, so
+W/S/A/D move relative to the orbit camera. Set CameraRelativeMovement=0 under
+[KeyboardMouse] in deathtrap_native.ini to restore the original
+character-relative movement. Shift still runs; attack directions, Ctrl steps,
+Space directional jumps, J/K sidesteps, selectors, first-person modes and menus
+keep their original controls.
+
 F1-F4 selectors slow the game world to 25% by default while camera and input
 remain full-rate. Change SlowMotionPercent under [Selector] in
 deathtrap_native.ini if desired.
