@@ -9,7 +9,6 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 game_dir=""
 game_selection=""
 compat_data=""
-proton_command=""
 display_width=""
 display_height=""
 skip_game_hash_check=0
@@ -22,7 +21,6 @@ Usage: bash INSTALL-DECK.sh [GAME-DIRECTORY] [options]
 Options:
   --game-dir PATH             Directory containing DD_CD.EXE
   --compat-data PATH          Steam compatdata/245010 directory
-  --proton PATH               Proton executable selected for the game
   --width PIXELS              Override detected display width
   --height PIXELS             Override detected display height
   --skip-game-hash-check      Do not warn about untested game binaries
@@ -52,11 +50,6 @@ while (($#)); do
         --compat-data)
             (($# >= 2)) || die '--compat-data requires a path.'
             compat_data="$2"
-            shift 2
-            ;;
-        --proton)
-            (($# >= 2)) || die '--proton requires a path.'
-            proton_command="$2"
             shift 2
             ;;
         --width)
@@ -139,6 +132,24 @@ collect_steamapps_roots() {
 
 collect_steamapps_roots
 
+find_compat_data() {
+    local steamapps candidate
+    steamapps="$(dirname -- "$(dirname -- "$game_dir")")"
+    candidate="$steamapps/compatdata/$APP_ID"
+    if [[ -d "$candidate/pfx" ]]; then
+        printf '%s\n' "$(readlink -f -- "$candidate")"
+        return
+    fi
+    for steamapps in "${steamapps_roots[@]-}"; do
+        candidate="$steamapps/compatdata/$APP_ID"
+        if [[ -d "$candidate/pfx" ]]; then
+            printf '%s\n' "$(readlink -f -- "$candidate")"
+            return
+        fi
+    done
+    return 1
+}
+
 find_game_directory() {
     local steamapps manifest install_dir candidate canonical existing duplicate
     local -a matches=()
@@ -206,6 +217,25 @@ retail_config="$(find_required_file "$game_dir/ASYLUM" config.dat)"
 
 if pgrep -af '[D]D_CD.EXE' >/dev/null 2>&1; then
     die 'Deathtrap Dungeon is running. Close it before installing.'
+fi
+
+prefix_lock_fd=""
+if ((skip_proton_setup == 0)); then
+    if [[ -n "$compat_data" ]]; then
+        compat_data="$(readlink -f -- "$compat_data")"
+        [[ -d "$compat_data/pfx" ]] ||
+            die "Invalid Proton compatdata directory: $compat_data"
+    else
+        compat_data="$(find_compat_data)" ||
+            die 'The Proton prefix is missing. Launch the game once and run the installer again.'
+    fi
+    [[ -f "$compat_data/pfx/user.reg" ]] ||
+        die 'The Proton registry is missing. Launch the game once and run the installer again.'
+    if command -v flock >/dev/null 2>&1; then
+        exec {prefix_lock_fd}>>"$compat_data/pfx.lock"
+        flock -n "$prefix_lock_fd" ||
+            die 'The Proton prefix is still in use. Close the game and try again.'
+    fi
 fi
 
 if [[ -d "$script_dir/payload" ]]; then
@@ -413,112 +443,36 @@ awk '{ sub(/\r$/, ""); printf "%s\r\n", $0 }' \
     "$keys_source" >"$keys_destination"
 rewrite_retail_config "$retail_config"
 
-find_compat_data() {
-    local steamapps candidate
-    steamapps="$(dirname -- "$(dirname -- "$game_dir")")"
-    candidate="$steamapps/compatdata/$APP_ID"
-    if [[ -d "$candidate/pfx" ]]; then
-        printf '%s\n' "$(readlink -f -- "$candidate")"
-        return
-    fi
-    for steamapps in "${steamapps_roots[@]-}"; do
-        candidate="$steamapps/compatdata/$APP_ID"
-        if [[ -d "$candidate/pfx" ]]; then
-            printf '%s\n' "$(readlink -f -- "$candidate")"
-            return
-        fi
-    done
-    return 1
-}
+write_proton_overrides() {
+    local registry="$1" temporary
+    grep -q '^\[Software\\\\Wine\\\\DllOverrides\]' "$registry" ||
+        die 'The Proton registry does not contain a Wine DLL override section.'
+    sed -n '/^\[Software\\\\Wine\\\\DllOverrides\]/,/^$/p' "$registry" |
+        grep -q '^#time=' ||
+        die 'The Proton DLL override section is malformed.'
 
-find_steam_client_root() {
-    local candidate
-    for candidate in "$HOME/.steam/root" "$HOME/.local/share/Steam"; do
-        [[ -d "$candidate/steamapps" ]] || continue
-        readlink -f -- "$candidate"
-        return
-    done
-    return 1
-}
-
-find_proton() {
-    local prefix="$1" major steamapps steam_root candidate
-    major="$(grep -oE '[0-9]+' "$prefix/version" 2>/dev/null | head -n 1 || true)"
-    steamapps="$(dirname -- "$(dirname -- "$prefix")")"
-    local -a candidates=()
-    [[ -n "$major" ]] && candidates+=("$steamapps/common/Proton $major.0/proton")
-    candidates+=(
-        "$steamapps/common/Proton - Experimental/proton"
-        "$steamapps/common/Proton 11.0/proton"
-        "$steamapps/common/Proton 10.0/proton"
-        "$steamapps/common/Proton 9.0 (Beta)/proton"
-    )
-    if steam_root="$(find_steam_client_root 2>/dev/null)"; then
-        [[ -n "$major" ]] && candidates+=("$steam_root/steamapps/common/Proton $major.0/proton")
-        candidates+=(
-            "$steam_root/steamapps/common/Proton - Experimental/proton"
-            "$steam_root/steamapps/common/Proton 11.0/proton"
-            "$steam_root/steamapps/common/Proton 10.0/proton"
-            "$steam_root/steamapps/common/Proton 9.0 (Beta)/proton"
-        )
-        while IFS= read -r candidate; do
-            candidates+=("$candidate")
-        done < <(find "$steam_root/compatibilitytools.d" -mindepth 2 -maxdepth 2 \
-            -type f -name proton -print 2>/dev/null || true)
-    fi
-    for candidate in "${candidates[@]}"; do
-        if [[ -x "$candidate" ]]; then
-            printf '%s\n' "$candidate"
-            return
-        fi
-    done
-    return 1
+    temporary="$(mktemp "$compat_data/pfx/.user.reg.native50.XXXXXX")"
+    sed -E '
+        /^\[Software\\\\Wine\\\\DllOverrides\]/,/^$/ {
+            /^"(dinput|ddraw|d3d9|d3dim)"=/d
+            /^#time=/a\
+"d3d9"="builtin"\
+"d3dim"="builtin"\
+"ddraw"="native,builtin"\
+"dinput"="native,builtin"
+        }
+    ' "$registry" >"$temporary" || {
+        rm -f -- "$temporary"
+        die 'Could not update the Proton DLL overrides.'
+    }
+    chmod --reference="$registry" "$temporary"
+    mv -- "$temporary" "$registry"
 }
 
 proton_configured=0
 if ((skip_proton_setup == 0)); then
-    if [[ -n "$compat_data" ]]; then
-        compat_data="$(readlink -f -- "$compat_data")"
-        [[ -d "$compat_data/pfx" ]] || die "Invalid Proton compatdata directory: $compat_data"
-    else
-        compat_data="$(find_compat_data)" ||
-            die 'The Proton prefix is missing. Launch the game once and run the installer again.'
-    fi
-    if [[ -n "$proton_command" ]]; then
-        proton_command="$(readlink -f -- "$proton_command")"
-        [[ -x "$proton_command" ]] || die "Proton executable is not runnable: $proton_command"
-    else
-        proton_command="$(find_proton "$compat_data")" ||
-            die 'A Steam-managed Proton installation was not found. Pass --proton PATH.'
-    fi
-    steam_client_root="$(find_steam_client_root)" ||
-        die 'The Steam client directory was not found.'
-    steamapps="$(dirname -- "$(dirname -- "$compat_data")")"
-    if [[ -f "$compat_data/pfx/user.reg" ]]; then
-        cp -a -- "$compat_data/pfx/user.reg" "$backup_dir/proton-user.reg"
-    fi
-    for dll in dinput ddraw; do
-        STEAM_COMPAT_CLIENT_INSTALL_PATH="$steam_client_root" \
-        STEAM_COMPAT_DATA_PATH="$compat_data" \
-        STEAM_COMPAT_INSTALL_PATH="$game_dir" \
-        STEAM_COMPAT_LIBRARY_PATHS="$steamapps" \
-        STEAM_COMPAT_APP_ID="$APP_ID" \
-        SteamAppId="$APP_ID" \
-        SteamGameId="$APP_ID" \
-            "$proton_command" run reg.exe add 'HKCU\Software\Wine\DllOverrides' \
-                /v "$dll" /t REG_SZ /d native,builtin /f >/dev/null
-    done
-    for dll in d3d9 d3dim; do
-        STEAM_COMPAT_CLIENT_INSTALL_PATH="$steam_client_root" \
-        STEAM_COMPAT_DATA_PATH="$compat_data" \
-        STEAM_COMPAT_INSTALL_PATH="$game_dir" \
-        STEAM_COMPAT_LIBRARY_PATHS="$steamapps" \
-        STEAM_COMPAT_APP_ID="$APP_ID" \
-        SteamAppId="$APP_ID" \
-        SteamGameId="$APP_ID" \
-            "$proton_command" run reg.exe add 'HKCU\Software\Wine\DllOverrides' \
-                /v "$dll" /t REG_SZ /d builtin /f >/dev/null
-    done
+    cp -a -- "$compat_data/pfx/user.reg" "$backup_dir/proton-user.reg"
+    write_proton_overrides "$compat_data/pfx/user.reg"
     for override in \
         'dinput|native,builtin' \
         'ddraw|native,builtin' \

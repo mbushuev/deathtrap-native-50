@@ -230,8 +230,7 @@ bash INSTALL-DECK.sh --width 1920 --height 1080
 
 If Steam is installed in a nonstandard location, pass the directory containing
 the original `DD_CD.EXE` with `--game-dir`. Advanced setups can also specify
-the App ID prefix with `--compat-data` and the selected Proton executable with
-`--proton`.
+the App ID prefix with `--compat-data`.
 
 ### Display mode and window size
 

@@ -128,8 +128,7 @@ steam_root="$fake_home/.local/share/Steam"
 steamapps="$steam_root/steamapps"
 proton_game="$steamapps/common/Deathtrap Dungeon"
 compat_data="$steamapps/compatdata/245010"
-fake_proton="$steamapps/common/Proton 10.0/proton"
-mkdir -p -- "$steamapps/common/Proton 10.0" "$compat_data/pfx"
+mkdir -p -- "$compat_data/pfx"
 create_game_fixture "$proton_game"
 printf 'old fallback launch helper\n' \
     >"$proton_game/deathtrap-native50-deck-launch.sh"
@@ -140,60 +139,42 @@ cat >"$steamapps/appmanifest_245010.acf" <<'EOF'
     "installdir"  "Deathtrap Dungeon"
 }
 EOF
-printf '10.0-test\n' >"$compat_data/version"
-printf 'existing registry\n' >"$compat_data/pfx/user.reg"
-cat >"$fake_proton" <<'EOF'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-printf '%s|%s|%s|%s|%s\n' \
-    "$STEAM_COMPAT_CLIENT_INSTALL_PATH" \
-    "$STEAM_COMPAT_DATA_PATH" \
-    "$STEAM_COMPAT_INSTALL_PATH" \
-    "$STEAM_COMPAT_LIBRARY_PATHS" \
-    "$*" >>"$FAKE_PROTON_LOG"
-value_name=''
-value_data=''
-while (($#)); do
-    case "$1" in
-        /v)
-            value_name="$2"
-            shift 2
-            ;;
-        /d)
-            value_data="$2"
-            shift 2
-            ;;
-        *)
-            shift
-            ;;
-    esac
-done
-[[ -n "$value_name" && -n "$value_data" ]]
-printf '"%s"="%s"\n' "$value_name" "$value_data" \
-    >>"$STEAM_COMPAT_DATA_PATH/pfx/user.reg"
+cat >"$compat_data/pfx/user.reg" <<'EOF'
+WINE REGISTRY Version 2
+
+[Software\\Wine\\DllOverrides] 1234567890
+#time=1dd000000000000
+"ddraw"="old"
+"unrelated"="keep"
+
+[Software\\Wine\\Other] 1234567890
+#time=1dd000000000000
+"preserved"="yes"
 EOF
-chmod 755 -- "$fake_proton"
+cp -- "$compat_data/pfx/user.reg" "$test_root/original-user.reg"
 export HOME="$fake_home"
-export FAKE_PROTON_LOG="$test_root/proton.log"
 bash "$installer" --width 1280 --height 800 \
     --skip-game-hash-check >/dev/null
 verify_install "$proton_game" 1280 800 0
-[[ "$(wc -l <"$FAKE_PROTON_LOG")" -eq 4 ]] ||
-    fail 'expected four Proton registry commands'
-for dll in dinput ddraw; do
-    grep -q "reg.exe add .* /v $dll .* /d native,builtin /f" \
-        "$FAKE_PROTON_LOG" || fail "missing Proton override for $dll"
+for override in \
+    'dinput|native,builtin' \
+    'ddraw|native,builtin' \
+    'd3d9|builtin' \
+    'd3dim|builtin'; do
+    dll="${override%%|*}"
+    value="${override#*|}"
+    [[ "$(grep -Fxc "\"$dll\"=\"$value\"" \
+        "$compat_data/pfx/user.reg")" -eq 1 ]] ||
+        fail "incorrect persisted Proton override for $dll"
 done
-for dll in d3d9 d3dim; do
-    grep -q "reg.exe add .* /v $dll .* /d builtin /f" \
-        "$FAKE_PROTON_LOG" || fail "missing Proton builtin override for $dll"
-done
-grep -q "^$steam_root|$compat_data|$proton_game|$steamapps|" \
-    "$FAKE_PROTON_LOG" ||
-    fail 'incorrect Steam or Proton environment'
+grep -q '^"unrelated"="keep"$' "$compat_data/pfx/user.reg" ||
+    fail 'unrelated DLL override was not preserved'
+grep -q '^"preserved"="yes"$' "$compat_data/pfx/user.reg" ||
+    fail 'unrelated registry section was not preserved'
 latest_backup="$(find "$proton_game/back" -mindepth 1 -maxdepth 1 -type d \
     -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
-grep -q '^existing registry$' "$latest_backup/proton-user.reg"
+cmp -s "$test_root/original-user.reg" "$latest_backup/proton-user.reg" ||
+    fail 'original Proton registry backup does not match'
 grep -q '^old fallback launch helper$' \
     "$latest_backup/deathtrap-native50-deck-launch.sh"
 
