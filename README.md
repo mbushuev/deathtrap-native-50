@@ -88,6 +88,7 @@ The current release supports:
 
 - the [Steam release, App ID `245010`](https://store.steampowered.com/app/245010/Deathtrap_Dungeon/);
 - Windows 10 or 11 x64;
+- an experimental Steam Deck installer for SteamOS and Proton;
 - the original 32-bit game process;
 - the tested game binaries below, or another build with a compatible internal
   layout;
@@ -123,6 +124,7 @@ before `INSTALL.cmd` creates its rollback copy:
 
 ```text
 INSTALL.cmd
+INSTALL-DECK.sh
 install.ps1
 README.txt
 CHANGELOG.txt
@@ -182,6 +184,41 @@ and the complete HUD in their original proportions.
 dgVoodoo stays windowed and leaves resolution `Unforced`, so it does not scale
 that canvas a second time. The tested profile enables 8x MSAA, 16x anisotropic
 filtering, automatic mipmaps and VSync.
+
+### Steam Deck (experimental)
+
+1. Start Deathtrap Dungeon once through Steam, then close it. This creates the
+   Proton prefix used by the installer.
+2. Extract the complete release ZIP anywhere on the Deck.
+3. In Desktop Mode, open a terminal in the extracted directory and run
+   `bash INSTALL-DECK.sh`.
+4. Return to Gaming Mode and start the game normally through Steam. No custom
+   Launch Options are needed. Gaming Mode is required for the built-in Deck
+   controls to be exposed through Steam Input.
+
+The Deck installer locates Steam App ID `245010`, validates the same game and
+runtime files as the Windows installer, and creates a timestamped rollback
+copy before writing anything. It installs Native 50 and the Deathtrap Dd7to9
+layer, then sends D3D9 directly to Proton/DXVK. It deliberately backs up and
+removes local `D3D9.dll`, `D3DImm.dll` and `dgVoodoo.conf` files because the
+extra dgVoodoo translation used on Windows causes hangs or black-frame
+flashing under Proton. It configures only this game's Proton prefix and does
+not edit Steam's user configuration or global Proton settings. The Deck path
+keeps clear-on-flip enabled to erase untouched fog and portal pixels, while a
+Native 50 flip policy hides only the internal page-restore presentation. This
+preserves the intended ~50 FPS cadence without exposing stale scene pages.
+
+The built-in Deck display is configured as `1280x800`. For an external display
+or an explicit Gamescope resolution, pass both dimensions, for example:
+
+```sh
+bash INSTALL-DECK.sh --width 1920 --height 1080
+```
+
+If Steam is installed in a nonstandard location, pass the directory containing
+the original `DD_CD.EXE` with `--game-dir`. Advanced setups can also specify
+the App ID prefix with `--compat-data` and the selected Proton executable with
+`--proton`.
 
 ### Display mode and window size
 

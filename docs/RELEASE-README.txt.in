@@ -15,7 +15,7 @@ https://youtu.be/U1RjdVP49TQ
 
 The complete user-facing list of changes is included in CHANGELOG.txt.
 
-QUICK INSTALL
+QUICK INSTALL - WINDOWS
 
 Everything required for the supported setup is already included. You do not
 need to download or configure dgVoodoo before the first launch.
@@ -25,6 +25,31 @@ need to download or configure dgVoodoo before the first launch.
    the included payload directory.
 3. Double-click INSTALL.cmd once.
 4. Start Deathtrap Dungeon normally through Steam or DD_CD.EXE.
+
+QUICK INSTALL - STEAM DECK (EXPERIMENTAL)
+
+1. Start Deathtrap Dungeon once through Steam, then close it.
+2. Extract the complete patch ZIP anywhere on the Deck.
+3. In Desktop Mode, open a terminal in the extracted directory and run:
+
+   bash INSTALL-DECK.sh
+
+4. Return to Gaming Mode and start the game normally through Steam. No custom
+   Launch Options are needed. Use Gaming Mode for the built-in Deck controls.
+
+INSTALL-DECK.sh locates Steam App ID 245010, creates the same rollback copy,
+installs Native 50 and the Deathtrap Dd7to9 layer, configures the built-in
+display as 1280x800 and sends D3D9 directly to Proton/DXVK. On SteamOS it backs
+up and removes local D3D9.dll, D3DImm.dll and dgVoodoo.conf files; the extra
+dgVoodoo translation used by the Windows setup is not used on Deck because it
+causes hangs or black-frame flashing under Proton. The script changes only
+this game's Proton prefix, not Steam's user configuration or global Proton
+settings. Clear-on-flip remains enabled to keep untouched fog and portal
+pixels black; Native 50 suppresses only the internal page-restore presentation
+so the game retains its intended approximately 50 FPS cadence. For an external
+display, pass explicit dimensions, for example:
+
+   bash INSTALL-DECK.sh --width 1920 --height 1080
 
 INSTALL.cmd backs up any existing patch, dgVoodoo, control and rendering files,
 then installs the complete tested setup. The archive includes the tested

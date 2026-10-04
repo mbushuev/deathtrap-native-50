@@ -39,22 +39,23 @@ Project: https://github.com/elishacloud/dxwrapper
 
 The bundled build applies the included Deathtrap-specific source patch to the
 documented upstream base (file version 1.8.8618.25). It contains the
-native-canvas implementation, permanent world-depth correction and final
-window presentation support. It is used only for DirectDraw/Direct3D 1 to D3D9
-conversion. Its output is passed to the bundled dgVoodoo D3D9 runtime.
+native-canvas implementation, permanent world-depth correction, final window
+presentation support and Native 50 page-restore policy. It is used only for
+DirectDraw/Direct3D 1 to D3D9 conversion. Windows passes its output to the
+bundled dgVoodoo D3D9 runtime; Steam Deck passes it directly to Proton/DXVK.
 
 - `DDraw.dll` SHA-256:
   `8BAE794EB7506711F57B690CFB8660A5F008B0185E764F8CB56D5972E01A9F33`
 - `dxwrapper.dll` SHA-256:
-  `A01EC795A633643CEA61A7CDC62EE97793D1674733D31E8240CE98C33E145841`
+  `304C3A528AD1AB4B25BBEE48DA0371A9DB435DF1CDF733CD1BE13C2FF27BCC8E`
 
 The full license is included at
 `licenses/dxwrapper.txt` in the release archive and
 `third_party/deathtrap-dxwrapper-release225/License.txt` in the repository.
-The complete Deathtrap modification patch, its exact upstream base revision
-and reproduction instructions are included under `source/dxwrapper` in the
-release archive and `third_party/deathtrap-dxwrapper-release225/source` in the
-repository.
+  The complete Deathtrap modification patches, their exact upstream base
+  revision and reproduction instructions are included under
+  `source/dxwrapper` in the release archive and
+  `third_party/deathtrap-dxwrapper-release225/source` in the repository.
 
 ## MinHook
 

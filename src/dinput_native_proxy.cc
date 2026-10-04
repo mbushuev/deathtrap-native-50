@@ -1598,3 +1598,35 @@ extern "C" DWORD WINAPI Proxy_DeathtrapWindowHeight() {
   InitializeDeathtrapNativeRenderPatch();
   return DeathtrapWindowHeight();
 }
+
+extern "C" BOOL WINAPI Proxy_DeathtrapSuppressPageRestorePresent() {
+  if (!g_suppress_page_restore) {
+    return FALSE;
+  }
+  g_suppressed_page_restores.fetch_add(1, std::memory_order_relaxed);
+  return TRUE;
+}
+
+extern "C" DWORD WINAPI Proxy_DeathtrapDdrawFlipPolicy() {
+  constexpr DWORD kSkipPreFlipPresent = 0x01u;
+  constexpr DWORD kSkipPostFlipPresent = 0x02u;
+
+  const DeathtrapNativePresentationStage stage =
+      GetDeathtrapNativePresentationStage();
+  DWORD policy = 0u;
+  if (stage == DeathtrapNativePresentationStage::kMidpoint ||
+      stage == DeathtrapNativePresentationStage::kExact ||
+      g_suppress_page_restore) {
+    policy |= kSkipPreFlipPresent;
+  }
+  if (g_suppress_page_restore) {
+    policy |= kSkipPostFlipPresent;
+    const uint64_t count =
+        g_suppressed_page_restores.fetch_add(1, std::memory_order_relaxed) + 1u;
+    if (count == 1u) {
+      AppendDeathtrapSupportLog(
+          "support_ddraw_flip_policy state=active pre=stage post=restore");
+    }
+  }
+  return policy;
+}

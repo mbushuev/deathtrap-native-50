@@ -17,7 +17,9 @@ window presentation without an exclusive display-mode switch.
 - DDraw.dll (proxy stub):
   `8BAE794EB7506711F57B690CFB8660A5F008B0185E764F8CB56D5972E01A9F33`
 - dxwrapper.dll:
-  `A01EC795A633643CEA61A7CDC62EE97793D1674733D31E8240CE98C33E145841`
+  `304C3A528AD1AB4B25BBEE48DA0371A9DB435DF1CDF733CD1BE13C2FF27BCC8E`
 
 The final backend remains unmodified dgVoodoo 2.86.2 D3D9 to D3D11.
+On Steam Deck the same Dd7to9 layer hands D3D9 directly to Proton/DXVK and
+uses Native 50's flip policy to suppress only internal page-restore Presents.
 Upstream: https://github.com/elishacloud/dxwrapper . License: `License.txt`.

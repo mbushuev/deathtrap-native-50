@@ -87,11 +87,17 @@ The installed `dgVoodoo.conf` beside `DD_CD.EXE` contains:
 OutputAPI = d3d11_fl11_0
 ```
 
-This setting is required, not optional. The overlay suppresses dgVoodoo's
-internal page-restore presentation and validates synthetic surfaces through a
-D3D11/DXGI Present hook. These functions are unavailable when dgVoodoo chooses
-D3D12, WARP or another backend. Do not use `OutputAPI = bestavailable` for this
-build because it may select D3D12.
+This setting is required for the Windows path, not optional. The overlay
+suppresses dgVoodoo's internal page-restore presentation and validates
+synthetic surfaces through a D3D11/DXGI Present hook. These functions are
+unavailable when dgVoodoo chooses D3D12, WARP or another backend. Do not use
+`OutputAPI = bestavailable` for this build because it may select D3D12.
+
+Steam Deck does not load dgVoodoo. Its Dd7to9 layer queries Native 50's flip
+policy directly: each visible synthetic or exact frame receives one final
+Present, while the page-chain restore receives none. Clear-on-flip remains
+enabled so fog, portals and other intentionally untouched pixels begin black
+instead of retaining an older scene page.
 
 The installer preserves any previous `dxwrapper.ini`, `dgVoodoo.conf`,
 `DDraw.dll`, `dxwrapper.dll`, `D3D9.dll` and `D3DImm.dll` in its timestamped
@@ -586,8 +592,10 @@ sufficient; no debug option or deep camera probe needs to be enabled.
   tested value and confirm that `DINPUT.dll` is beside the original
   `DD_CD.EXE`. Unknown builds are allowed by the installer but may fail the
   DLL's structural compatibility check.
-- **Black flashes or stale pages:** verify `OutputAPI = d3d11_fl11_0`; D3D12 and
-  `bestavailable` are not supported by this build.
+- **Black flashes or stale pages on Windows:** verify
+  `OutputAPI = d3d11_fl11_0`; D3D12 and `bestavailable` are not supported by
+  this build. On Steam Deck, reinstall the current package and verify
+  `DdrawClearFlipBackBuffer = 1` in `dxwrapper.ini`.
 - **The game does not start:** verify that all injected and dgVoodoo DLLs are
   x86, then restore the installer's timestamped backup.
 - **The installer rejects the directory:** select the directory that directly

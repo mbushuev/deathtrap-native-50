@@ -1,0 +1,83 @@
+diff --git a/ddraw/IDirect3DDeviceX.cpp b/ddraw/IDirect3DDeviceX.cpp
+index b7be1ad..f03197f 100644
+--- a/ddraw/IDirect3DDeviceX.cpp
++++ b/ddraw/IDirect3DDeviceX.cpp
+@@ -26,6 +26,7 @@ namespace DdrawWrapper
+ {
+ 	using DeathtrapWidescreenWorldRenderActiveFn = BOOL(WINAPI*)();
+ 	using DeathtrapWidescreenAspectX1000Fn = DWORD(WINAPI*)();
++	using DeathtrapDdrawFlipPolicyFn = DWORD(WINAPI*)();
+ 
+ 	bool IsDeathtrapWidescreenWorldRenderActive()
+ 	{
+@@ -86,6 +87,20 @@ namespace DdrawWrapper
+ 		}
+ 		return 0;
+ 	}
++
++	DWORD GetDeathtrapDdrawFlipPolicy()
++	{
++		static DeathtrapDdrawFlipPolicyFn Query = nullptr;
++		if (!Query)
++		{
++			if (HMODULE Dinput = GetModuleHandleW(L"DINPUT.dll"))
++			{
++				Query = reinterpret_cast<DeathtrapDdrawFlipPolicyFn>(
++					GetProcAddress(Dinput, "DeathtrapDdrawFlipPolicy"));
++			}
++		}
++		return Query ? Query() : 0;
++	}
+ }
+ 
+ // ******************************
+diff --git a/ddraw/IDirectDrawSurfaceX.cpp b/ddraw/IDirectDrawSurfaceX.cpp
+index 0ed6343..dac36a5 100644
+--- a/ddraw/IDirectDrawSurfaceX.cpp
++++ b/ddraw/IDirectDrawSurfaceX.cpp
+@@ -1343,8 +1343,20 @@ HRESULT m_IDirectDrawSurfaceX::Flip(LPDIRECTDRAWSURFACE7 lpDDSurfaceTargetOverri
+ 			}
+ 		}
+ 
++		// A Deathtrap synthetic midpoint rotates the legacy page chain back with
++		// a second Flip.  Keep that rotation internal: presenting it would erase
++		// the midpoint before its scheduled display interval, especially when
++		// Dd7to9 hands D3D9 directly to Proton/DXVK.
++		const DWORD DeathtrapFlipPolicy =
++			DdrawWrapper::GetDeathtrapDdrawFlipPolicy();
++		const bool SkipPreFlipPresent = (DeathtrapFlipPolicy & 0x01u) != 0;
++		const bool SkipPostFlipPresent = (DeathtrapFlipPolicy & 0x02u) != 0;
++
+ 		// Present before write if needed
+-		BeginWritePresent(false);
++		if (!SkipPreFlipPresent)
++		{
++			BeginWritePresent(false);
++		}
+ 
+ 		// Check if locked from other thread
+ 		if (FlipWait)
+@@ -1454,7 +1466,10 @@ HRESULT m_IDirectDrawSurfaceX::Flip(LPDIRECTDRAWSURFACE7 lpDDSurfaceTargetOverri
+ #endif
+ 
+ 		// Present surface
+-		EndWritePresent(nullptr, 0, SetVsync, false, true);
++		if (!SkipPostFlipPresent)
++		{
++			EndWritePresent(nullptr, 0, SetVsync, false, true);
++		}
+ 
+ 		if (IsRenderTarget())
+ 		{
+diff --git a/ddraw/ddraw.h b/ddraw/ddraw.h
+index 157270d..86a65ed 100644
+--- a/ddraw/ddraw.h
++++ b/ddraw/ddraw.h
+@@ -114,6 +114,7 @@ namespace DdrawWrapper
+ 	CRITICAL_SECTION* GetPECriticalSection();
+ 	DWORD GetDeathtrapWidescreenAspectX1000();
+ 	bool IsDeathtrapWidescreenWorldRenderActive();
++	DWORD GetDeathtrapDdrawFlipPolicy();
+ }
+ 
+ extern AddressLookupTableDdraw<void> ProxyAddressLookupTableDdraw;

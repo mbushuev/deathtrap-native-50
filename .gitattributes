@@ -5,3 +5,4 @@ third_party/deathtrap-dxwrapper-release225/source/*.patch text eol=lf whitespace
 *.conf text eol=crlf
 config/dgVoodoo-recommended.conf -whitespace
 *.ini text eol=crlf
+*.sh text eol=lf

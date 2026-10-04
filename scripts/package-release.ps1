@@ -63,7 +63,7 @@ $dxWrapperFiles = @(
     },
     @{
         Path = 'third_party\deathtrap-dxwrapper-release225\x86\dxwrapper.dll'
-        Sha256 = 'A01EC795A633643CEA61A7CDC62EE97793D1674733D31E8240CE98C33E145841'
+        Sha256 = '304C3A528AD1AB4B25BBEE48DA0371A9DB435DF1CDF733CD1BE13C2FF27BCC8E'
     }
 )
 foreach ($dxWrapperFile in $dxWrapperFiles) {
@@ -146,12 +146,14 @@ $releaseFiles = @(
     @{ Source = 'docs\images\dgvoodoo-directx.png'; Destination = 'optional\dgVoodoo-DirectX.png' },
     @{ Source = 'scripts\install.ps1'; Destination = 'install.ps1' },
     @{ Source = 'scripts\INSTALL.cmd'; Destination = 'INSTALL.cmd' },
+    @{ Source = 'scripts\install-deck.sh'; Destination = 'INSTALL-DECK.sh' },
     @{ Source = 'CHANGELOG.md'; Destination = 'CHANGELOG.txt' },
     @{ Source = 'THIRD_PARTY_NOTICES.md'; Destination = 'THIRD_PARTY_NOTICES.txt' },
     @{ Source = 'LICENSE'; Destination = 'LICENSE.txt' },
     @{ Source = 'third_party\deathtrap-dxwrapper-release225\License.txt'; Destination = 'licenses\dxwrapper.txt' },
     @{ Source = 'third_party\deathtrap-dxwrapper-release225\source\README.md'; Destination = 'source\dxwrapper\README.md' },
-    @{ Source = 'third_party\deathtrap-dxwrapper-release225\source\deathtrap-dxwrapper.patch'; Destination = 'source\dxwrapper\deathtrap-dxwrapper.patch' }
+    @{ Source = 'third_party\deathtrap-dxwrapper-release225\source\deathtrap-dxwrapper.patch'; Destination = 'source\dxwrapper\deathtrap-dxwrapper.patch' },
+    @{ Source = 'third_party\deathtrap-dxwrapper-release225\source\deathtrap-page-restore-present.patch'; Destination = 'source\dxwrapper\deathtrap-page-restore-present.patch' }
 )
 
 foreach ($file in $releaseFiles) {
@@ -162,6 +164,12 @@ foreach ($file in $releaseFiles) {
     }
     Copy-Item -LiteralPath (Join-Path $repoRoot $file.Source) `
         -Destination $destination
+}
+
+$deckInstallerPath = Join-Path $stageRoot 'INSTALL-DECK.sh'
+$deckInstallerBytes = [System.IO.File]::ReadAllBytes($deckInstallerPath)
+if ($deckInstallerBytes -contains 13) {
+    throw 'INSTALL-DECK.sh must use LF line endings.'
 }
 
 $releaseReadmeTemplate = Get-Content -LiteralPath `
