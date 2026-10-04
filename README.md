@@ -37,6 +37,8 @@ redistribution terms.
 
 - Approximately 50 FPS native presentation while preserving the original game
   speed, AI, combat, collision, animation and audio clocks.
+- Full Steam Deck support through SteamOS, Proton/DXVK and the standard Steam
+  Input Gamepad layout, with automatic button mapping and Deck-tuned vibration.
 - True Hor+ widescreen gameplay with correctly scaled and positioned 4:3 HUD,
   menus and movies, including the original run/stamina bar.
 - DPI-correct borderless presentation by default, plus an INI-selectable
@@ -88,12 +90,13 @@ The current release supports:
 
 - the [Steam release, App ID `245010`](https://store.steampowered.com/app/245010/Deathtrap_Dungeon/);
 - Windows 10 or 11 x64;
-- an experimental Steam Deck installer for SteamOS and Proton;
+- Steam Deck with SteamOS, Proton and Gaming Mode;
 - the original 32-bit game process;
 - the tested game binaries below, or another build with a compatible internal
   layout;
 - the tested Deathtrap Dd7to9 native-canvas layer feeding the bundled,
-  unmodified dgVoodoo2 2.86.2 x86 D3D9 runtime and D3D11 backend.
+  unmodified dgVoodoo2 2.86.2 x86 D3D9 runtime and D3D11 backend on Windows,
+  or Proton/DXVK directly on Steam Deck.
 
 | File | Tested Steam SHA-256 |
 |---|---|
@@ -110,7 +113,8 @@ structural safety check before applying fixed-address hooks.
 Deathtrap-specific Dd7to9 layer used by the widescreen renderer. Its local
 D3D9 output is handled by the unmodified x86 `D3D9.dll` from
 [dgVoodoo2](https://github.com/dege-diosg/dgVoodoo2) 2.86.2. dgVoodoo remains
-the final D3D11 backend.
+the final D3D11 backend on Windows. The Steam Deck installer instead sends the
+D3D9 output directly to Proton/DXVK.
 
 ## Download and verification
 
@@ -185,7 +189,7 @@ dgVoodoo stays windowed and leaves resolution `Unforced`, so it does not scale
 that canvas a second time. The tested profile enables 8x MSAA, 16x anisotropic
 filtering, automatic mipmaps and VSync.
 
-### Steam Deck (experimental)
+### Steam Deck
 
 1. Start Deathtrap Dungeon once through Steam, then close it. This creates the
    Proton prefix used by the installer.
@@ -196,9 +200,12 @@ filtering, automatic mipmaps and VSync.
      `DD_CD.EXE` and run the same command for an in-place installation;
    - use a custom location with
      `bash INSTALL-DECK.sh --game-dir "/path/to/Deathtrap Dungeon"`.
-3. Return to Gaming Mode and start the game normally through Steam. No custom
-   Launch Options are needed. Gaming Mode is required for the built-in Deck
-   controls to be exposed through Steam Input.
+3. In Gaming Mode, open the game's Controller Settings and select the standard
+   **Gamepad** layout. Native 50 maps the Deck buttons automatically; no manual
+   per-button bindings are required.
+4. Start the game normally through Steam. No custom Launch Options are needed.
+   Play in Gaming Mode so the built-in controls are exposed through Steam
+   Input.
 
 The Deck installer locates Steam App ID `245010`, validates the same game and
 runtime files as the Windows installer, and creates a timestamped rollback

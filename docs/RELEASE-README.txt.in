@@ -26,7 +26,7 @@ need to download or configure dgVoodoo before the first launch.
 3. Double-click INSTALL.cmd once.
 4. Start Deathtrap Dungeon normally through Steam or DD_CD.EXE.
 
-QUICK INSTALL - STEAM DECK (EXPERIMENTAL)
+QUICK INSTALL - STEAM DECK
 
 1. Start Deathtrap Dungeon once through Steam, then close it.
 2. In Desktop Mode, choose one installation layout:
@@ -44,8 +44,11 @@ QUICK INSTALL - STEAM DECK (EXPERIMENTAL)
 
        bash INSTALL-DECK.sh --game-dir "/path/to/Deathtrap Dungeon"
 
-3. Return to Gaming Mode and start the game normally through Steam. No custom
-   Launch Options are needed. Use Gaming Mode for the built-in Deck controls.
+3. In Gaming Mode, open the game's Controller Settings and select the standard
+   Gamepad layout. Native 50 maps the Deck buttons automatically; no manual
+   per-button bindings are required.
+4. Start the game normally through Steam. No custom Launch Options are needed.
+   Use Gaming Mode for the built-in Deck controls.
 
 INSTALL-DECK.sh locates Steam App ID 245010, creates the same rollback copy,
 installs Native 50 and the Deathtrap Dd7to9 layer, configures the built-in

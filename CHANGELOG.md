@@ -8,11 +8,14 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
-## 0.0.229 — Experimental Steam Deck support
+## 0.0.229 — Full Steam Deck support
 
 - Adds a SteamOS installer that can automatically locate the purchased Steam
   copy, install directly beside `DD_CD.EXE`, or use an explicit custom game
   directory without changing the game's Steam launch command.
+- Supports the standard Steam Input **Gamepad** layout in Gaming Mode. Select
+  that layout once and Native 50 maps the Deck controls automatically; no
+  manual per-button bindings are required.
 - Runs the Deathtrap Dd7to9 renderer directly through Proton/DXVK, avoiding
   the dgVoodoo backend that hangs or flashes under Proton while preserving the
   native canvas, widescreen world rendering and HUD mapping.

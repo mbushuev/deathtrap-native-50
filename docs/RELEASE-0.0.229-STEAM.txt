@@ -1,0 +1,39 @@
+[h1]Deathtrap Native 50 v0.0.229 — Full Steam Deck Support[/h1]
+
+Steam Deck support is finally here. Deathtrap Native 50 now delivers the full
+modernized experience in Gaming Mode: the intended ~50 FPS presentation,
+widescreen rendering, modern camera and controls, controller menus and
+selectors, and stronger vibration tuned specifically for the Deck.
+
+The new Deck path runs directly through Proton/DXVK. It fixes the uneven,
+slow-motion-feeling presentation, the triple-image trails visible during
+movement, and stale scene fragments appearing inside black fog and portal
+regions.
+
+[h2]How to install on Steam Deck[/h2]
+
+[list=1]
+[*]Install Deathtrap Dungeon from Steam, launch the unmodified game once, then
+close it.
+[*]Switch to Desktop Mode, download and extract the complete release ZIP.
+[*]Open a terminal in the extracted directory and run:
+[code]bash INSTALL-DECK.sh[/code]
+[*]Return to Gaming Mode, open Controller Settings for the game, and select the
+standard [b]Gamepad[/b] layout.
+[*]Launch normally through Steam. Native 50 maps all buttons automatically.
+[/list]
+
+No custom Steam Launch Options or manual per-button bindings are needed. The
+installer automatically finds the purchased Steam copy by App ID 245010 and
+creates a rollback before changing any files.
+
+If you extracted the ZIP directly beside DD_CD.EXE, the same command installs
+in place. For a custom game location, run:
+
+[code]bash INSTALL-DECK.sh --game-dir "/path/to/Deathtrap Dungeon"[/code]
+
+[b]Download and full release notes:[/b]
+https://github.com/mbushuev/deathtrap-native-50/releases/tag/v0.0.229
+
+This is Steam Deck support provided by the unofficial patch; it is not an
+official Valve Deck Verified announcement.
