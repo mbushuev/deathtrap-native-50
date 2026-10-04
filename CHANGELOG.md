@@ -8,6 +8,22 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.229 — Experimental Steam Deck support
+
+- Adds a SteamOS installer that can automatically locate the purchased Steam
+  copy, install directly beside `DD_CD.EXE`, or use an explicit custom game
+  directory without changing the game's Steam launch command.
+- Runs the Deathtrap Dd7to9 renderer directly through Proton/DXVK, avoiding
+  the dgVoodoo backend that hangs or flashes under Proton while preserving the
+  native canvas, widescreen world rendering and HUD mapping.
+- Restores the intended approximately 50 FPS presentation cadence on Deck by
+  exposing one Present per visible synthetic or exact frame and hiding the
+  internal page-chain restore. Clear-on-flip remains enabled to prevent stale
+  scene fragments from appearing inside black fog and portal regions.
+- Applies a Deck-only 300% final vibration-output gain. Windows retains its
+  existing 100% output, and all motor commands saturate safely at the XInput
+  maximum.
+
 ## 0.0.228 — Camera-relative controls and camera-facing attacks
 
 - Enables camera-relative `W`/`S`/`A`/`D` movement by default in modern third

@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current development version: **0.0.228**
+Current development version: **0.0.229**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -189,10 +189,14 @@ filtering, automatic mipmaps and VSync.
 
 1. Start Deathtrap Dungeon once through Steam, then close it. This creates the
    Proton prefix used by the installer.
-2. Extract the complete release ZIP anywhere on the Deck.
-3. In Desktop Mode, open a terminal in the extracted directory and run
-   `bash INSTALL-DECK.sh`.
-4. Return to Gaming Mode and start the game normally through Steam. No custom
+2. Choose one installation layout:
+   - extract the complete ZIP anywhere and run `bash INSTALL-DECK.sh`; the
+     purchased Steam copy is found from App ID `245010`;
+   - extract the complete ZIP directly into the directory containing
+     `DD_CD.EXE` and run the same command for an in-place installation;
+   - use a custom location with
+     `bash INSTALL-DECK.sh --game-dir "/path/to/Deathtrap Dungeon"`.
+3. Return to Gaming Mode and start the game normally through Steam. No custom
    Launch Options are needed. Gaming Mode is required for the built-in Deck
    controls to be exposed through Steam Input.
 
@@ -207,6 +211,8 @@ not edit Steam's user configuration or global Proton settings. The Deck path
 keeps clear-on-flip enabled to erase untouched fog and portal pixels, while a
 Native 50 flip policy hides only the internal page-restore presentation. This
 preserves the intended ~50 FPS cadence without exposing stale scene pages.
+It also raises the final vibration output gain from the Windows default of
+100% to 300%; individual motor values saturate safely at XInput's maximum.
 
 The built-in Deck display is configured as `1280x800`. For an external display
 or an explicit Gamescope resolution, pass both dimensions, for example:

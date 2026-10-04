@@ -196,8 +196,12 @@ foreach ($file in $packagedFiles) {
     $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     $manifestLines.Add("$hash  $relativePath")
 }
-[System.IO.File]::WriteAllLines(
-    (Join-Path $stageRoot 'SHA256SUMS.txt'), $manifestLines, $utf8NoBom)
+$manifestPath = Join-Path $stageRoot 'SHA256SUMS.txt'
+$manifestText = ($manifestLines -join "`n") + "`n"
+[System.IO.File]::WriteAllText($manifestPath, $manifestText, $utf8NoBom)
+if ([System.IO.File]::ReadAllBytes($manifestPath) -contains 13) {
+    throw 'SHA256SUMS.txt must use LF line endings for SteamOS.'
+}
 
 Compress-Archive -Path (Join-Path $stageRoot '*') -DestinationPath $archivePath `
     -CompressionLevel Optimal

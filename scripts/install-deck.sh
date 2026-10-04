@@ -7,6 +7,7 @@ readonly EXPECTED_EXE_SHA256=0c644a00e62652e046c5dad2960f0f6c8c1998f4ca065780fbd
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 game_dir=""
+game_selection=""
 compat_data=""
 proton_command=""
 display_width=""
@@ -16,7 +17,7 @@ skip_proton_setup=0
 
 usage() {
     cat <<'EOF'
-Usage: bash INSTALL-DECK.sh [options]
+Usage: bash INSTALL-DECK.sh [GAME-DIRECTORY] [options]
 
 Options:
   --game-dir PATH             Directory containing DD_CD.EXE
@@ -28,8 +29,10 @@ Options:
   --skip-proton-setup         Install files without configuring Proton DLLs
   -h, --help                  Show this help
 
-Run this script from an extracted release. Launch the game through Steam once
-before installing so that App ID 245010 has a Proton prefix.
+With no path, the installer first checks whether it is already inside the game
+directory, then locates the purchased Steam installation by App ID 245010.
+GAME-DIRECTORY and --game-dir support custom locations. Launch the game through
+Steam once before installing so that App ID 245010 has a Proton prefix.
 EOF
 }
 
@@ -43,6 +46,7 @@ while (($#)); do
         --game-dir)
             (($# >= 2)) || die '--game-dir requires a path.'
             game_dir="$2"
+            game_selection="custom"
             shift 2
             ;;
         --compat-data)
@@ -78,7 +82,14 @@ while (($#)); do
             exit 0
             ;;
         *)
-            die "Unknown option: $1"
+            if [[ "$1" == -* ]]; then
+                die "Unknown option: $1"
+            fi
+            [[ -z "$game_dir" ]] ||
+                die 'Specify the custom game directory only once.'
+            game_dir="$1"
+            game_selection="custom"
+            shift
             ;;
     esac
 done
@@ -154,13 +165,28 @@ find_game_directory() {
     if ((${#matches[@]} == 0)); then
         die 'Deathtrap Dungeon was not found. Pass --game-dir PATH.'
     fi
-    ((${#matches[@]} == 1)) ||
-        die 'More than one installation was found. Pass --game-dir PATH.'
+    if ((${#matches[@]} > 1)); then
+        printf 'More than one Deathtrap Dungeon installation was found:\n' >&2
+        for existing in "${matches[@]}"; do
+            printf '  %s\n' "$existing" >&2
+        done
+        die 'Choose one with --game-dir PATH.'
+    fi
     printf '%s\n' "${matches[0]}"
 }
 
 if [[ -z "$game_dir" ]]; then
-    game_dir="$(find_game_directory)"
+    if find "$script_dir" -mindepth 1 -maxdepth 1 -type f \
+            -iname DD_CD.EXE -print -quit 2>/dev/null | grep -q .; then
+        game_dir="$script_dir"
+        game_selection="in-place"
+    else
+        game_dir="$(find_game_directory)"
+        game_selection="Steam App ID $APP_ID"
+    fi
+fi
+if [[ -f "$game_dir" && "${game_dir##*/}" =~ ^[Dd][Dd]_[Cc][Dd]\.[Ee][Xx][Ee]$ ]]; then
+    game_dir="$(dirname -- "$game_dir")"
 fi
 game_dir="$(readlink -f -- "$game_dir")"
 [[ -d "$game_dir" ]] || die "Game directory does not exist: $game_dir"
@@ -310,10 +336,10 @@ remove_local_final_backend D3D9.dll
 remove_local_final_backend D3DImm.dll
 remove_local_final_backend dgVoodoo.conf
 
-rewrite_ini_display() {
-    local source="$1" width="$2" height="$3" temporary
+rewrite_native_ini() {
+    local source="$1" width="$2" height="$3" vibration_gain="$4" temporary
     temporary="$(mktemp)"
-    awk -v width="$width" -v height="$height" '
+    awk -v width="$width" -v height="$height" -v gain="$vibration_gain" '
         { sub(/\r$/, "") }
         /^[[:space:]]*WindowWidth[[:space:]]*=/ {
             sub(/[0-9]+[[:space:]]*$/, width); width_count++
@@ -321,14 +347,18 @@ rewrite_ini_display() {
         /^[[:space:]]*WindowHeight[[:space:]]*=/ {
             sub(/[0-9]+[[:space:]]*$/, height); height_count++
         }
+        /^[[:space:]]*VibrationOutputGainPercent[[:space:]]*=/ {
+            sub(/[0-9]+[[:space:]]*$/, gain); vibration_gain_count++
+        }
         { lines[NR] = $0 }
         END {
-            if (width_count != 1 || height_count != 1) exit 42
+            if (width_count != 1 || height_count != 1 ||
+                vibration_gain_count != 1) exit 42
             for (i = 1; i <= NR; i++) printf "%s\r\n", lines[i]
         }
     ' "$source" >"$temporary" || {
         rm -f -- "$temporary"
-        die 'Display settings were not found exactly once in deathtrap_native.ini.'
+        die 'Display or vibration settings were not found exactly once in deathtrap_native.ini.'
     }
     mv -- "$temporary" "$source"
 }
@@ -377,19 +407,11 @@ rewrite_retail_config() {
     rm -f -- "$split_file"
 }
 
-rewrite_ini_display "$game_dir/deathtrap_native.ini" \
-    "$display_width" "$display_height"
+rewrite_native_ini "$game_dir/deathtrap_native.ini" \
+    "$display_width" "$display_height" 300
 awk '{ sub(/\r$/, ""); printf "%s\r\n", $0 }' \
     "$keys_source" >"$keys_destination"
 rewrite_retail_config "$retail_config"
-
-cat >"$game_dir/deathtrap-native50-deck-launch.sh" <<'EOF'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-export WINEDLLOVERRIDES="dinput,ddraw=n,b;d3d9,d3dim=b${WINEDLLOVERRIDES:+;$WINEDLLOVERRIDES}"
-exec "$@"
-EOF
-chmod 755 -- "$game_dir/deathtrap-native50-deck-launch.sh"
 
 find_compat_data() {
     local steamapps candidate
@@ -501,8 +523,24 @@ if ((skip_proton_setup == 0)); then
     proton_configured=1
 fi
 
+if ((proton_configured)); then
+    # A previous experimental install may have left this fallback behind.
+    # Normal installs use per-game Proton overrides and do not alter launch.
+    rm -f -- "$game_dir/deathtrap-native50-deck-launch.sh"
+else
+    cat >"$game_dir/deathtrap-native50-deck-launch.sh" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+export WINEDLLOVERRIDES="dinput,ddraw=n,b;d3d9,d3dim=b${WINEDLLOVERRIDES:+;$WINEDLLOVERRIDES}"
+exec "$@"
+EOF
+    chmod 755 -- "$game_dir/deathtrap-native50-deck-launch.sh"
+fi
+
 printf 'Installed Deathtrap Native 50 into: %s\n' "$game_dir"
+printf 'Game directory selection: %s\n' "$game_selection"
 printf 'Configured display size: %sx%s\n' "$display_width" "$display_height"
+printf 'Configured vibration output gain: 300%%\n'
 printf 'Rollback copy: %s\n' "$backup_dir"
 if ((proton_configured)); then
     printf 'Configured Proton to load Native 50 and Dd7to9, with D3D9 rendered by Proton/DXVK.\n'

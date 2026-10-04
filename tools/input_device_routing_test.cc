@@ -4,6 +4,7 @@
 #define PollDeathtrapFrontendXInput TestPollFrontend
 #define SubmitDeathtrapPhysicalMouseDelta TestSubmitMouse
 #include "../src/dinput_native_proxy.cc"
+#include "../src/controller_vibration.h"
 #include <iostream>
 
 static int32_t received_x = 0, received_y = 0;
@@ -28,6 +29,15 @@ HRESULT STDMETHODCALLTYPE FakeData(IDirectInputDeviceA*, DWORD size,
   return DI_OK;
 }
 int main() {
+  if (deathtrap::input::ApplyVibrationOutputGain(0x1000u, 100u) !=
+          0x1000u ||
+      deathtrap::input::ApplyVibrationOutputGain(0x1000u, 300u) !=
+          0x3000u ||
+      deathtrap::input::ApplyVibrationOutputGain(0x8000u, 300u) !=
+          0xFFFFu ||
+      deathtrap::input::ApplyVibrationOutputGain(0u, 300u) != 0u) {
+    return 10;
+  }
   auto* mouse = reinterpret_cast<IDirectInputDeviceA*>(0x1000);
   auto* keyboard = reinterpret_cast<IDirectInputDeviceA*>(0x2000);
   g_support_mouse_device.store(mouse);
@@ -66,5 +76,5 @@ int main() {
   HookDirectInputDeviceGetData(mouse, sizeof(out), &out, &count, 0);
   if (count != 1 || out.dwData != 7 || received_x != 12) return 6;
   std::cout << "PASS actual callbacks: keyboard 3 preserved; motion counted once; "
-               "peek, buttons and menu axes preserved\n";
+               "peek, buttons and menu axes preserved; vibration gain clamps\n";
 }

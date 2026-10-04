@@ -351,6 +351,7 @@ them with:
 [XInput]
 VibrationEnabled=1
 VibrationStrengthPercent=100
+VibrationOutputGainPercent=100
 MeleeSwingVibrationMs=170
 BlockVibrationMs=60
 SuccessfulBlockVibrationMs=210
@@ -365,6 +366,13 @@ HitVibrationMs=150
 DamageVibrationMs=240
 DeathVibrationMs=700
 ```
+
+`VibrationStrengthPercent` scales the authored event envelopes before their
+left/right motor balance is mixed. `VibrationOutputGainPercent` scales the
+final motor command and clamps it to XInput's hardware maximum. Windows keeps
+the latter at 100%; `INSTALL-DECK.sh` writes 300% because the Deck's haptics
+are much lighter than conventional rumble motors. Events already at the
+XInput maximum cannot be amplified further.
 
 The motors are forced to zero outside active gameplay, while the radial
 selector owns the controls, on focus loss and after controller disconnect.

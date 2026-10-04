@@ -37,9 +37,9 @@ assert_crlf() {
 }
 
 verify_install() {
-    local game="$1" width="$2" height="$3" file
+    local game="$1" width="$2" height="$3" expect_launcher="$4" file
     for file in DINPUT.dll deathtrap_native.ini DDraw.dll dxwrapper.dll \
-        dxwrapper.ini deathtrap-native50-deck-launch.sh; do
+        dxwrapper.ini; do
         [[ -f "$game/$file" ]] || fail "missing installed file: $file"
     done
     for file in D3D9.dll D3DImm.dll dgVoodoo.conf; do
@@ -51,10 +51,19 @@ verify_install() {
     grep -q '^D3D_ALLOW_MIPMAP 1' "$game/ASYLUM/config.dat"
     grep -q '^D3D_ALLOW_PALETTISED 0' "$game/ASYLUM/config.dat"
     grep -q '^D3D_TYPE1_SHADOWS 1' "$game/ASYLUM/config.dat"
+    grep -q '^VibrationOutputGainPercent=300$' \
+        "$game/deathtrap_native.ini"
     grep -q '^DdrawClearFlipBackBuffer = 1$' "$game/dxwrapper.ini"
     grep -q '^DdrawUseExternalD3D9 = 1$' "$game/dxwrapper.ini"
-    grep -q 'WINEDLLOVERRIDES="dinput,ddraw=n,b;d3d9,d3dim=b' \
-        "$game/deathtrap-native50-deck-launch.sh"
+    if ((expect_launcher)); then
+        [[ -f "$game/deathtrap-native50-deck-launch.sh" ]] ||
+            fail 'missing fallback launch helper'
+        grep -q 'WINEDLLOVERRIDES="dinput,ddraw=n,b;d3d9,d3dim=b' \
+            "$game/deathtrap-native50-deck-launch.sh"
+    else
+        [[ ! -e "$game/deathtrap-native50-deck-launch.sh" ]] ||
+            fail 'normal Proton setup retained the fallback launch helper'
+    fi
     assert_crlf "$game/deathtrap_native.ini"
     assert_crlf "$game/ASYLUM/keys.cfg"
     assert_crlf "$game/ASYLUM/config.dat"
@@ -73,7 +82,7 @@ printf 'old dgVoodoo D3DImm\n' >"$direct_game/D3DImm.dll"
 printf 'old dgVoodoo config\n' >"$direct_game/dgVoodoo.conf"
 bash "$installer" --game-dir "$direct_game" --width 1920 --height 1080 \
     --skip-game-hash-check --skip-proton-setup >/dev/null
-verify_install "$direct_game" 1920 1080
+verify_install "$direct_game" 1920 1080 1
 
 printf 'previous install\n' >"$direct_game/DINPUT.dll"
 bash "$installer" --game-dir "$direct_game" --width 1280 --height 800 \
@@ -81,7 +90,7 @@ bash "$installer" --game-dir "$direct_game" --width 1280 --height 800 \
 latest_backup="$(find "$direct_game/back" -mindepth 1 -maxdepth 1 -type d \
     -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
 grep -q '^previous install$' "$latest_backup/DINPUT.dll"
-verify_install "$direct_game" 1280 800
+verify_install "$direct_game" 1280 800 1
 
 release_root="$test_root/release"
 mkdir -p -- "$release_root/payload/dxwrapper" "$release_root/payload/dgVoodoo"
@@ -102,10 +111,17 @@ cp -- "$repo_root/third_party/dgVoodoo2-2.86.2/x86/D3DImm.dll" \
 
 packaged_game="$test_root/packaged/Deathtrap Dungeon"
 create_game_fixture "$packaged_game"
-bash "$release_root/INSTALL-DECK.sh" --game-dir "$packaged_game" \
+bash "$release_root/INSTALL-DECK.sh" "$packaged_game" \
     --width 1280 --height 800 --skip-game-hash-check \
     --skip-proton-setup >/dev/null
-verify_install "$packaged_game" 1280 800
+verify_install "$packaged_game" 1280 800 1
+
+in_place_game="$test_root/in-place/Deathtrap Dungeon"
+create_game_fixture "$in_place_game"
+cp -a -- "$release_root/." "$in_place_game/"
+bash "$in_place_game/INSTALL-DECK.sh" --width 1280 --height 800 \
+    --skip-game-hash-check --skip-proton-setup >/dev/null
+verify_install "$in_place_game" 1280 800 1
 
 fake_home="$test_root/home"
 steam_root="$fake_home/.local/share/Steam"
@@ -115,6 +131,8 @@ compat_data="$steamapps/compatdata/245010"
 fake_proton="$steamapps/common/Proton 10.0/proton"
 mkdir -p -- "$steamapps/common/Proton 10.0" "$compat_data/pfx"
 create_game_fixture "$proton_game"
+printf 'old fallback launch helper\n' \
+    >"$proton_game/deathtrap-native50-deck-launch.sh"
 cat >"$steamapps/appmanifest_245010.acf" <<'EOF'
 "AppState"
 {
@@ -138,7 +156,7 @@ export HOME="$fake_home"
 export FAKE_PROTON_LOG="$test_root/proton.log"
 bash "$installer" --width 1280 --height 800 \
     --skip-game-hash-check >/dev/null
-verify_install "$proton_game" 1280 800
+verify_install "$proton_game" 1280 800 0
 [[ "$(wc -l <"$FAKE_PROTON_LOG")" -eq 4 ]] ||
     fail 'expected four Proton registry commands'
 for dll in dinput ddraw; do
@@ -154,5 +172,7 @@ grep -q "^$steam_root|$compat_data|$proton_game|" "$FAKE_PROTON_LOG" ||
 latest_backup="$(find "$proton_game/back" -mindepth 1 -maxdepth 1 -type d \
     -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
 grep -q '^existing registry$' "$latest_backup/proton-user.reg"
+grep -q '^old fallback launch helper$' \
+    "$latest_backup/deathtrap-native50-deck-launch.sh"
 
 printf 'Steam Deck installer tests passed.\n'

@@ -29,12 +29,22 @@ need to download or configure dgVoodoo before the first launch.
 QUICK INSTALL - STEAM DECK (EXPERIMENTAL)
 
 1. Start Deathtrap Dungeon once through Steam, then close it.
-2. Extract the complete patch ZIP anywhere on the Deck.
-3. In Desktop Mode, open a terminal in the extracted directory and run:
+2. In Desktop Mode, choose one installation layout:
 
-   bash INSTALL-DECK.sh
+   - Extract the complete ZIP anywhere and run:
 
-4. Return to Gaming Mode and start the game normally through Steam. No custom
+       bash INSTALL-DECK.sh
+
+     The installer locates the purchased Steam copy by App ID 245010.
+
+   - Extract the complete ZIP directly beside DD_CD.EXE and run the same
+     command. The installer recognizes that it is already inside the game.
+
+   - For any other location, run:
+
+       bash INSTALL-DECK.sh --game-dir "/path/to/Deathtrap Dungeon"
+
+3. Return to Gaming Mode and start the game normally through Steam. No custom
    Launch Options are needed. Use Gaming Mode for the built-in Deck controls.
 
 INSTALL-DECK.sh locates Steam App ID 245010, creates the same rollback copy,
@@ -46,8 +56,10 @@ causes hangs or black-frame flashing under Proton. The script changes only
 this game's Proton prefix, not Steam's user configuration or global Proton
 settings. Clear-on-flip remains enabled to keep untouched fog and portal
 pixels black; Native 50 suppresses only the internal page-restore presentation
-so the game retains its intended approximately 50 FPS cadence. For an external
-display, pass explicit dimensions, for example:
+so the game retains its intended approximately 50 FPS cadence. The installer
+also uses a 300% final vibration-output gain for the Deck's lighter haptics;
+motor values saturate safely at the XInput maximum. For an external display,
+pass explicit dimensions, for example:
 
    bash INSTALL-DECK.sh --width 1920 --height 1080
 

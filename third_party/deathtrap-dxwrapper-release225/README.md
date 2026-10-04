@@ -1,4 +1,4 @@
-# Deathtrap release 0.0.226 graphics layer
+# Deathtrap Native 50 graphics layer
 
 Built from upstream revision
 `576c8f28aefc595e98b98fad64f379b151b2896f` with the complete adjacent source

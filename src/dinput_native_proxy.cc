@@ -1599,14 +1599,6 @@ extern "C" DWORD WINAPI Proxy_DeathtrapWindowHeight() {
   return DeathtrapWindowHeight();
 }
 
-extern "C" BOOL WINAPI Proxy_DeathtrapSuppressPageRestorePresent() {
-  if (!g_suppress_page_restore) {
-    return FALSE;
-  }
-  g_suppressed_page_restores.fetch_add(1, std::memory_order_relaxed);
-  return TRUE;
-}
-
 extern "C" DWORD WINAPI Proxy_DeathtrapDdrawFlipPolicy() {
   constexpr DWORD kSkipPreFlipPresent = 0x01u;
   constexpr DWORD kSkipPostFlipPresent = 0x02u;

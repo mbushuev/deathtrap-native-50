@@ -283,6 +283,12 @@ action acknowledgement rather than hit detection.
 Version 0.0.40 strengthens and lengthens the two envelopes after hardware
 testing showed the initial conservative profile was barely perceptible.
 
+The authored event strength and left/right balance are mixed first. A separate
+final `VibrationOutputGainPercent` is then applied to each 16-bit motor value
+with saturation at `65535`. Windows uses 100%; the Steam Deck installer writes
+300% to compensate for its lighter haptic response without changing event
+durations or relative motor balance.
+
 Version 0.0.41 adds a simulation-event layer without changing simulation
 state. Static analysis identified `Dungeon.dll+0x1C130` as the common damage
 handler. The target's data pointer is at `target+0x2C`, and its signed health is

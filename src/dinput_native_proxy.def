@@ -12,5 +12,4 @@ EXPORTS
     DeathtrapDisplayMode=Proxy_DeathtrapDisplayMode
     DeathtrapWindowWidth=Proxy_DeathtrapWindowWidth
     DeathtrapWindowHeight=Proxy_DeathtrapWindowHeight
-    DeathtrapSuppressPageRestorePresent=Proxy_DeathtrapSuppressPageRestorePresent
     DeathtrapDdrawFlipPolicy=Proxy_DeathtrapDdrawFlipPolicy

@@ -32,6 +32,7 @@
 
 #include "camera_spring_arm.h"
 #include "camera_room_collision.h"
+#include "controller_vibration.h"
 #include "deathtrap_music_route.h"
 #include "immersive_first_person.h"
 #include "input_binding_pages.h"
@@ -3645,6 +3646,7 @@ std::atomic<int32_t> g_third_person_heading_reference_microradians{0};
 bool g_xinput_previous_native_gameplay = false;
 bool g_xinput_vibration_enabled = true;
 uint32_t g_xinput_vibration_strength_percent = 100u;
+uint32_t g_xinput_vibration_output_gain_percent = 100u;
 uint32_t g_xinput_melee_swing_vibration_ms = 170u;
 uint32_t g_xinput_block_vibration_ms = 60u;
 uint32_t g_xinput_successful_block_vibration_ms = 210u;
@@ -11129,6 +11131,10 @@ void StartEventVibration(std::atomic<uint64_t>* deadline,
                          uint32_t duration_ms, uint32_t percent);
 
 void ApplyControllerVibration(WORD left_motor, WORD right_motor) {
+  left_motor = deathtrap::input::ApplyVibrationOutputGain(
+      left_motor, g_xinput_vibration_output_gain_percent);
+  right_motor = deathtrap::input::ApplyVibrationOutputGain(
+      right_motor, g_xinput_vibration_output_gain_percent);
   if (left_motor == g_applied_vibration_left &&
       right_motor == g_applied_vibration_right) {
     return;
@@ -19389,6 +19395,10 @@ void InitializePatchState() {
   g_xinput_vibration_strength_percent = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"XInput", L"VibrationStrengthPercent", 100),
       0, 100));
+  g_xinput_vibration_output_gain_percent =
+      static_cast<uint32_t>(std::clamp(
+          ConfiguredInteger(L"XInput", L"VibrationOutputGainPercent", 100),
+          0, 400));
   g_xinput_melee_swing_vibration_ms = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"XInput", L"MeleeSwingVibrationMs", 170), 40, 400));
   g_xinput_block_vibration_ms = static_cast<uint32_t>(std::clamp(
@@ -19544,7 +19554,7 @@ void InitializePatchState() {
       "radial=%d center_y=%d "
       "camera_relative_movement=%u keyboard_camera_relative=%u "
       "invert_y=%u turn=%.0fdeg "
-      "vibration=%u/%u%% action=%u/%u/%u/%ums event=%u/%u/%u/%u/%u/"
+      "vibration=%u/%u%% gain=%u%% action=%u/%u/%u/%ums event=%u/%u/%u/%u/%u/"
       "%u/%ums heavy=%uhp/%ums "
       "available=%u camera_probe=%u orbit=%u immersive_first_person=%u "
       "sensitivity=%d/%ddeg "
@@ -19569,6 +19579,7 @@ void InitializePatchState() {
       g_xinput_movement_turn_degrees_per_tick,
       g_xinput_vibration_enabled ? 1u : 0u,
       g_xinput_vibration_strength_percent,
+      g_xinput_vibration_output_gain_percent,
       g_xinput_melee_swing_vibration_ms,
       g_xinput_block_vibration_ms,
       g_xinput_successful_block_vibration_ms,
