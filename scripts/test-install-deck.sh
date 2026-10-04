@@ -145,11 +145,32 @@ printf 'existing registry\n' >"$compat_data/pfx/user.reg"
 cat >"$fake_proton" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf '%s|%s|%s|%s\n' \
+printf '%s|%s|%s|%s|%s\n' \
     "$STEAM_COMPAT_CLIENT_INSTALL_PATH" \
     "$STEAM_COMPAT_DATA_PATH" \
     "$STEAM_COMPAT_INSTALL_PATH" \
+    "$STEAM_COMPAT_LIBRARY_PATHS" \
     "$*" >>"$FAKE_PROTON_LOG"
+value_name=''
+value_data=''
+while (($#)); do
+    case "$1" in
+        /v)
+            value_name="$2"
+            shift 2
+            ;;
+        /d)
+            value_data="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+[[ -n "$value_name" && -n "$value_data" ]]
+printf '"%s"="%s"\n' "$value_name" "$value_data" \
+    >>"$STEAM_COMPAT_DATA_PATH/pfx/user.reg"
 EOF
 chmod 755 -- "$fake_proton"
 export HOME="$fake_home"
@@ -167,7 +188,8 @@ for dll in d3d9 d3dim; do
     grep -q "reg.exe add .* /v $dll .* /d builtin /f" \
         "$FAKE_PROTON_LOG" || fail "missing Proton builtin override for $dll"
 done
-grep -q "^$steam_root|$compat_data|$proton_game|" "$FAKE_PROTON_LOG" ||
+grep -q "^$steam_root|$compat_data|$proton_game|$steamapps|" \
+    "$FAKE_PROTON_LOG" ||
     fail 'incorrect Steam or Proton environment'
 latest_backup="$(find "$proton_game/back" -mindepth 1 -maxdepth 1 -type d \
     -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"

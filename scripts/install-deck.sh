@@ -494,7 +494,6 @@ if ((skip_proton_setup == 0)); then
     steam_client_root="$(find_steam_client_root)" ||
         die 'The Steam client directory was not found.'
     steamapps="$(dirname -- "$(dirname -- "$compat_data")")"
-    library_root="$(dirname -- "$steamapps")"
     if [[ -f "$compat_data/pfx/user.reg" ]]; then
         cp -a -- "$compat_data/pfx/user.reg" "$backup_dir/proton-user.reg"
     fi
@@ -502,7 +501,7 @@ if ((skip_proton_setup == 0)); then
         STEAM_COMPAT_CLIENT_INSTALL_PATH="$steam_client_root" \
         STEAM_COMPAT_DATA_PATH="$compat_data" \
         STEAM_COMPAT_INSTALL_PATH="$game_dir" \
-        STEAM_COMPAT_LIBRARY_PATHS="$library_root" \
+        STEAM_COMPAT_LIBRARY_PATHS="$steamapps" \
         STEAM_COMPAT_APP_ID="$APP_ID" \
         SteamAppId="$APP_ID" \
         SteamGameId="$APP_ID" \
@@ -513,12 +512,22 @@ if ((skip_proton_setup == 0)); then
         STEAM_COMPAT_CLIENT_INSTALL_PATH="$steam_client_root" \
         STEAM_COMPAT_DATA_PATH="$compat_data" \
         STEAM_COMPAT_INSTALL_PATH="$game_dir" \
-        STEAM_COMPAT_LIBRARY_PATHS="$library_root" \
+        STEAM_COMPAT_LIBRARY_PATHS="$steamapps" \
         STEAM_COMPAT_APP_ID="$APP_ID" \
         SteamAppId="$APP_ID" \
         SteamGameId="$APP_ID" \
             "$proton_command" run reg.exe add 'HKCU\Software\Wine\DllOverrides' \
                 /v "$dll" /t REG_SZ /d builtin /f >/dev/null
+    done
+    for override in \
+        'dinput|native,builtin' \
+        'ddraw|native,builtin' \
+        'd3d9|builtin' \
+        'd3dim|builtin'; do
+        dll="${override%%|*}"
+        value="${override#*|}"
+        grep -Fqx "\"$dll\"=\"$value\"" "$compat_data/pfx/user.reg" ||
+            die "Proton did not persist the required $dll DLL override."
     done
     proton_configured=1
 fi
