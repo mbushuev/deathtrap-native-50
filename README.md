@@ -11,11 +11,6 @@ Current version: **0.0.230**
   <img src="assets/deathtrap-native50-banner-v0.0.230.png" alt="Deathtrap Native 50 v0.0.230 — Steam Deck and localized GOG support" width="960">
 </p>
 
-Version 0.0.230 adds dedicated compatibility profiles for the French, German
-and Italian GOG releases while retaining the complete Windows and Steam Deck
-experience from 0.0.229. It maps each localized game's internal code and data
-layout explicitly instead of bypassing the patch's binary safety checks.
-
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
 32-bit Windows release of *Ian Livingstone's Deathtrap Dungeon* (1998), now
 supporting both Windows and Steam Deck. It raises the unique rendered output
