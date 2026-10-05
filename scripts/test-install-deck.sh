@@ -44,6 +44,15 @@ assert_crlf() {
     fi
 }
 
+assert_text_line() {
+    local path="$1" expected="$2"
+    awk -v expected="$expected" '
+        { sub(/\015$/, "") }
+        $0 == expected { found = 1 }
+        END { exit !found }
+    ' "$path"
+}
+
 verify_install() {
     local game="$1" width="$2" height="$3" expect_launcher="$4" file
     for file in DINPUT.dll deathtrap_native.ini DDraw.dll dxwrapper.dll \
@@ -59,13 +68,10 @@ verify_install() {
     grep -q '^D3D_ALLOW_MIPMAP 1' "$game/ASYLUM/config.dat"
     grep -q '^D3D_ALLOW_PALETTISED 0' "$game/ASYLUM/config.dat"
     grep -q '^D3D_TYPE1_SHADOWS 1' "$game/ASYLUM/config.dat"
-    awk '
-        { sub(/\015$/, "") }
-        $0 == "VibrationOutputGainPercent=300" { found = 1 }
-        END { exit !found }
-    ' "$game/deathtrap_native.ini"
-    grep -q '^DdrawClearFlipBackBuffer = 1$' "$game/dxwrapper.ini"
-    grep -q '^DdrawUseExternalD3D9 = 1$' "$game/dxwrapper.ini"
+    assert_text_line "$game/deathtrap_native.ini" \
+        'VibrationOutputGainPercent=300'
+    assert_text_line "$game/dxwrapper.ini" 'DdrawClearFlipBackBuffer = 1'
+    assert_text_line "$game/dxwrapper.ini" 'DdrawUseExternalD3D9 = 1'
     if ((expect_launcher)); then
         [[ -f "$game/deathtrap-native50-deck-launch.sh" ]] ||
             fail 'missing fallback launch helper'
