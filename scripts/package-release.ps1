@@ -19,7 +19,7 @@ if (-not $changelog.Contains($expectedChangelogHeading)) {
     throw "CHANGELOG.md does not contain the $version release heading."
 }
 $readme = Get-Content -LiteralPath (Join-Path $repoRoot 'README.md') -Raw
-if (-not $readme.Contains("Current development version: **$version**")) {
+if (-not $readme.Contains("Current version: **$version**")) {
     throw "README.md does not identify version $version."
 }
 
