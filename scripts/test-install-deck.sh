@@ -59,8 +59,11 @@ verify_install() {
     grep -q '^D3D_ALLOW_MIPMAP 1' "$game/ASYLUM/config.dat"
     grep -q '^D3D_ALLOW_PALETTISED 0' "$game/ASYLUM/config.dat"
     grep -q '^D3D_TYPE1_SHADOWS 1' "$game/ASYLUM/config.dat"
-    grep -q '^VibrationOutputGainPercent=300$' \
-        "$game/deathtrap_native.ini"
+    awk '
+        { sub(/\015$/, "") }
+        $0 == "VibrationOutputGainPercent=300" { found = 1 }
+        END { exit !found }
+    ' "$game/deathtrap_native.ini"
     grep -q '^DdrawClearFlipBackBuffer = 1$' "$game/dxwrapper.ini"
     grep -q '^DdrawUseExternalD3D9 = 1$' "$game/dxwrapper.ini"
     if ((expect_launcher)); then
