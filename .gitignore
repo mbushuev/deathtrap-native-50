@@ -5,6 +5,10 @@
 /.vs/
 /out/
 /artifacts*/
+/release-prep/
+/docs/RELEASE-*-DISCORD.md
+/docs/RELEASE-*-GITHUB.md
+/docs/RELEASE-*-STEAM.txt
 /media/
 *.obj
 *.pdb

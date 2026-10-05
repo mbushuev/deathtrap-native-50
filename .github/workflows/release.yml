@@ -59,20 +59,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
-          $releaseNotesSource = Join-Path docs "RELEASE-$version-GITHUB.md"
-          if (-not (Test-Path -LiteralPath $releaseNotesSource -PathType Leaf)) {
-            throw "GitHub release notes are missing: $releaseNotesSource"
-          }
-          $releaseNotes = Get-Content -LiteralPath $releaseNotesSource -Raw
-          if ([string]::IsNullOrWhiteSpace($releaseNotes)) {
-            throw "GitHub release notes are empty: $releaseNotesSource"
-          }
-          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
-          [System.IO.File]::WriteAllText(
-            $notesPath,
-            $releaseNotes.Trim() + "`n",
-            [System.Text.UTF8Encoding]::new($false))
-
           $assets = @(Get-ChildItem -LiteralPath artifacts -File |
             Where-Object { $_.Extension -eq '.zip' -or $_.Name.EndsWith('-SHA256.txt') } |
             ForEach-Object { $_.FullName })
@@ -82,7 +68,7 @@ jobs:
           & gh release create $env:GITHUB_REF_NAME @assets `
             --draft --verify-tag `
             --title "Deathtrap Native 50 $env:GITHUB_REF_NAME" `
-            --notes-file $notesPath
+            --generate-notes
           if ($LASTEXITCODE -ne 0) {
             throw 'GitHub release creation failed.'
           }

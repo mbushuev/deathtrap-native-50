@@ -37,8 +37,8 @@ internal development documentation.
 
 ## Tagging
 
-Commit the accepted source and release documentation, then create an annotated
-tag that exactly matches `v` plus the contents of `VERSION`:
+Commit the accepted source, changelog and user documentation, then create an
+annotated tag that exactly matches `v` plus the contents of `VERSION`:
 
 ```powershell
 $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
@@ -60,15 +60,15 @@ Pushing the tag starts `.github/workflows/release.yml` on a Windows runner. It:
 4. runs DirectInput, camera, first-person, music and installer tests;
 5. creates the ZIP and checksum with `scripts/package-release.ps1`;
 6. uploads the files as workflow artifacts;
-7. creates a **draft** GitHub Release whose description is read from
-   `docs/RELEASE-<version>-GITHUB.md`.
+7. creates a **draft** GitHub Release with GitHub-generated notes.
 
 The draft is intentionally not published automatically. Before publishing it,
-review the generated notes, attach screenshots or video links, confirm the two
-assets and compare the published checksum with the locally verified archive.
-Every release therefore needs a matching versioned GitHub release-notes file;
-the workflow fails rather than publishing an incomplete description when that
-file is missing or empty.
+replace the generated notes with the reviewed release copy, attach screenshots
+or video links, confirm the two assets and compare the published checksum with
+the locally verified archive. Platform-specific announcement drafts and the
+final GitHub release copy are private publishing material: keep them outside
+the repository (for example under the ignored `release-prep` directory), not
+under `docs`.
 
 ## Release contents policy
 
