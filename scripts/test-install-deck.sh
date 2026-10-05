@@ -5,9 +5,17 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 installer="$repo_root/scripts/install-deck.sh"
 test_root="$(mktemp -d)"
 
+report_error() {
+    local status="$?"
+    printf 'Steam Deck installer test failed at line %s: %s\n' \
+        "${BASH_LINENO[0]}" "$BASH_COMMAND" >&2
+    exit "$status"
+}
+
 cleanup() {
     [[ "$test_root" == /tmp/* && -d "$test_root" ]] && rm -rf -- "$test_root"
 }
+trap report_error ERR
 trap cleanup EXIT
 
 fail() {
