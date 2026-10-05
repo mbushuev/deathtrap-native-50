@@ -6,8 +6,11 @@ identified.
 
 ## Reusable tools
 
-`tools/analyze_dungeon_camera.py` validates the supported Steam `Dungeon.dll`
-by SHA-256 before disassembling it. It requires Python, `pefile` and Capstone.
+`tools/analyze_dungeon_camera.py` validates the supported English Steam/GOG and
+French, German or Italian GOG `Dungeon.dll` by SHA-256 before disassembling it.
+It requires Python, `pefile` and Capstone. RVAs in the examples below refer to
+the English layout; the runtime source declares the localized data mappings
+and the German code adjustment used after its early frontend insertion.
 
 ```powershell
 python -m pip install pefile capstone

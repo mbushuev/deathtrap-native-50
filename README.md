@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current version: **0.0.229**
+Current version: **0.0.230**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -8,15 +8,13 @@ Current version: **0.0.229**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.229.png" alt="Deathtrap Native 50 v0.0.229 — Full Steam Deck Support" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.230.png" alt="Deathtrap Native 50 v0.0.230 — Steam Deck and localized GOG support" width="960">
 </p>
 
-Version 0.0.229 brings the complete Deathtrap Native 50 experience to Steam
-Deck at last. It runs through SteamOS and Proton/DXVK with the modern camera
-and controls, widescreen rendering, controller-aware menus and selectors, the
-intended approximately 50 FPS presentation and Deck-tuned vibration. Select
-the standard Steam Input **Gamepad** layout and the built-in controls map
-automatically.
+Version 0.0.230 adds dedicated compatibility profiles for the French, German
+and Italian GOG releases while retaining the complete Windows and Steam Deck
+experience from 0.0.229. It maps each localized game's internal code and data
+layout explicitly instead of bypassing the patch's binary safety checks.
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
 32-bit Windows release of *Ian Livingstone's Deathtrap Dungeon* (1998), now
@@ -28,7 +26,8 @@ The patch was developed using OpenAI Codex under human direction and was
 validated through extensive manual playtesting and automated tests.
 
 Verified and tested with the
-[Steam release of Deathtrap Dungeon](https://store.steampowered.com/app/245010/Deathtrap_Dungeon/).
+[Steam release of Deathtrap Dungeon](https://store.steampowered.com/app/245010/Deathtrap_Dungeon/)
+and the English, French, German and Italian GOG releases on Windows 11.
 
 The release already includes the Deathtrap-specific widescreen layer and the
 tested graphics configuration for both platforms. Windows uses the bundled
@@ -97,6 +96,7 @@ work.
 The current release supports:
 
 - the [Steam release, App ID `245010`](https://store.steampowered.com/app/245010/Deathtrap_Dungeon/);
+- the English, French, German and Italian GOG releases on Windows;
 - Windows 10 or 11 x64;
 - Steam Deck with SteamOS, Proton and Gaming Mode;
 - the original 32-bit game process;
@@ -106,16 +106,20 @@ The current release supports:
   unmodified dgVoodoo2 2.86.2 x86 D3D9 runtime and D3D11 backend on Windows,
   or Proton/DXVK directly on Steam Deck.
 
-| File | Tested Steam SHA-256 |
-|---|---|
-| `Dungeon.dll` | `95FE9CE0FFF387F00704548F152E4340815213FCB3833DBE1B5C42871E7D2E56` |
-| `DD_CD.EXE` | `0C644A00E62652E046C5DAD2960F0F6C8C1998F4CA065780FBD7811D9908BF1F` |
+| File | Release | Tested SHA-256 |
+|---|---|---|
+| `Dungeon.dll` | Steam / GOG English | `95FE9CE0FFF387F00704548F152E4340815213FCB3833DBE1B5C42871E7D2E56` |
+| `Dungeon.dll` | GOG French | `CA58E0AF445B1EB66B7B7653D71371D81E4B03DD5BDB2F82AE01C0A2E499C0FA` |
+| `Dungeon.dll` | GOG German | `83F7E98973A497358EB8E51EA844A803F9AFE3E255A3C680E12058E0679D1D3B` |
+| `Dungeon.dll` | GOG Italian | `1FBF70AB094C8E767FEF5EDE13FF1FF0D94D5E887645E5F9A401F84C1C228747` |
+| `DD_CD.EXE` | Steam / GOG English / GOG French / GOG Italian | `0C644A00E62652E046C5DAD2960F0F6C8C1998F4CA065780FBD7811D9908BF1F` |
+| `DD_CD.EXE` | GOG German | `4CD498274D32392EA11864616C44241BE3624748B3D16E88D6DF9330A8C9497F` |
 
 These hashes are compatibility fingerprints, not an installation lock. The
-installer warns when either file differs and continues. Other store releases,
-fan patches and modified executables have not been verified and may work
-partially, fail to activate, crash or corrupt game state. The DLL retains a
-structural safety check before applying fixed-address hooks.
+installer warns when neither tested profile matches and continues. Other
+releases, fan patches and modified executables have not been verified and may
+work partially, fail to activate, crash or corrupt game state. The DLL retains
+a structural safety check before applying fixed-address hooks.
 
 [dxwrapper](https://github.com/elishacloud/dxwrapper) supplies the
 Deathtrap-specific Dd7to9 layer used by the widescreen renderer. Its local

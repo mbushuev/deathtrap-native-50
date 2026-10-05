@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Small reproducible PE/x86 helper for the supported Dungeon.dll.
+"""Small reproducible PE/x86 helper for supported Dungeon.dll builds.
 
-The runtime patch is tied to one verified Steam binary.  This tool keeps the
-static part of camera reverse engineering repeatable: it disassembles an RVA
-and can find instructions that reference an image address.  It never modifies
-the game binary.
+The runtime patch has verified layouts for the English Steam/GOG binary and
+the French, German, and Italian GOG binaries.  This tool keeps the static part
+of camera reverse engineering repeatable: it disassembles an RVA and can find
+instructions that reference an image address.  It never modifies the game
+binary.
 """
 
 from __future__ import annotations
@@ -26,9 +27,12 @@ except ImportError as error:
     ) from error
 
 
-EXPECTED_SHA256 = (
-    "95FE9CE0FFF387F00704548F152E4340815213FCB3833DBE1B5C42871E7D2E56"
-)
+EXPECTED_SHA256 = {
+    "95FE9CE0FFF387F00704548F152E4340815213FCB3833DBE1B5C42871E7D2E56",
+    "CA58E0AF445B1EB66B7B7653D71371D81E4B03DD5BDB2F82AE01C0A2E499C0FA",
+    "83F7E98973A497358EB8E51EA844A803F9AFE3E255A3C680E12058E0679D1D3B",
+    "1FBF70AB094C8E767FEF5EDE13FF1FF0D94D5E887645E5F9A401F84C1C228747",
+}
 
 
 def integer(text: str) -> int:
@@ -37,10 +41,10 @@ def integer(text: str) -> int:
 
 def load_image(path: Path):
     digest = hashlib.sha256(path.read_bytes()).hexdigest().upper()
-    if digest != EXPECTED_SHA256:
+    if digest not in EXPECTED_SHA256:
         raise SystemExit(
             f"Unsupported Dungeon.dll SHA-256: {digest}\n"
-            f"Expected: {EXPECTED_SHA256}"
+            f"Expected one of: {', '.join(sorted(EXPECTED_SHA256))}"
         )
     image = pefile.PE(str(path), fast_load=True)
     if image.OPTIONAL_HEADER.Magic != 0x10B:

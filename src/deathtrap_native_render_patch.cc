@@ -45,85 +45,165 @@
 
 namespace {
 
-constexpr uint32_t kExpectedTimestamp = 0x35752434u;
-constexpr uint32_t kExpectedImageSize = 0x00367000u;
+enum class DungeonImageVariant : uint8_t {
+  kUnsupported = 0,
+  kEnglish,
+  kFrenchGog,
+  kGermanGog,
+  kItalianGog,
+};
+
+DungeonImageVariant g_dungeon_image_variant =
+    DungeonImageVariant::kUnsupported;
+
+struct DungeonDataRva {
+  uintptr_t english;
+  uintptr_t french_gog;
+  uintptr_t german_gog;
+  uintptr_t italian_gog;
+
+  operator uintptr_t() const {
+    switch (g_dungeon_image_variant) {
+      case DungeonImageVariant::kFrenchGog:
+        return french_gog;
+      case DungeonImageVariant::kGermanGog:
+        return german_gog;
+      case DungeonImageVariant::kItalianGog:
+        return italian_gog;
+      case DungeonImageVariant::kEnglish:
+      case DungeonImageVariant::kUnsupported:
+      default:
+        return english;
+    }
+  }
+};
+
+uintptr_t ActiveDungeonCodeRva(uintptr_t english_rva) {
+  // The German executable adds 0x30 bytes in the early frontend block. Every
+  // runtime function or callsite used by Native 50 after that block retains
+  // its English layout at RVA +0x30.
+  if (g_dungeon_image_variant == DungeonImageVariant::kGermanGog &&
+      english_rva >= 0x000136D0u) {
+    return english_rva + 0x30u;
+  }
+  return english_rva;
+}
+
+struct DungeonCodeRva {
+  uintptr_t english;
+
+  operator uintptr_t() const { return ActiveDungeonCodeRva(english); }
+};
+
+constexpr uint32_t kEnglishDungeonTimestamp = 0x35752434u;
+constexpr uint32_t kEnglishDungeonImageSize = 0x00367000u;
+constexpr uint32_t kFrenchGogDungeonTimestamp = 0x35752501u;
+constexpr uint32_t kFrenchGogDungeonImageSize = 0x00368000u;
+constexpr uint32_t kGermanGogDungeonTimestamp = 0x35752490u;
+constexpr uint32_t kGermanGogDungeonImageSize = 0x00367000u;
+constexpr uint32_t kItalianGogDungeonTimestamp = 0x3575255Eu;
+constexpr uint32_t kItalianGogDungeonImageSize = 0x00367000u;
 constexpr uintptr_t kRateConsumerSignatureRva = 0x0007F015u;
-constexpr uintptr_t kSchedulerRateSetterRva = 0x00050390u;
-constexpr uintptr_t kRenderPresentWaitRva = 0x00080600u;
-constexpr uintptr_t kRendererRva = 0x0001B320u;
-constexpr uintptr_t kSceneCacheUpdateRva = 0x00039160u;
-constexpr uintptr_t kCameraCacheUpdateRva = 0x00003860u;
+constexpr DungeonCodeRva kSchedulerRateSetterRva{0x00050390u};
+constexpr DungeonCodeRva kRenderPresentWaitRva{0x00080600u};
+constexpr DungeonCodeRva kRendererRva{0x0001B320u};
+constexpr DungeonCodeRva kSceneCacheUpdateRva{0x00039160u};
+constexpr DungeonCodeRva kCameraCacheUpdateRva{0x00003860u};
 // These two leaves are the narrow transform portion of the broad 0x3860
 // camera-cache transaction.  0x3A980 builds a node's local transform from
 // its position/angles; 0x3AC00 composes its world transform.  The owned-camera
 // publication audit invokes them only on a detached camera-node copy.  In
 // particular, it never replays the live resource/bounds/callback recursion
 // that made the rejected 0.0.142 build shake the player.
-constexpr uintptr_t kCameraNodeLocalUpdateRva = 0x0003A980u;
-constexpr uintptr_t kCameraNodeWorldUpdateRva = 0x0003AC00u;
-constexpr uintptr_t kBackendFlipPointerRva = 0x000FFA50u;
-constexpr uintptr_t kUiFrameStampRva = 0x000FB96Cu;
-constexpr uintptr_t kUiRenderStateRva = 0x0022B5B0u;
-constexpr uintptr_t kUiSelectorModeRva = 0x001086FCu;
-constexpr uintptr_t kUiMessageStateRva = 0x001D41C8u;
-constexpr uintptr_t kUiMessageEntriesRva = 0x001D4360u;
-constexpr uintptr_t kUiMessageLifetimeImmediateRva = 0x0008F6AFu;
-constexpr uintptr_t kUiMessageRendererRva = 0x0008F4C0u;
-constexpr uintptr_t kPstMessageRendererRva = 0x00077FF0u;
-constexpr uintptr_t kUiViewportPointerRva = 0x001F11B4u;
+constexpr DungeonCodeRva kCameraNodeLocalUpdateRva{0x0003A980u};
+constexpr DungeonCodeRva kCameraNodeWorldUpdateRva{0x0003AC00u};
+constexpr DungeonDataRva kBackendFlipPointerRva{
+    0x000FFA50u, 0x001004B8u, 0x000FFF20u, 0x00100100u};
+constexpr DungeonDataRva kUiFrameStampRva{
+    0x000FB96Cu, 0x000FC3D4u, 0x000FBE3Cu, 0x000FC01Cu};
+constexpr DungeonDataRva kUiRenderStateRva{
+    0x0022B5B0u, 0x0022C010u, 0x0022BA80u, 0x0022BC60u};
+constexpr DungeonDataRva kUiSelectorModeRva{
+    0x001086FCu, 0x0010915Cu, 0x00108BCCu, 0x00108DACu};
+constexpr DungeonDataRva kUiMessageStateRva{
+    0x001D41C8u, 0x001D4C28u, 0x001D4698u, 0x001D4878u};
+constexpr DungeonDataRva kUiMessageEntriesRva{
+    0x001D4360u, 0x001D4DC0u, 0x001D4830u, 0x001D4A10u};
+constexpr DungeonCodeRva kUiMessageLifetimeImmediateRva{0x0008F6AFu};
+constexpr DungeonCodeRva kUiMessageRendererRva{0x0008F4C0u};
+constexpr DungeonCodeRva kPstMessageRendererRva{0x00077FF0u};
+constexpr DungeonDataRva kUiViewportPointerRva{
+    0x001F11B4u, 0x001F1C14u, 0x001F1684u, 0x001F1864u};
 constexpr size_t kUiViewportLeftOffset = 0x18u;
 constexpr size_t kUiViewportRightOffset = 0x20u;
-constexpr uintptr_t kPstMessageStateRva = 0x001F0A90u;
-constexpr uintptr_t kPstMessageLifetimeImmediateRva = 0x000781C8u;
-constexpr uintptr_t kUiCountdownStateRva = 0x001D89F0u;
-constexpr uintptr_t kUiOwnerPointerRva = 0x0034F9D0u;
-constexpr uintptr_t kEngineFrameCounterRva = 0x001D24DCu;
+constexpr DungeonDataRva kPstMessageStateRva{
+    0x001F0A90u, 0x001F14F0u, 0x001F0F60u, 0x001F1140u};
+constexpr DungeonCodeRva kPstMessageLifetimeImmediateRva{0x000781C8u};
+constexpr DungeonDataRva kUiCountdownStateRva{
+    0x001D89F0u, 0x001D9450u, 0x001D8EC0u, 0x001D90A0u};
+constexpr DungeonDataRva kUiOwnerPointerRva{
+    0x0034F9D0u, 0x00350430u, 0x0034FEA0u, 0x00350080u};
+constexpr DungeonDataRva kEngineFrameCounterRva{
+    0x001D24DCu, 0x001D2F3Cu, 0x001D29ACu, 0x001D2B8Cu};
 // The retail music selector stores the currently requested Redbook track here
 // before passing that track's start/end pair to AIL_redbook_play.  Steam's
 // legacy MP3 wrapper discards the pair, so this engine-owned value is the only
 // reliable track identity left at playback time.
-constexpr uintptr_t kCurrentRedbookTrackRva = 0x00104C10u;
-constexpr uintptr_t kPublishedCameraMatrixRva = 0x001D4110u;
+constexpr DungeonDataRva kCurrentRedbookTrackRva{
+    0x00104C10u, 0x00105670u, 0x001050E0u, 0x001052C0u};
+constexpr DungeonDataRva kPublishedCameraMatrixRva{
+    0x001D4110u, 0x001D4B70u, 0x001D45E0u, 0x001D47C0u};
 // Active software-transform dimensions.  Gameplay temporarily widens these
 // while the world renderer emits pre-transformed vertices; menu/movie passes
 // never enter this boundary.
-constexpr uintptr_t kRenderWidthRva = 0x001D24E0u;
-constexpr uintptr_t kRenderHeightRva = 0x001D24E4u;
+constexpr DungeonDataRva kRenderWidthRva{
+    0x001D24E0u, 0x001D2F40u, 0x001D29B0u, 0x001D2B90u};
+constexpr DungeonDataRva kRenderHeightRva{
+    0x001D24E4u, 0x001D2F44u, 0x001D29B4u, 0x001D2B94u};
 constexpr size_t kRenderContextCenterXOffset = 0x08u;
 constexpr size_t kRenderContextRightOffset = 0x20u;
 constexpr size_t kRenderContextCenterOffsetXOffset = 0x58u;
-constexpr uintptr_t kRetailCameraManagerPointerRva = 0x001F11C0u;
+constexpr DungeonDataRva kRetailCameraManagerPointerRva{
+    0x001F11C0u, 0x001F1C20u, 0x001F1690u, 0x001F1870u};
 // Global room manager used by the retail point-sector resolver. manager+0x20
 // points at the contiguous 0x3C-byte sector collection.
-constexpr uintptr_t kRetailRoomManagerPointerRva = 0x001F11BCu;
+constexpr DungeonDataRva kRetailRoomManagerPointerRva{
+    0x001F11BCu, 0x001F1C1Cu, 0x001F168Cu, 0x001F186Cu};
 // Renderer resource registry used by Dungeon.dll+0x39900 and 0x3AC00.
 // A scene node stores a positive resource index at node+0x3C. The registry
 // entry points at the original Asylum mesh, including its polygon list and
 // local-space vertices. This is intentionally read-only: several visible
 // props are omitted from the room BSP used by the retail camera resolver.
-constexpr uintptr_t kRenderResourceCountRva = 0x00236F90u;
-constexpr uintptr_t kRenderResourceTableRva = 0x00237130u;
+constexpr DungeonDataRva kRenderResourceCountRva{
+    0x00236F90u, 0x002379F0u, 0x00237460u, 0x00237640u};
+constexpr DungeonDataRva kRenderResourceTableRva{
+    0x00237130u, 0x00237B90u, 0x00237600u, 0x002377E0u};
 // Dungeon.dll+0x30E30 dispatches the retail camera state machine through this
 // global controller. Unlike the small context camera owner above, this object
 // contains the active mode, target and cached camera values used by the
 // first-person and third-person paths.
-constexpr uintptr_t kCameraControllerRva = 0x001044A0u;
-constexpr uintptr_t kCameraControllerFlagsRva = 0x00104620u;
-constexpr uintptr_t kCameraControllerCallback0Rva = 0x00104640u;
-constexpr uintptr_t kCameraControllerCallback1Rva = 0x00104644u;
-constexpr uintptr_t kCameraControllerModeRva = 0x00104679u;
+constexpr DungeonDataRva kCameraControllerRva{
+    0x001044A0u, 0x00104F00u, 0x00104970u, 0x00104B50u};
+constexpr DungeonDataRva kCameraControllerFlagsRva{
+    0x00104620u, 0x00105080u, 0x00104AF0u, 0x00104CD0u};
+constexpr DungeonDataRva kCameraControllerCallback0Rva{
+    0x00104640u, 0x001050A0u, 0x00104B10u, 0x00104CF0u};
+constexpr DungeonDataRva kCameraControllerCallback1Rva{
+    0x00104644u, 0x001050A4u, 0x00104B14u, 0x00104CF4u};
+constexpr DungeonDataRva kCameraControllerModeRva{
+    0x00104679u, 0x001050D9u, 0x00104B49u, 0x00104D29u};
 // The mode-3 dispatcher normally chooses between the rail/fixed-camera path
 // and the free desired-position path.  Orbit must take ownership before that
 // decision; otherwise the rail pre-check can keep feeding the old endpoint to
 // the resolver forever.  The orbit hook calls 0x2F380 exactly once so the
 // retail collision, room clipping and smoothing pipeline remains downstream.
-constexpr uintptr_t kMode3CameraRva = 0x0002F310u;
-constexpr uintptr_t kConfigureCameraRva = 0x0002F380u;
+constexpr DungeonCodeRva kMode3CameraRva{0x0002F310u};
+constexpr DungeonCodeRva kConfigureCameraRva{0x0002F380u};
 // 0x2EDC0 calls this generic ring-adder at 0x2EFFF for the final native
 // camera position. The returned average is copied directly to the camera node
 // at 0x2F015, before orientation and presentation-cache publication.
-constexpr uintptr_t kCameraHistoryAddRva = 0x0002DE30u;
-constexpr uintptr_t kCameraLookAtRva = 0x00030730u;
+constexpr DungeonCodeRva kCameraHistoryAddRva{0x0002DE30u};
+constexpr DungeonCodeRva kCameraLookAtRva{0x00030730u};
 // Retail 0x30790 calls this leaf to derive the camera node's pitch/yaw/roll
 // from its final translation and look target. Exact scene-mesh contractions
 // must use the same writer; otherwise translation belongs to the collision
@@ -133,19 +213,19 @@ constexpr uintptr_t kCameraLookAtRva = 0x00030730u;
 // those points is obstructed. 0x30910 performs the centre trace plus six
 // offset traces through the game's room/portal geometry. This is the native
 // spring-arm authority; 0x2E800 is only a later vector/offset shaping stage.
-constexpr uintptr_t kResolveCameraSectorRva = 0x00006130u;
+constexpr DungeonCodeRva kResolveCameraSectorRva{0x00006130u};
 // Returns non-zero when the focus-to-endpoint camera volume is traversable.
 // The original name used while reverse engineering was "blocked", but the
 // retail mode-3 dispatcher branches to its fallback camera only when this
 // routine returns zero.
-constexpr uintptr_t kCameraVolumeVisibleRva = 0x00030910u;
+constexpr DungeonCodeRva kCameraVolumeVisibleRva{0x00030910u};
 // 0x30910 returns clear as soon as any one of its centre-plus-six room traces
 // reaches the focus sector. That is the retail fixed-camera visibility rule,
 // not sufficient proof that a modern camera volume is wholly outside a wall.
 // The underlying room trace is used read-only by the strict exact-endpoint
 // validator, which requires all focus samples and all points of the camera's
 // own cardinal endpoint footprint to succeed.
-constexpr uintptr_t kCameraRoomTraceVisibleRva = 0x0004E760u;
+constexpr DungeonCodeRva kCameraRoomTraceVisibleRva{0x0004E760u};
 // Native gameplay-object collision contracts. 0x66910 walks two object lists
 // rooted at sector+0x38 and keeps objects whose descriptor+0x20 intersects the
 // supplied mask. Its caller-owned result cursor is fixed at +0xA0 and has no
@@ -153,7 +233,7 @@ constexpr uintptr_t kCameraRoomTraceVisibleRva = 0x0004E760u;
 // with explicit bounds instead of invoking it. 0x4A110 is the engine getter
 // that refreshes and returns the selected object's transformed collision
 // resource.
-constexpr uintptr_t kNativeCollisionResourceRva = 0x0004A110u;
+constexpr DungeonCodeRva kNativeCollisionResourceRva{0x0004A110u};
 constexpr uint32_t kNativeCameraCollisionMask = 0x00000001u;
 constexpr size_t kCameraControllerPlayerXPointerOffset = 0xFCu;
 constexpr size_t kCameraControllerPlayerYPointerOffset = 0x100u;
@@ -191,47 +271,56 @@ constexpr uint8_t kCameraScriptOwnerActiveMask = 0x80u;
 // camera-mode flag, so it is useful only inside explicit interaction
 // arbitration.
 constexpr uint32_t kCameraOwnedTargetConvergedMask = 0x20u;
-constexpr uintptr_t kActiveCloseCombatWeaponRva = 0x001D8A68u;
-constexpr uintptr_t kActiveSpellRva = 0x001D8A6Cu;
-constexpr uintptr_t kInventoryLookupRva = 0x0007BD30u;
-constexpr uintptr_t kSelectCloseCombatWeaponRva = 0x00090610u;
-constexpr uintptr_t kSelectRangedWeaponRva = 0x00090740u;
-constexpr uintptr_t kSelectSpellRva = 0x0007BAF0u;
-constexpr uintptr_t kUseConsumableRva = 0x0007B9C0u;
-constexpr uintptr_t kUseChalkRva = 0x000458B0u;
-constexpr uintptr_t kInventorySlotDrawRva = 0x000772A0u;
-constexpr uintptr_t kGameRootPointerRva = 0x00235EA4u;
+constexpr DungeonDataRva kActiveCloseCombatWeaponRva{
+    0x001D8A68u, 0x001D94C8u, 0x001D8F38u, 0x001D9118u};
+constexpr DungeonDataRva kActiveSpellRva{
+    0x001D8A6Cu, 0x001D94CCu, 0x001D8F3Cu, 0x001D911Cu};
+constexpr DungeonCodeRva kInventoryLookupRva{0x0007BD30u};
+constexpr DungeonCodeRva kSelectCloseCombatWeaponRva{0x00090610u};
+constexpr DungeonCodeRva kSelectRangedWeaponRva{0x00090740u};
+constexpr DungeonCodeRva kSelectSpellRva{0x0007BAF0u};
+constexpr DungeonCodeRva kUseConsumableRva{0x0007B9C0u};
+constexpr DungeonCodeRva kUseChalkRva{0x000458B0u};
+constexpr DungeonCodeRva kInventorySlotDrawRva{0x000772A0u};
+constexpr DungeonDataRva kGameRootPointerRva{
+    0x00235EA4u, 0x00236904u, 0x00236374u, 0x00236554u};
 // Dungeon.dll+0x17B50 is called only by the root menu at +0xF1E0. The retail
 // routine maps Escape to action 6 (Quit), while action 5 is its own native
 // Return-to-game path. The root context returned by +0x7EF50 is stored here;
 // context+0x834 is non-zero only when a resumable game exists.
-constexpr uintptr_t kRootMenuInputRva = 0x00017B50u;
+constexpr DungeonCodeRva kRootMenuInputRva{0x00017B50u};
 // Retail keyboard-definition screen. The engine owns exactly eleven visible
 // rows; the patch pages those rows without extending any retail array.
-constexpr uintptr_t kKeyboardBindingMenuRva = 0x00016260u;
-constexpr uintptr_t kKeyboardBindingInputRva = 0x0001A0C0u;
-constexpr uintptr_t kKeyboardBindingAllDefinedRva = 0x00016230u;
-constexpr uintptr_t kKeyboardBindingDrawKeyRva = 0x00015F50u;
-constexpr uintptr_t kKeyboardBindingKeyCaptureRva = 0x000022F0u;
-constexpr uintptr_t kKeyboardBindingRightPanelRva = 0x00015A20u;
-constexpr uintptr_t kKeyboardBindingMouseStateRva = 0x00068DC0u;
-constexpr uintptr_t kKeyboardBindingHitTestRva = 0x0000EDA0u;
-constexpr uintptr_t kKeyboardBindingKeyPressedRva = 0x00069890u;
-constexpr uintptr_t kKeyboardBindingSetFontRva = 0x0003A000u;
-constexpr uintptr_t kKeyboardBindingDrawTextRva = 0x0000EE50u;
-constexpr uintptr_t kKeyboardBindingBuildPathRva = 0x00059830u;
-constexpr uintptr_t kKeyboardBindingLoadImageRva = 0x000013A0u;
-constexpr uintptr_t kKeyboardBindingFullRenderRva = 0x00015B10u;
-constexpr uintptr_t kKeyboardBindingRestoreBackgroundRva = 0x000019A0u;
-constexpr uintptr_t kKeyboardBindingAtlasSurfaceRva = 0x003504ACu;
-constexpr uintptr_t kKeyboardBindingValuesRva = 0x000BED48u;
-constexpr uintptr_t kKeyboardBindingLabelsRva = 0x0034F730u;
-constexpr uintptr_t kKeyboardKeyNameCodesRva = 0x000BE6B8u;
-constexpr uintptr_t kKeyboardKeyNameLabelsRva = 0x000BE760u;
+constexpr DungeonCodeRva kKeyboardBindingMenuRva{0x00016260u};
+constexpr DungeonCodeRva kKeyboardBindingInputRva{0x0001A0C0u};
+constexpr DungeonCodeRva kKeyboardBindingAllDefinedRva{0x00016230u};
+constexpr DungeonCodeRva kKeyboardBindingDrawKeyRva{0x00015F50u};
+constexpr DungeonCodeRva kKeyboardBindingKeyCaptureRva{0x000022F0u};
+constexpr DungeonCodeRva kKeyboardBindingRightPanelRva{0x00015A20u};
+constexpr DungeonCodeRva kKeyboardBindingMouseStateRva{0x00068DC0u};
+constexpr DungeonCodeRva kKeyboardBindingHitTestRva{0x0000EDA0u};
+constexpr DungeonCodeRva kKeyboardBindingKeyPressedRva{0x00069890u};
+constexpr DungeonCodeRva kKeyboardBindingSetFontRva{0x0003A000u};
+constexpr DungeonCodeRva kKeyboardBindingDrawTextRva{0x0000EE50u};
+constexpr DungeonCodeRva kKeyboardBindingBuildPathRva{0x00059830u};
+constexpr DungeonCodeRva kKeyboardBindingLoadImageRva{0x000013A0u};
+constexpr DungeonCodeRva kKeyboardBindingFullRenderRva{0x00015B10u};
+constexpr DungeonCodeRva kKeyboardBindingRestoreBackgroundRva{0x000019A0u};
+constexpr DungeonDataRva kKeyboardBindingAtlasSurfaceRva{
+    0x003504ACu, 0x00350F0Cu, 0x0035097Cu, 0x00350B5Cu};
+constexpr DungeonDataRva kKeyboardBindingValuesRva{
+    0x000BED48u, 0x000BED48u, 0x000BED48u, 0x000BED48u};
+constexpr DungeonDataRva kKeyboardBindingLabelsRva{
+    0x0034F730u, 0x00350190u, 0x0034FC00u, 0x0034FDE0u};
+constexpr DungeonDataRva kKeyboardKeyNameCodesRva{
+    0x000BE6B8u, 0x000BE6B8u, 0x000BE6B8u, 0x000BE6B8u};
+constexpr DungeonDataRva kKeyboardKeyNameLabelsRva{
+    0x000BE760u, 0x000BE760u, 0x000BE760u, 0x000BE760u};
 constexpr size_t kKeyboardKeyNameReplacementFirst = 64u;
 constexpr size_t kKeyboardKeyNameReplacementCount = 12u;
 constexpr size_t kKeyboardKeyNameLabelSize = 18u;
-constexpr uintptr_t kLocalizationTablePointerRva = 0x00216214u;
+constexpr DungeonDataRva kLocalizationTablePointerRva{
+    0x00216214u, 0x00216C74u, 0x002166E4u, 0x002168C4u};
 constexpr uintptr_t kKeyboardBackgroundNameOffset = 0x444u;
 constexpr uintptr_t kKeyboardAtlasNameOffset = 0x44Cu;
 // Top and middle are the two retail joystick blocks. The bottom keyboard
@@ -241,9 +330,11 @@ constexpr std::array<uintptr_t, 6> kKeyboardNavigationLabelOffsets = {
     0x3F4u, 0x3FCu, 0x8D4u, 0x8DCu, 0x8E4u, 0x8ECu};
 // Preserve the retail save UI and file format. This leaf is the native
 // eligibility check used by the menu before it opens the save screen.
-constexpr uintptr_t kSavePointQueryRva = 0x0001BA90u;
-constexpr uintptr_t kSaveAvailableFlagRva = 0x000C0830u;
-constexpr uintptr_t kActiveSaveTriggerRva = 0x000C0834u;
+constexpr DungeonCodeRva kSavePointQueryRva{0x0001BA90u};
+constexpr DungeonDataRva kSaveAvailableFlagRva{
+    0x000C0830u, 0x000C0838u, 0x000C0828u, 0x000C0838u};
+constexpr DungeonDataRva kActiveSaveTriggerRva{
+    0x000C0834u, 0x000C083Cu, 0x000C082Cu, 0x000C083Cu};
 // The live gameplay entity owns its movement controller at +0x114. Native
 // locomotion callbacks receive that controller, not the outer entity. Both
 // the lean-producing 0x44EA0 wrapper and the simpler 0x44E90 locomotion
@@ -252,29 +343,29 @@ constexpr uintptr_t kActiveSaveTriggerRva = 0x000C0834u;
 // 0x44DD0 reads the selected source through controller+0x154, adds that Q10
 // delta to [controller+0x10]->+0x1C, and mirrors the result into the
 // engine-owned render/collision orientation.
-constexpr uintptr_t kPlayerTurnRva = 0x00044DD0u;
+constexpr DungeonCodeRva kPlayerTurnRva{0x00044DD0u};
 // Every ordinary ground-movement state installs 0x82750 as controller+0x2EC.
 // It refreshes actions and only then invokes the active +0x2F0 state callback,
 // so it is the one recurring boundary shared by forward locomotion and both
 // direct turn-in-place implementations.
-constexpr uintptr_t kPlayerStateDispatcherRva = 0x00082750u;
+constexpr DungeonCodeRva kPlayerStateDispatcherRva{0x00082750u};
 // 0x32430 is the common local-to-world root transform. Runtime evidence from
 // v0.0.207 proves that ordinary locomotion states reach it through many more
 // paths than the three initially identified callsites. The player-only hook
 // is therefore active only for the complete 0x810A0 movement stage and only
 // when its node matches the live player's render root.
-constexpr uintptr_t kPlayerRootMotionTransformRva = 0x00032430u;
-constexpr uintptr_t kPlayerMovementStageRva = 0x000810A0u;
+constexpr DungeonCodeRva kPlayerRootMotionTransformRva{0x00032430u};
+constexpr DungeonCodeRva kPlayerMovementStageRva{0x000810A0u};
 // The retail DirectInput joystick boundary. 0x51500 returns the configured
 // 0..0x4000 X/Y axes and 16 packed buttons; 0x32CD0 reports whether joystick
 // input is enabled. Feeding XInput here keeps movement inside the game's
 // JOY_* action path instead of synthesizing keyboard W/A/S/D states.
-constexpr uintptr_t kNativeJoystickPollRva = 0x00051500u;
-constexpr uintptr_t kNativeJoystickEnabledRva = 0x00032CD0u;
+constexpr DungeonCodeRva kNativeJoystickPollRva{0x00051500u};
+constexpr DungeonCodeRva kNativeJoystickEnabledRva{0x00032CD0u};
 // This is the recurring forward-locomotion callback observed on every source
 // tick with root motion. It selects controller+0x130 or +0x138 as the turn
 // source before calling the canonical 0x44EA0 -> 0x44DD0 writer.
-constexpr uintptr_t kPlayerLocomotionRva = 0x0007E530u;
+constexpr DungeonCodeRva kPlayerLocomotionRva{0x0007E530u};
 constexpr size_t kPlayerMovementControllerOffset = 0x114u;
 constexpr size_t kPlayerRenderLinkOffset = 0x10u;
 constexpr size_t kPlayerTurnSourcePointerOffset = 0x154u;
@@ -288,16 +379,16 @@ constexpr size_t kPlayerRootBasisZxOffset = 0xD8u;
 constexpr size_t kPlayerRootBasisXzOffset = 0xE8u;
 constexpr size_t kPlayerRootBasisZzOffset = 0xF0u;
 constexpr int32_t kPlayerHeadingUnitsPerTurn = 1024;
-constexpr uintptr_t kDamageHandlerRva = 0x0001C130u;
-constexpr uintptr_t kMeleeAttackWindowRva = 0x0001D620u;
+constexpr DungeonCodeRva kDamageHandlerRva{0x0001C130u};
+constexpr DungeonCodeRva kMeleeAttackWindowRva{0x0001D620u};
 // These are post-validation gameplay events, not input actions. 0x834F0 is
 // reached only after collision code has verified that the struck actor is in
 // one of the retail block states, and switches that actor to block-impact
 // animation 0x61. 0x1D210 creates the selected offensive spell projectile and
 // returns null when launch preconditions are not satisfied.
-constexpr uintptr_t kSuccessfulBlockImpactRva = 0x000834F0u;
-constexpr uintptr_t kOffensiveSpellLaunchRva = 0x0001D210u;
-constexpr uintptr_t kRangedWeaponLaunchRva = 0x0001CEC0u;
+constexpr DungeonCodeRva kSuccessfulBlockImpactRva{0x000834F0u};
+constexpr DungeonCodeRva kOffensiveSpellLaunchRva{0x0001D210u};
+constexpr DungeonCodeRva kRangedWeaponLaunchRva{0x0001CEC0u};
 constexpr int32_t kFirstOffensiveSpellId = 15;
 constexpr int32_t kLastOffensiveSpellId = 21;
 constexpr uintptr_t kEntityDataOffset = 0x2Cu;
@@ -310,7 +401,7 @@ constexpr std::array<uintptr_t, 5> kMovementDynamicCallbackRvas = {
     0x000827D0u};
 constexpr std::array<uintptr_t, 3> kMovementResolverCallbackRvas = {
     0x00082770u, 0x00082780u, 0x000827D0u};
-constexpr uintptr_t kMovementVtableCallbackRva = 0x0005778Au;
+constexpr DungeonCodeRva kMovementVtableCallbackRva{0x0005778Au};
 constexpr size_t kUiRenderStateSize = 0x40u;
 constexpr size_t kUiMessageStateSize = 0x20u;
 constexpr size_t kUiMessageEntrySize = 0x50u;
@@ -2157,25 +2248,82 @@ bool SaveKeyboardBindingStore() {
   return true;
 }
 
-bool IsExpectedDungeonImage(uint8_t* base) {
+DungeonImageVariant IdentifyDungeonImage(uint8_t* base) {
   if (!base) {
-    return false;
+    return DungeonImageVariant::kUnsupported;
   }
   const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
   if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0) {
-    return false;
+    return DungeonImageVariant::kUnsupported;
   }
   const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(
       base + static_cast<uintptr_t>(dos->e_lfanew));
   if (nt->Signature != IMAGE_NT_SIGNATURE ||
-      nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC ||
-      nt->FileHeader.TimeDateStamp != kExpectedTimestamp ||
-      nt->OptionalHeader.SizeOfImage != kExpectedImageSize) {
-    return false;
+      nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+    return DungeonImageVariant::kUnsupported;
   }
-  return std::memcmp(base + kRateConsumerSignatureRva,
-                     kRateConsumerSignature.data(),
-                     kRateConsumerSignature.size()) == 0;
+  DungeonImageVariant candidate = DungeonImageVariant::kUnsupported;
+  if (nt->FileHeader.TimeDateStamp == kEnglishDungeonTimestamp &&
+      nt->OptionalHeader.SizeOfImage == kEnglishDungeonImageSize) {
+    candidate = DungeonImageVariant::kEnglish;
+  } else if (nt->FileHeader.TimeDateStamp == kFrenchGogDungeonTimestamp &&
+             nt->OptionalHeader.SizeOfImage == kFrenchGogDungeonImageSize) {
+    candidate = DungeonImageVariant::kFrenchGog;
+  } else if (nt->FileHeader.TimeDateStamp == kGermanGogDungeonTimestamp &&
+             nt->OptionalHeader.SizeOfImage == kGermanGogDungeonImageSize) {
+    candidate = DungeonImageVariant::kGermanGog;
+  } else if (nt->FileHeader.TimeDateStamp == kItalianGogDungeonTimestamp &&
+             nt->OptionalHeader.SizeOfImage == kItalianGogDungeonImageSize) {
+    candidate = DungeonImageVariant::kItalianGog;
+  }
+  if (candidate == DungeonImageVariant::kUnsupported) {
+    return candidate;
+  }
+  const uintptr_t signature_rva =
+      candidate == DungeonImageVariant::kGermanGog
+          ? kRateConsumerSignatureRva + 0x30u
+          : kRateConsumerSignatureRva;
+  if (std::memcmp(base + signature_rva, kRateConsumerSignature.data(),
+                  kRateConsumerSignature.size()) != 0) {
+    return DungeonImageVariant::kUnsupported;
+  }
+  return candidate;
+}
+
+bool IsExpectedDungeonImage(uint8_t* base) {
+  return IdentifyDungeonImage(base) != DungeonImageVariant::kUnsupported;
+}
+
+uintptr_t ActiveDungeonImageSize() {
+  switch (g_dungeon_image_variant) {
+    case DungeonImageVariant::kEnglish:
+      return kEnglishDungeonImageSize;
+    case DungeonImageVariant::kFrenchGog:
+      return kFrenchGogDungeonImageSize;
+    case DungeonImageVariant::kGermanGog:
+      return kGermanGogDungeonImageSize;
+    case DungeonImageVariant::kItalianGog:
+      return kItalianGogDungeonImageSize;
+    case DungeonImageVariant::kUnsupported:
+    default:
+      return 0u;
+  }
+}
+
+const char* ActiveDungeonProfileName() {
+  switch (g_dungeon_image_variant) {
+    case DungeonImageVariant::kEnglish:
+      return "english";
+    case DungeonImageVariant::kFrenchGog:
+      return "gog_french";
+    case DungeonImageVariant::kGermanGog:
+      return "gog_german";
+    case DungeonImageVariant::kItalianGog:
+      return "gog_italian";
+    case DungeonImageVariant::kUnsupported:
+    default:
+      return "unsupported";
+  }
 }
 
 bool IsExpectedSavePointQuery() {
@@ -12033,7 +12181,7 @@ uint32_t CurrentControllerSlot(uint32_t category) {
       return static_cast<uint32_t>(active - 8);
     }
   } else if (category == 3) {
-    SafeReadValue(g_dungeon_base + 0x001D8A6Cu, &active);
+    SafeReadValue(g_dungeon_base + kActiveSpellRva, &active);
     if (active >= 0x0E && active <= 0x15) {
       return static_cast<uint32_t>(active - 0x0E);
     }
@@ -14481,7 +14629,8 @@ void RecordPendingContactProjection(const MovementStageSample& before,
 
   const uintptr_t dungeon_base = reinterpret_cast<uintptr_t>(g_dungeon_base);
   const bool resolver_projection =
-      dungeon_base && target == dungeon_base + 0x00068390u;
+      dungeon_base &&
+      target == dungeon_base + ActiveDungeonCodeRva(0x00068390u);
   if (resolver_projection) {
     // V39 validation showed that 0x68390 also performs frequent 1-3 unit
     // bookkeeping adjustments. Promoting those to authoritative collision
@@ -14538,8 +14687,10 @@ uintptr_t __cdecl DispatchMovementCallbackProbe(uintptr_t target,
   using Fn = uintptr_t(__cdecl*)(uintptr_t);
   const bool contact_projection_callback =
       g_dungeon_base &&
-      (target == reinterpret_cast<uintptr_t>(g_dungeon_base) + 0x00054D00u ||
-       target == reinterpret_cast<uintptr_t>(g_dungeon_base) + 0x00068390u);
+      (target == reinterpret_cast<uintptr_t>(g_dungeon_base) +
+                     ActiveDungeonCodeRva(0x00054D00u) ||
+       target == reinterpret_cast<uintptr_t>(g_dungeon_base) +
+                     ActiveDungeonCodeRva(0x00068390u));
   // Production keeps only the two measured collision projections. The broad
   // movement investigation is complete and must not add coordinate reads or
   // statistics to unrelated animation callbacks merely because compact
@@ -14607,7 +14758,8 @@ uintptr_t __cdecl HookMovementStageNoArg() {
   }
   using Fn = uintptr_t(__cdecl*)();
   const uintptr_t result =
-      reinterpret_cast<Fn>(g_dungeon_base + TargetRva)();
+      reinterpret_cast<Fn>(g_dungeon_base +
+                           ActiveDungeonCodeRva(TargetRva))();
   CaptureMovementStageSample(&after);
   RecordMovementStageProbe(Index, before, after);
   if constexpr (Index == 2u) {
@@ -14627,7 +14779,8 @@ uintptr_t __cdecl HookMovementStageOneArg(uintptr_t argument) {
   CaptureMovementStageSample(&before);
   using Fn = uintptr_t(__cdecl*)(uintptr_t);
   const uintptr_t result =
-      reinterpret_cast<Fn>(g_dungeon_base + TargetRva)(argument);
+      reinterpret_cast<Fn>(g_dungeon_base +
+                           ActiveDungeonCodeRva(TargetRva))(argument);
   CaptureMovementStageSample(&after);
   RecordMovementStageProbe(Index, before, after);
   if constexpr (Index == 29u) {
@@ -14644,7 +14797,8 @@ uintptr_t __cdecl HookMovementStageTwoArgs(uintptr_t first,
   CaptureMovementStageSample(&before);
   using Fn = uintptr_t(__cdecl*)(uintptr_t, uintptr_t);
   const uintptr_t result =
-      reinterpret_cast<Fn>(g_dungeon_base + TargetRva)(first, second);
+      reinterpret_cast<Fn>(g_dungeon_base +
+                           ActiveDungeonCodeRva(TargetRva))(first, second);
   CaptureMovementStageSample(&after);
   RecordMovementStageProbe(Index, before, after);
   return result;
@@ -14659,7 +14813,8 @@ uintptr_t __cdecl HookMovementStageThreeArgs(uintptr_t first,
   CaptureMovementStageSample(&before);
   using Fn = uintptr_t(__cdecl*)(uintptr_t, uintptr_t, uintptr_t);
   const uintptr_t result = reinterpret_cast<Fn>(
-      g_dungeon_base + TargetRva)(first, second, third);
+      g_dungeon_base + ActiveDungeonCodeRva(TargetRva))(first, second,
+                                                        third);
   CaptureMovementStageSample(&after);
   RecordMovementStageProbe(Index, before, after);
   return result;
@@ -14872,25 +15027,27 @@ bool InstallImmersiveRootMotionHooks() {
 }
 
 bool PatchMovementStageCallsite(const MovementStageCallsite& stage) {
-  uint8_t* const callsite = g_dungeon_base + stage.callsite_rva;
+  const uintptr_t callsite_rva = ActiveDungeonCodeRva(stage.callsite_rva);
+  const uintptr_t target_rva = ActiveDungeonCodeRva(stage.target_rva);
+  uint8_t* const callsite = g_dungeon_base + callsite_rva;
   uint8_t opcode = 0;
   int32_t old_relative = 0;
   if (!SafeRead(callsite, &opcode, sizeof(opcode)) || opcode != 0xE8u ||
       !SafeRead(callsite + 1u, &old_relative, sizeof(old_relative))) {
     AppendNativeLog("movement_callsite_invalid name=%s callsite=%08llX",
                     stage.name,
-                    static_cast<unsigned long long>(stage.callsite_rva));
+                    static_cast<unsigned long long>(callsite_rva));
     return false;
   }
   uint8_t* const old_target = callsite + 5u + old_relative;
-  if (old_target != g_dungeon_base + stage.target_rva) {
+  if (old_target != g_dungeon_base + target_rva) {
     AppendNativeLog(
         "movement_callsite_target_mismatch name=%s callsite=%08llX "
         "actual_rva=%08llX expected_rva=%08llX",
         stage.name,
-        static_cast<unsigned long long>(stage.callsite_rva),
+        static_cast<unsigned long long>(callsite_rva),
         static_cast<unsigned long long>(old_target - g_dungeon_base),
-        static_cast<unsigned long long>(stage.target_rva));
+        static_cast<unsigned long long>(target_rva));
     return false;
   }
   const intptr_t wide_relative =
@@ -14953,14 +15110,16 @@ bool InstallMovementDispatcherCallbackProbe() {
       if (!resolver_capture_callsite) {
         continue;
       }
-      uint8_t* const callsite = g_dungeon_base + callback_rva;
+      const uintptr_t active_callback_rva =
+          ActiveDungeonCodeRva(callback_rva);
+      uint8_t* const callsite = g_dungeon_base + active_callback_rva;
       std::array<uint8_t, 5> actual{};
       if (!SafeRead(callsite, actual.data(), actual.size()) ||
           actual != expected) {
         AppendNativeLog(
             "movement_callback_probe_invalid callsite=%08llX "
             "bytes=%02X%02X%02X%02X%02X",
-            static_cast<unsigned long long>(callback_rva), actual[0],
+            static_cast<unsigned long long>(active_callback_rva), actual[0],
             actual[1], actual[2], actual[3], actual[4]);
         continue;
       }
@@ -14971,7 +15130,7 @@ bool InstallMovementDispatcherCallbackProbe() {
           wide_relative > std::numeric_limits<int32_t>::max()) {
         AppendNativeLog(
             "movement_callback_probe_out_of_range callsite=%08llX",
-            static_cast<unsigned long long>(callback_rva));
+            static_cast<unsigned long long>(active_callback_rva));
         continue;
       }
       std::array<uint8_t, 5> replacement{};
@@ -15097,7 +15256,7 @@ void FlushMovementCallbackProbeStats(uint64_t source_tick) {
     }
     const uintptr_t target_rva =
         callback.target >= base &&
-                callback.target < base + kExpectedImageSize
+                callback.target < base + ActiveDungeonImageSize()
             ? callback.target - base
             : callback.target;
     uint32_t entry_state = 0xFFFFFFFFu;
@@ -16373,7 +16532,7 @@ TransitionStats AnalyzeTransition(void* context,
 
 uintptr_t DungeonRva(uintptr_t address) {
   const uintptr_t base = reinterpret_cast<uintptr_t>(g_dungeon_base);
-  return address >= base && address < base + kExpectedImageSize
+  return address >= base && address < base + ActiveDungeonImageSize()
              ? address - base
              : address;
 }
@@ -19483,12 +19642,17 @@ void InitializePatchState() {
     return;
   }
   g_dungeon_base = reinterpret_cast<uint8_t*>(dungeon);
-  if (!IsExpectedDungeonImage(g_dungeon_base)) {
+  g_dungeon_image_variant = IdentifyDungeonImage(g_dungeon_base);
+  if (g_dungeon_image_variant == DungeonImageVariant::kUnsupported) {
     AppendDeathtrapSupportLog("support_patch state=unsupported_dungeon_dll");
     g_state.store(DeathtrapNativeRenderPatchState::kUnsupportedDungeonDll,
                   std::memory_order_release);
     return;
   }
+  AppendDeathtrapSupportLog(
+      "support_patch dungeon_profile=%s image_size=0x%08llX",
+      ActiveDungeonProfileName(),
+      static_cast<unsigned long long>(ActiveDungeonImageSize()));
   g_native_collision_resource =
       reinterpret_cast<NativeCollisionResourceFn>(
           g_dungeon_base + kNativeCollisionResourceRva);
@@ -19725,13 +19889,13 @@ bool InstallKeyboardBindingPageHooks() {
   // previous at y=192..262 and next at y=262..332. The native keyboard
   // Default control remains at y=332..414; its click is intercepted by
   // KeyboardDefaultsButtonActivated() and resets all patch actions.
-  constexpr uintptr_t kPreviousControllerGuardRva = 0x0001A517u;
+  constexpr DungeonCodeRva kPreviousControllerGuardRva{0x0001A517u};
   constexpr std::array<uint8_t, 2> kPreviousControllerGuard = {0x74, 0x38};
   constexpr std::array<uint8_t, 2> kTwoNops = {0x90, 0x90};
-  constexpr uintptr_t kNextMaxYRva = 0x0001A4E8u;
-  constexpr uintptr_t kNextMinYRva = 0x0001A4F2u;
-  constexpr uintptr_t kPreviousMaxYRva = 0x0001A529u;
-  constexpr uintptr_t kPreviousMinYRva = 0x0001A533u;
+  constexpr DungeonCodeRva kNextMaxYRva{0x0001A4E8u};
+  constexpr DungeonCodeRva kNextMinYRva{0x0001A4F2u};
+  constexpr DungeonCodeRva kPreviousMaxYRva{0x0001A529u};
+  constexpr DungeonCodeRva kPreviousMinYRva{0x0001A533u};
   constexpr std::array<uint8_t, 4> kY414 = {0x9E, 0x01, 0x00, 0x00};
   constexpr std::array<uint8_t, 4> kY332 = {0x4C, 0x01, 0x00, 0x00};
   constexpr std::array<uint8_t, 4> kY262 = {0x06, 0x01, 0x00, 0x00};

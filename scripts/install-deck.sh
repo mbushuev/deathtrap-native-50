@@ -2,8 +2,12 @@
 set -Eeuo pipefail
 
 readonly APP_ID=245010
-readonly EXPECTED_DUNGEON_SHA256=95fe9ce0fff387f00704548f152e4340815213fcb3833dbe1b5c42871e7d2e56
-readonly EXPECTED_EXE_SHA256=0c644a00e62652e046c5dad2960f0f6c8c1998f4ca065780fbd7811d9908bf1f
+readonly EXPECTED_ENGLISH_DUNGEON_SHA256=95fe9ce0fff387f00704548f152e4340815213fcb3833dbe1b5c42871e7d2e56
+readonly EXPECTED_FRENCH_GOG_DUNGEON_SHA256=ca58e0af445b1eb66b7b7653d71371d81e4b03dd5bdb2f82ae01c0a2e499c0fa
+readonly EXPECTED_GERMAN_GOG_DUNGEON_SHA256=83f7e98973a497358eb8e51ea844a803f9afe3e255a3c680e12058e0679d1d3b
+readonly EXPECTED_ITALIAN_GOG_DUNGEON_SHA256=1fbf70ab094c8e767fef5ede13ff1ff0d94d5e887645e5f9a401f84c1c228747
+readonly EXPECTED_STANDARD_EXE_SHA256=0c644a00e62652e046c5dad2960f0f6c8c1998f4ca065780fbd7811d9908bf1f
+readonly EXPECTED_GERMAN_GOG_EXE_SHA256=4cd498274d32392ea11864616c44241be3624748b3d16e88d6df9330a8c9497f
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 game_dir=""
@@ -290,10 +294,16 @@ grep -Eq '^DdrawClearFlipBackBuffer[[:space:]]*=[[:space:]]*1[[:space:]]*$' "$dx
 if ((skip_game_hash_check == 0)); then
     actual_exe="$(sha256sum -- "$game_exe" | awk '{ print $1 }')"
     actual_dungeon="$(sha256sum -- "$dungeon_dll" | awk '{ print $1 }')"
-    [[ "$actual_exe" == "$EXPECTED_EXE_SHA256" ]] ||
-        printf 'Warning: DD_CD.EXE is not the tested Steam build (%s).\n' "$actual_exe" >&2
-    [[ "$actual_dungeon" == "$EXPECTED_DUNGEON_SHA256" ]] ||
-        printf 'Warning: Dungeon.dll is not the tested Steam build (%s).\n' "$actual_dungeon" >&2
+    if [[ "$actual_exe" != "$EXPECTED_STANDARD_EXE_SHA256" &&
+          "$actual_exe" != "$EXPECTED_GERMAN_GOG_EXE_SHA256" ]]; then
+        printf 'Warning: DD_CD.EXE is not a tested build (%s).\n' "$actual_exe" >&2
+    fi
+    if [[ "$actual_dungeon" != "$EXPECTED_ENGLISH_DUNGEON_SHA256" &&
+          "$actual_dungeon" != "$EXPECTED_FRENCH_GOG_DUNGEON_SHA256" &&
+          "$actual_dungeon" != "$EXPECTED_GERMAN_GOG_DUNGEON_SHA256" &&
+          "$actual_dungeon" != "$EXPECTED_ITALIAN_GOG_DUNGEON_SHA256" ]]; then
+        printf 'Warning: Dungeon.dll is not a tested build (%s).\n' "$actual_dungeon" >&2
+    fi
 fi
 
 detect_display_size() {

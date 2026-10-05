@@ -23,8 +23,22 @@ if (-not $GameDirectory) {
 $game = (Resolve-Path -LiteralPath $GameDirectory).Path
 $dungeon = Join-Path $game 'Dungeon.dll'
 $executable = Join-Path $game 'DD_CD.EXE'
-$expectedDungeon = '95FE9CE0FFF387F00704548F152E4340815213FCB3833DBE1B5C42871E7D2E56'
-$expectedExecutable = '0C644A00E62652E046C5DAD2960F0F6C8C1998F4CA065780FBD7811D9908BF1F'
+$expectedDungeons = @(
+    # English Steam and GOG releases.
+    '95FE9CE0FFF387F00704548F152E4340815213FCB3833DBE1B5C42871E7D2E56',
+    # French GOG release.
+    'CA58E0AF445B1EB66B7B7653D71371D81E4B03DD5BDB2F82AE01C0A2E499C0FA',
+    # German GOG release.
+    '83F7E98973A497358EB8E51EA844A803F9AFE3E255A3C680E12058E0679D1D3B',
+    # Italian GOG release.
+    '1FBF70AB094C8E767FEF5EDE13FF1FF0D94D5E887645E5F9A401F84C1C228747'
+)
+$expectedExecutables = @(
+    # Steam and English, French, and Italian GOG releases.
+    '0C644A00E62652E046C5DAD2960F0F6C8C1998F4CA065780FBD7811D9908BF1F',
+    # German GOG release.
+    '4CD498274D32392EA11864616C44241BE3624748B3D16E88D6DF9330A8C9497F'
+)
 # Validate only the files consumed by this installer, before any writes.
 # The game may be copied anywhere; Steam's layout/manifest is not required.
 foreach ($required in @('Dungeon.dll', 'DD_CD.EXE',
@@ -58,14 +72,14 @@ function Get-FileSha256 {
 
 if (-not $SkipGameHashCheck) {
     foreach ($binary in @(
-        @{ Name = 'Dungeon.dll'; Path = $dungeon; Expected = $expectedDungeon },
-        @{ Name = 'DD_CD.EXE'; Path = $executable; Expected = $expectedExecutable }
+        @{ Name = 'Dungeon.dll'; Path = $dungeon; Expected = $expectedDungeons },
+        @{ Name = 'DD_CD.EXE'; Path = $executable; Expected = $expectedExecutables }
     )) {
         $actual = Get-FileSha256 -Path $binary.Path
-        if ($actual -ne $binary.Expected) {
+        if ($actual -notin $binary.Expected) {
             Write-Warning (
                 "$($binary.Name) does not match the version tested by the " +
-                "project. Expected SHA-256: $($binary.Expected); actual: " +
+                "project. Expected SHA-256: $($binary.Expected -join ', '); actual: " +
                 "$actual. Installation will continue, but the patch may be " +
                 'partially or completely incompatible with these game files.')
         }
