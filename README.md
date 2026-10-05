@@ -20,9 +20,10 @@ and adds modern camera, input, controller, first-person and audio improvements.
 The patch was developed using OpenAI Codex under human direction and was
 validated through extensive manual playtesting and automated tests.
 
-Verified and tested with the
+Compatible with the
 [Steam release of Deathtrap Dungeon](https://store.steampowered.com/app/245010/Deathtrap_Dungeon/)
-and the English, French, German and Italian GOG releases on Windows 11.
+and the English, French, German and Italian GOG releases. These versions have
+been tested on Windows 11.
 
 The release already includes the Deathtrap-specific widescreen layer and the
 tested graphics configuration for both platforms. Windows uses the bundled
