@@ -191,6 +191,13 @@ filtering, automatic mipmaps and VSync.
 
 ### Steam Deck
 
+Steam Deck can run the complete Native 50 experience, including the modern
+camera and controls, widescreen rendering, controller-aware menus and
+selectors, the intended approximately 50 FPS presentation and every other
+improvement included in the Windows release. For comfortable play, use the
+standard Steam Input **Gamepad** layout rather than a keyboard-and-mouse
+template.
+
 1. Start Deathtrap Dungeon once through Steam, then close it. This creates the
    Proton prefix used by the installer.
 2. Choose one installation layout:
@@ -201,8 +208,9 @@ filtering, automatic mipmaps and VSync.
    - use a custom location with
      `bash INSTALL-DECK.sh --game-dir "/path/to/Deathtrap Dungeon"`.
 3. In Gaming Mode, open the game's Controller Settings and select the standard
-   **Gamepad** layout. Native 50 maps the Deck buttons automatically; no manual
-   per-button bindings are required.
+   Steam Input **Gamepad** layout. Native 50 is configured for gamepad play and
+   maps the Deck buttons automatically; no manual per-button bindings are
+   required.
 4. Start the game normally through Steam. No custom Launch Options are needed.
    Play in Gaming Mode so the built-in controls are exposed through Steam
    Input.
@@ -228,9 +236,29 @@ or an explicit Gamescope resolution, pass both dimensions, for example:
 bash INSTALL-DECK.sh --width 1920 --height 1080
 ```
 
-If Steam is installed in a nonstandard location, pass the directory containing
-the original `DD_CD.EXE` with `--game-dir`. Advanced setups can also specify
-the App ID prefix with `--compat-data`.
+`--game-dir` must point to the game directory that contains the original
+`DD_CD.EXE`, not to the extracted patch directory. Quote paths containing
+spaces. Steam libraries registered with Steam, including normal microSD
+libraries under `/run/media/deck`, are detected automatically. For a manually
+copied game or another nonstandard location, use for example:
+
+```sh
+bash INSTALL-DECK.sh \
+  --game-dir "/run/media/deck/GAMES/Deathtrap Dungeon"
+```
+
+Most users do not need `--compat-data`. If the App ID `245010` Proton prefix is
+also stored outside every detected Steam library, pass the exact compatdata
+directory whose `pfx` subdirectory already exists:
+
+```sh
+bash INSTALL-DECK.sh \
+  --game-dir "/run/media/deck/GAMES/Deathtrap Dungeon" \
+  --compat-data "/run/media/deck/CUSTOM/steamapps/compatdata/245010"
+```
+
+Launch the game through Steam once before using either form so the Proton
+prefix and its registry have been created.
 
 ### Display mode and window size
 

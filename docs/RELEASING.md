@@ -60,12 +60,15 @@ Pushing the tag starts `.github/workflows/release.yml` on a Windows runner. It:
 4. runs DirectInput, camera, first-person, music and installer tests;
 5. creates the ZIP and checksum with `scripts/package-release.ps1`;
 6. uploads the files as workflow artifacts;
-7. creates a **draft** GitHub Release whose description is the current version
-   section extracted from `CHANGELOG.md`.
+7. creates a **draft** GitHub Release whose description is read from
+   `docs/RELEASE-<version>-GITHUB.md`.
 
 The draft is intentionally not published automatically. Before publishing it,
 review the generated notes, attach screenshots or video links, confirm the two
 assets and compare the published checksum with the locally verified archive.
+Every release therefore needs a matching versioned GitHub release-notes file;
+the workflow fails rather than publishing an incomplete description when that
+file is missing or empty.
 
 ## Release contents policy
 

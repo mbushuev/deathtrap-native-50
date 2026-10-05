@@ -59,18 +59,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
-          $changelog = Get-Content -LiteralPath CHANGELOG.md -Raw
-          $escapedVersion = [regex]::Escape($version)
-          $match = [regex]::Match(
-            $changelog,
-            "(?ms)^##\s+$escapedVersion\b.*?(?=^##\s+|\z)")
-          if (-not $match.Success) {
-            throw "Could not extract release notes for $version from CHANGELOG.md."
+          $releaseNotesSource = Join-Path docs "RELEASE-$version-GITHUB.md"
+          if (-not (Test-Path -LiteralPath $releaseNotesSource -PathType Leaf)) {
+            throw "GitHub release notes are missing: $releaseNotesSource"
+          }
+          $releaseNotes = Get-Content -LiteralPath $releaseNotesSource -Raw
+          if ([string]::IsNullOrWhiteSpace($releaseNotes)) {
+            throw "GitHub release notes are empty: $releaseNotesSource"
           }
           $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
           [System.IO.File]::WriteAllText(
             $notesPath,
-            $match.Value.Trim() + "`n",
+            $releaseNotes.Trim() + "`n",
             [System.Text.UTF8Encoding]::new($false))
 
           $assets = @(Get-ChildItem -LiteralPath artifacts -File |

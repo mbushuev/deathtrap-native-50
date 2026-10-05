@@ -28,6 +28,11 @@ need to download or configure dgVoodoo before the first launch.
 
 QUICK INSTALL - STEAM DECK
 
+Steam Deck runs the complete Native 50 experience, including the modern camera
+and controls, widescreen rendering, controller menus and selectors, and the
+intended approximately 50 FPS presentation. For comfortable play, use the
+standard Steam Input Gamepad layout, not a keyboard-and-mouse template.
+
 1. Start Deathtrap Dungeon once through Steam, then close it.
 2. In Desktop Mode, choose one installation layout:
 
@@ -45,8 +50,9 @@ QUICK INSTALL - STEAM DECK
        bash INSTALL-DECK.sh --game-dir "/path/to/Deathtrap Dungeon"
 
 3. In Gaming Mode, open the game's Controller Settings and select the standard
-   Gamepad layout. Native 50 maps the Deck buttons automatically; no manual
-   per-button bindings are required.
+   Steam Input Gamepad layout. Native 50 is configured for gamepad play and
+   maps the Deck buttons automatically; no manual per-button bindings are
+   required.
 4. Start the game normally through Steam. No custom Launch Options are needed.
    Use Gaming Mode for the built-in Deck controls.
 
@@ -65,6 +71,25 @@ motor values saturate safely at the XInput maximum. For an external display,
 pass explicit dimensions, for example:
 
    bash INSTALL-DECK.sh --width 1920 --height 1080
+
+For --game-dir, specify the directory that contains DD_CD.EXE, not the patch
+directory, and quote paths containing spaces. Steam libraries registered with
+Steam, including normal microSD libraries under /run/media/deck, are detected
+automatically. A manually copied game can be selected explicitly, for example:
+
+   bash INSTALL-DECK.sh \
+     --game-dir "/run/media/deck/GAMES/Deathtrap Dungeon"
+
+Most users do not need --compat-data. If the App ID 245010 Proton prefix is
+also outside every detected Steam library, pass the exact compatdata directory
+whose pfx subdirectory already exists:
+
+   bash INSTALL-DECK.sh \
+     --game-dir "/run/media/deck/GAMES/Deathtrap Dungeon" \
+     --compat-data "/run/media/deck/CUSTOM/steamapps/compatdata/245010"
+
+Launch the game through Steam once before using either custom form so the
+Proton prefix and its registry have been created.
 
 INSTALL.cmd backs up any existing patch, dgVoodoo, control and rendering files,
 then installs the complete tested setup. The archive includes the tested

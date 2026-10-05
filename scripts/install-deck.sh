@@ -29,8 +29,10 @@ Options:
 
 With no path, the installer first checks whether it is already inside the game
 directory, then locates the purchased Steam installation by App ID 245010.
-GAME-DIRECTORY and --game-dir support custom locations. Launch the game through
-Steam once before installing so that App ID 245010 has a Proton prefix.
+GAME-DIRECTORY and --game-dir support custom locations and must name the
+directory containing DD_CD.EXE. --compat-data must name the compatdata/245010
+directory containing pfx. Launch the game through Steam once before installing
+so that App ID 245010 has a Proton prefix.
 EOF
 }
 

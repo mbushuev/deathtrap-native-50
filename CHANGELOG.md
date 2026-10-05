@@ -10,12 +10,17 @@ Thanks to the community members who helped test public builds:
 
 ## 0.0.229 — Full Steam Deck support
 
+- Brings the complete Native 50 experience to Steam Deck, including the modern
+  camera and controls, widescreen rendering, controller menus and selectors,
+  and every gameplay and presentation improvement already available on
+  Windows.
 - Adds a SteamOS installer that can automatically locate the purchased Steam
   copy, install directly beside `DD_CD.EXE`, or use an explicit custom game
   directory without changing the game's Steam launch command.
 - Supports the standard Steam Input **Gamepad** layout in Gaming Mode. Select
-  that layout once and Native 50 maps the Deck controls automatically; no
-  manual per-button bindings are required.
+  that layout for comfortable play and Native 50 maps the Deck controls
+  automatically; no manual per-button bindings are required. Keyboard-and-
+  mouse Steam Input templates are not the recommended Deck configuration.
 - Runs the Deathtrap Dd7to9 renderer directly through Proton/DXVK, avoiding
   the dgVoodoo backend that hangs or flashes under Proton while preserving the
   native canvas, widescreen world rendering and HUD mapping.
