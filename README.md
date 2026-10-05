@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current development version: **0.0.229**
+Current version: **0.0.229**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -8,14 +8,21 @@ Current development version: **0.0.229**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.228.png" alt="Deathtrap Native 50 v0.0.228" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.229.png" alt="Deathtrap Native 50 v0.0.229 — Full Steam Deck Support" width="960">
 </p>
 
+Version 0.0.229 brings the complete Deathtrap Native 50 experience to Steam
+Deck at last. It runs through SteamOS and Proton/DXVK with the modern camera
+and controls, widescreen rendering, controller-aware menus and selectors, the
+intended approximately 50 FPS presentation and Deck-tuned vibration. Select
+the standard Steam Input **Gamepad** layout and the built-in controls map
+automatically.
+
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
-32-bit Windows release of *Ian Livingstone's Deathtrap Dungeon* (1998). It
-raises the unique rendered output from roughly 16.7 FPS to approximately 50
-FPS without speeding up simulation, and adds modern camera, input, controller,
-first-person and audio improvements.
+32-bit Windows release of *Ian Livingstone's Deathtrap Dungeon* (1998), now
+supporting both Windows and Steam Deck. It raises the unique rendered output
+from roughly 16.7 FPS to approximately 50 FPS without speeding up simulation,
+and adds modern camera, input, controller, first-person and audio improvements.
 
 The patch was developed using OpenAI Codex under human direction and was
 validated through extensive manual playtesting and automated tests.
@@ -23,9 +30,10 @@ validated through extensive manual playtesting and automated tests.
 Verified and tested with the
 [Steam release of Deathtrap Dungeon](https://store.steampowered.com/app/245010/Deathtrap_Dungeon/).
 
-The release already includes the Deathtrap-specific widescreen layer, the
-dgVoodoo runtime and the tested graphics configuration. There is nothing else
-to download or configure before the first launch.
+The release already includes the Deathtrap-specific widescreen layer and the
+tested graphics configuration for both platforms. Windows uses the bundled
+dgVoodoo runtime; Steam Deck renders through Proton/DXVK and requires no custom
+Launch Options. There is no separate graphics wrapper to download or configure.
 
 This project is not affiliated with or endorsed by Square Enix, Eidos
 Interactive, Asylum Studios, Ian Livingstone or the developers of dgVoodoo.
