@@ -97,26 +97,61 @@ DefaultKeyboardBindings() {
 
 using KeyboardBindingArray =
     std::array<uint16_t, kKeyboardActionCount>;
+using KeyboardBindingScanArray =
+    std::array<uint8_t, kKeyboardActionCount>;
+using KeyboardBindingModeArray =
+    std::array<uint8_t, kKeyboardActionCount>;
 using DirectInputKeyboardState = std::array<uint8_t, 256>;
 
-inline std::array<bool, kKeyboardActionCount> ResolveKeyboardActions(
+constexpr KeyboardBindingModeArray DefaultKeyboardBindingModes() {
+  // The stock profile describes physical positions. Keyboard Setup translates
+  // their labels for the active layout (WASD -> ZQSD on French AZERTY) without
+  // moving any action or creating collisions. Explicit user assignments use
+  // layout-aware mode instead.
+  return {};
+}
+
+constexpr KeyboardBindingScanArray ResolveQwertyKeyboardBindingScans(
+    const KeyboardBindingArray& bindings) {
+  KeyboardBindingScanArray scans{};
+  for (size_t action = 0; action < scans.size(); ++action) {
+    scans[action] = RetailCodeToDirectInputScan(bindings[action]);
+  }
+  return scans;
+}
+
+inline KeyboardBindingScanArray ResolveKeyboardBindingSourceScans(
     const KeyboardBindingArray& bindings,
+    const KeyboardBindingModeArray& layout_aware,
+    const KeyboardBindingScanArray& layout_scans) {
+  KeyboardBindingScanArray scans{};
+  for (size_t action = 0; action < scans.size(); ++action) {
+    scans[action] = layout_aware[action] != 0u
+                        ? layout_scans[action]
+                        : RetailCodeToDirectInputScan(bindings[action]);
+  }
+  return scans;
+}
+
+inline std::array<bool, kKeyboardActionCount> ResolveKeyboardActionsFromScans(
+    const KeyboardBindingScanArray& scans,
     const DirectInputKeyboardState& physical) {
   std::array<bool, kKeyboardActionCount> active{};
   for (size_t action = 0; action < active.size(); ++action) {
-    const uint8_t scan = RetailCodeToDirectInputScan(bindings[action]);
+    const uint8_t scan = scans[action];
     active[action] = scan != 0u && (physical[scan] & 0x80u) != 0u;
   }
   return active;
 }
 
-inline void ApplyKeyboardBindings(const KeyboardBindingArray& bindings,
-                                  DirectInputKeyboardState* keyboard) {
+inline void ApplyKeyboardBindingsFromScans(
+    const KeyboardBindingScanArray& scans,
+    DirectInputKeyboardState* keyboard) {
   if (!keyboard) {
     return;
   }
   const DirectInputKeyboardState physical = *keyboard;
-  const auto active = ResolveKeyboardActions(bindings, physical);
+  const auto active = ResolveKeyboardActionsFromScans(scans, physical);
   // Classify the complete physical state before clearing any stable target.
   // This makes arbitrary swaps (for example W<->S) deterministic.
   for (const auto& descriptor : kKeyboardActions) {
@@ -127,6 +162,46 @@ inline void ApplyKeyboardBindings(const KeyboardBindingArray& bindings,
       (*keyboard)[kKeyboardActions[action].stable_scan] |= 0x80u;
     }
   }
+}
+
+inline void TranslateCanonicalKeyboardTargets(
+    const KeyboardBindingScanArray& target_scans,
+    DirectInputKeyboardState* keyboard) {
+  if (!keyboard) {
+    return;
+  }
+  std::array<bool, kKeyboardActionCount> active{};
+  for (size_t action = 0; action < active.size(); ++action) {
+    active[action] =
+        ((*keyboard)[kKeyboardActions[action].stable_scan] & 0x80u) != 0u;
+  }
+  for (size_t action = 0; action < active.size(); ++action) {
+    (*keyboard)[kKeyboardActions[action].stable_scan] &=
+        static_cast<uint8_t>(~0x80u);
+    const uint8_t target_scan = target_scans[action];
+    if (target_scan != 0u) {
+      (*keyboard)[target_scan] &= static_cast<uint8_t>(~0x80u);
+    }
+  }
+  for (size_t action = 0; action < active.size(); ++action) {
+    const uint8_t target_scan = target_scans[action];
+    if (active[action] && target_scan != 0u) {
+      (*keyboard)[target_scan] |= 0x80u;
+    }
+  }
+}
+
+inline std::array<bool, kKeyboardActionCount> ResolveKeyboardActions(
+    const KeyboardBindingArray& bindings,
+    const DirectInputKeyboardState& physical) {
+  return ResolveKeyboardActionsFromScans(
+      ResolveQwertyKeyboardBindingScans(bindings), physical);
+}
+
+inline void ApplyKeyboardBindings(const KeyboardBindingArray& bindings,
+                                  DirectInputKeyboardState* keyboard) {
+  ApplyKeyboardBindingsFromScans(
+      ResolveQwertyKeyboardBindingScans(bindings), keyboard);
 }
 
 }  // namespace deathtrap::input

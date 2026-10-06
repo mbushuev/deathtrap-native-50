@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current version: **0.0.230**
+Current version: **0.0.231**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -8,7 +8,7 @@ Current version: **0.0.230**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.230.png" alt="Deathtrap Native 50 v0.0.230 — Steam Deck and localized GOG support" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.231.png" alt="Deathtrap Native 50 v0.0.231 — Steam Deck support and localized input improvements" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -385,15 +385,17 @@ In immersive first person, `A` and `D` become full-speed pure side movement;
 the running speed.
 
 Modern third-person camera-relative keyboard movement is enabled by default.
-`W`, `S`, `A` and `D` move forward, backward, left and right relative to the
-current orbit-camera heading. Set `CameraRelativeMovement=0` under
+The standard physical movement cluster — `WASD` on QWERTY or `ZQSD` on French
+AZERTY — moves forward, backward, left and right relative to the current
+orbit-camera heading. Set `CameraRelativeMovement=0` under
 `[KeyboardMouse]` in `deathtrap_native.ini` to restore the original
 character-relative keyboard movement. The character turns toward the selected
 course through the same bounded native heading writer used by the controller,
 while the retail forward action keeps ownership of root motion, animation and
-collision. `Shift` still runs. Attack directions, `Ctrl` steps, `Space`
-directional jumps, `J`/`K` sidesteps, selectors, first-person modes and menus
-retain their original input paths. A physical left-click additionally latches
+collision. `Shift` still runs, and camera-relative steering remains active
+while `Space` is held so the course can be adjusted during a jump. Attack
+directions, `Ctrl` steps, `J`/`K` sidesteps, selectors, first-person modes and
+menus retain their original input paths. A physical left-click additionally latches
 the chosen attack, turns the character toward the current camera heading over
 several bounded player ticks and releases the retail attack only after facing
 is ready. This one-shot alignment uses a dedicated faster turn cap without

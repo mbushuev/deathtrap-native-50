@@ -78,7 +78,7 @@ target_compile_definitions(dinput_proxy_smoke_test PRIVATE
 )
 target_compile_options(dinput_proxy_smoke_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
-target_link_libraries(dinput_proxy_smoke_test PRIVATE dxguid)
+target_link_libraries(dinput_proxy_smoke_test PRIVATE dinput8 dxguid)
 
 add_executable(input_device_routing_test
   tools/input_device_routing_test.cc

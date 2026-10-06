@@ -8,6 +8,28 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.231 — Steam Deck support and input refinements
+
+- Carries the complete Steam Deck experience forward in the current release:
+  SteamOS installation, Proton/DXVK rendering, automatic controls through the
+  standard Steam Input **Gamepad** layout, approximately 50 FPS presentation,
+  widescreen output and Deck-tuned vibration.
+- Makes the standard physical movement cluster work as `WASD` on QWERTY and
+  `ZQSD` on French AZERTY while preserving layout-aware custom letter
+  bindings. Synthetic keyboard commands from the controller and modern camera
+  path are translated at the same boundary, so turning and locomotion cannot
+  disagree on localized Windows layouts.
+- Keeps camera-relative keyboard steering active while the jump key is held,
+  allowing the character to change direction in the air without first
+  releasing the key. Gamepad jumping remains unchanged.
+- Defers the legacy exclusive mouse acquisition when GOG Galaxy temporarily
+  retains foreground focus, then reacquires automatically as soon as the game
+  window becomes active. The game no longer reports a fatal DirectInput mouse
+  error during this normal launcher transition.
+- Normalizes the process working directory to the directory containing
+  `DD_CD.EXE`, keeping movies and other relative game files available when the
+  game is started through a desktop or launcher shortcut.
+
 ## 0.0.230 — Localized GOG compatibility
 
 - Adds dedicated compatibility profiles for the French, German and Italian GOG

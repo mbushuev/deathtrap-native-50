@@ -16,6 +16,9 @@ struct KeyboardCameraRelativeContext {
   bool combat_modifier = false;
   // Run is deliberately compatible with the synthetic native-forward driver.
   bool run_modifier = false;
+  // Jump/climb remains a native action, but it must not suspend the
+  // camera-relative directional driver while Space is held. Otherwise the
+  // character can only change course in the air after Space is released.
   bool jump_climb_modifier = false;
   bool walk_step_modifier = false;
   bool explicit_sidestep = false;
@@ -39,7 +42,7 @@ constexpr bool KeyboardCameraRelativeContextEligible(
       context.dispatcher_available && context.ground_state &&
       context.heading_reference_valid && !context.scripted_camera_active &&
       !context.combat_modifier &&
-      !context.jump_climb_modifier && !context.walk_step_modifier &&
+      !context.walk_step_modifier &&
       !context.explicit_sidestep && !context.selector_command &&
       !context.camera_transition && !context.pause_command;
 }

@@ -1342,6 +1342,8 @@ KeyboardBindingKeyCaptureFn g_original_keyboard_binding_key_capture = nullptr;
 KeyboardBindingRightPanelFn g_original_keyboard_binding_right_panel = nullptr;
 using KeyboardBindingValues =
     std::array<uint16_t, deathtrap::input::kKeyboardActionCount>;
+using KeyboardBindingModes =
+    std::array<uint8_t, deathtrap::input::kKeyboardActionCount>;
 using RetailBindingWindow =
     std::array<uint16_t, deathtrap::input::kRetailBindingVisibleRows>;
 using KeyboardBindingLabels =
@@ -1353,9 +1355,11 @@ uint8_t g_keyboard_binding_repaint_frames = 0;
 bool g_keyboard_bindings_initialized = false;
 size_t g_keyboard_binding_page = 0;
 bool g_keyboard_binding_edit_pending = false;
+bool g_keyboard_binding_capture_observed = false;
 size_t g_keyboard_binding_edit_page = 0;
 size_t g_keyboard_binding_edit_row = 0;
 KeyboardBindingValues g_keyboard_binding_backing{};
+KeyboardBindingModes g_keyboard_binding_layout_aware{};
 KeyboardBindingLabels g_keyboard_binding_original_labels{};
 uintptr_t g_keyboard_navigation_localization_table = 0;
 std::array<uintptr_t, kKeyboardNavigationLabelOffsets.size()>
@@ -1708,8 +1712,15 @@ uint8_t __cdecl HookKeyboardBindingKeyCapture() {
   const uint8_t captured = g_original_keyboard_binding_key_capture
                                ? g_original_keyboard_binding_key_capture()
                                : 0u;
-  if (captured != 0u || !g_keyboard_binding_menu_active || !g_dungeon_base) {
+  if (captured != 0u) {
+    if (g_keyboard_binding_menu_active &&
+        g_keyboard_binding_edit_pending) {
+      g_keyboard_binding_capture_observed = true;
+    }
     return captured;
+  }
+  if (!g_keyboard_binding_menu_active || !g_dungeon_base) {
+    return 0u;
   }
   const auto key_pressed = reinterpret_cast<KeyboardBindingKeyPressedFn>(
       g_dungeon_base + kKeyboardBindingKeyPressedRva);
@@ -1718,6 +1729,9 @@ uint8_t __cdecl HookKeyboardBindingKeyCapture() {
       0x41u, 0x42u, 0x43u, 0x44u, 0x57u, 0x58u};
   for (const uint8_t scan : function_keys) {
     if (key_pressed(scan) != 0) {
+      if (g_keyboard_binding_edit_pending) {
+        g_keyboard_binding_capture_observed = true;
+      }
       return scan;
     }
   }
@@ -1763,8 +1777,10 @@ void CommitPendingKeyboardBindingEdit() {
   }
   const size_t edit_page = g_keyboard_binding_edit_page;
   const size_t edit_row = g_keyboard_binding_edit_row;
+  const bool capture_observed = g_keyboard_binding_capture_observed;
   g_keyboard_binding_edit_pending = false;
-  if (edit_page != g_keyboard_binding_page) {
+  g_keyboard_binding_capture_observed = false;
+  if (edit_page != g_keyboard_binding_page || !capture_observed) {
     return;
   }
   RetailBindingWindow visible{};
@@ -1777,7 +1793,6 @@ void CommitPendingKeyboardBindingEdit() {
     return;
   }
   const size_t changed = static_cast<size_t>(changed_action);
-  const uint16_t previous = g_keyboard_binding_backing[changed];
   const uint16_t value = visible[edit_row];
   if (value != 0u &&
       !deathtrap::input::IsBindableKeyboardRetailCode(value)) {
@@ -1787,18 +1802,29 @@ void CommitPendingKeyboardBindingEdit() {
           edit_page, edit_row, value, &g_keyboard_binding_backing)) {
     return;
   }
+  g_keyboard_binding_layout_aware[changed] = 1u;
   // Preserve the one-key-per-action rule across both pages. Only the row
   // explicitly selected by the user is trusted; native redraws and page
   // transitions are never allowed to bulk-copy the eleven-word window.
-  if (value != 0u && value != previous) {
+  if (value != 0u) {
+    const uint8_t changed_scan =
+        DeathtrapPhysicalScanForKeyboardRetailCode(value);
     for (size_t action = 0; action < g_keyboard_binding_backing.size();
          ++action) {
-      if (action != changed && g_keyboard_binding_backing[action] == value) {
+      const uint16_t other_value = g_keyboard_binding_backing[action];
+      const uint8_t other_scan =
+          g_keyboard_binding_layout_aware[action] != 0u
+              ? DeathtrapPhysicalScanForKeyboardRetailCode(other_value)
+              : deathtrap::input::RetailCodeToDirectInputScan(other_value);
+      if (action != changed && changed_scan != 0u &&
+          other_scan == changed_scan) {
         g_keyboard_binding_backing[action] = 0u;
+        g_keyboard_binding_layout_aware[action] = 0u;
       }
     }
   }
   SetDeathtrapKeyboardBindings(g_keyboard_binding_backing.data(),
+                               g_keyboard_binding_layout_aware.data(),
                                g_keyboard_binding_backing.size());
 }
 
@@ -1806,7 +1832,7 @@ bool ApplyVisibleKeyboardBindingPage() {
   if (!g_keyboard_binding_menu_active) {
     return false;
   }
-  const RetailBindingWindow visible = deathtrap::input::MakeBindingPage(
+  RetailBindingWindow visible = deathtrap::input::MakeBindingPage(
       g_keyboard_binding_page, g_keyboard_binding_backing);
   KeyboardBindingLabels labels{};
   for (size_t row = 0;
@@ -1814,8 +1840,16 @@ bool ApplyVisibleKeyboardBindingPage() {
     const int action =
         deathtrap::input::BindingActionForRow(g_keyboard_binding_page, row);
     if (action >= 0) {
+      const size_t action_index = static_cast<size_t>(action);
+      if (g_keyboard_binding_layout_aware[action_index] == 0u) {
+        const uint16_t binding = visible[row];
+        const uint8_t physical_scan =
+            deathtrap::input::RetailCodeToDirectInputScan(binding);
+        visible[row] = DeathtrapKeyboardRetailCodeForPhysicalScan(
+            physical_scan, binding);
+      }
       const char* const label =
-          deathtrap::input::kKeyboardActions[static_cast<size_t>(action)]
+          deathtrap::input::kKeyboardActions[action_index]
               .label;
       std::snprintf(labels[row].data(), labels[row].size(), "%s", label);
     }
@@ -1861,6 +1895,7 @@ void __cdecl HookKeyboardBindingMenu() {
   InitializeKeyboardBindingStore();
   g_keyboard_binding_page = 0;
   g_keyboard_binding_edit_pending = false;
+  g_keyboard_binding_capture_observed = false;
   g_keyboard_binding_navigation_latched = false;
   g_keyboard_binding_repaint_frames = 0u;
   g_keyboard_binding_menu_active = true;
@@ -1869,6 +1904,7 @@ void __cdecl HookKeyboardBindingMenu() {
     RestoreKeyboardKeyNameReplacements();
     g_keyboard_binding_menu_active = false;
     g_keyboard_binding_edit_pending = false;
+    g_keyboard_binding_capture_observed = false;
     WriteKeyboardBindingValues(original_values);
     WriteKeyboardBindingLabels(original_labels);
     g_original_keyboard_binding_menu();
@@ -1878,6 +1914,7 @@ void __cdecl HookKeyboardBindingMenu() {
   CommitPendingKeyboardBindingEdit();
   SaveKeyboardBindingStore();
   SetDeathtrapKeyboardBindings(g_keyboard_binding_backing.data(),
+                               g_keyboard_binding_layout_aware.data(),
                                g_keyboard_binding_backing.size());
   WriteKeyboardBindingValues(StableRetailKeyboardBindings());
   WriteKeyboardBindingLabels(original_labels);
@@ -1885,6 +1922,7 @@ void __cdecl HookKeyboardBindingMenu() {
   g_keyboard_binding_navigation_latched = false;
   g_keyboard_binding_repaint_frames = 0u;
   g_keyboard_binding_edit_pending = false;
+  g_keyboard_binding_capture_observed = false;
   g_keyboard_binding_menu_active = false;
 }
 
@@ -1915,6 +1953,7 @@ uint8_t __cdecl HookKeyboardBindingInput() {
     CommitPendingKeyboardBindingEdit();
     SaveKeyboardBindingStore();
     SetDeathtrapKeyboardBindings(g_keyboard_binding_backing.data(),
+                                 g_keyboard_binding_layout_aware.data(),
                                  g_keyboard_binding_backing.size());
     WriteKeyboardBindingValues(StableRetailKeyboardBindings());
     return result;
@@ -1925,9 +1964,13 @@ uint8_t __cdecl HookKeyboardBindingInput() {
       g_keyboard_binding_navigation_latched = true;
       if (defaults_activated) {
         g_keyboard_binding_edit_pending = false;
+        g_keyboard_binding_capture_observed = false;
         g_keyboard_binding_backing =
             deathtrap::input::DefaultKeyboardBindings();
+        g_keyboard_binding_layout_aware =
+            deathtrap::input::DefaultKeyboardBindingModes();
         SetDeathtrapKeyboardBindings(g_keyboard_binding_backing.data(),
+                                     g_keyboard_binding_layout_aware.data(),
                                      g_keyboard_binding_backing.size());
         if (ApplyVisibleKeyboardBindingPage()) {
           g_keyboard_binding_repaint_frames = 2u;
@@ -1959,6 +2002,7 @@ uint8_t __cdecl HookKeyboardBindingInput() {
     return 0;
   }
   g_keyboard_binding_edit_pending = true;
+  g_keyboard_binding_capture_observed = false;
   g_keyboard_binding_edit_page = g_keyboard_binding_page;
   g_keyboard_binding_edit_row = row;
   return result;
@@ -2195,6 +2239,8 @@ void InitializeKeyboardBindingStore() {
     return;
   }
   g_keyboard_binding_backing = deathtrap::input::DefaultKeyboardBindings();
+  g_keyboard_binding_layout_aware =
+      deathtrap::input::DefaultKeyboardBindingModes();
   const std::wstring path = KeyboardBindingsPath();
   for (size_t action = 0; action < g_keyboard_binding_backing.size();
        ++action) {
@@ -2207,10 +2253,24 @@ void InitializeKeyboardBindingStore() {
     const uint16_t value = static_cast<uint16_t>(configured);
     if (deathtrap::input::IsBindableKeyboardRetailCode(value)) {
       g_keyboard_binding_backing[action] = value;
+      wchar_t mode[8] = {};
+      const DWORD mode_length = GetPrivateProfileStringW(
+          L"binding_modes", key, L"", mode,
+          static_cast<DWORD>(std::size(mode)), path.c_str());
+      if (mode_length != 0u) {
+        g_keyboard_binding_layout_aware[action] =
+            wcstol(mode, nullptr, 10) != 0 ? 1u : 0u;
+      } else if (value != descriptor.default_retail_code) {
+        // Files written by versions before 0.0.231 had no mode metadata.
+        // A value that differs from the stock profile necessarily came from
+        // the keyboard menu and therefore names a layout-aware printed key.
+        g_keyboard_binding_layout_aware[action] = 1u;
+      }
     }
   }
   g_keyboard_bindings_initialized = true;
   SetDeathtrapKeyboardBindings(g_keyboard_binding_backing.data(),
+                               g_keyboard_binding_layout_aware.data(),
                                g_keyboard_binding_backing.size());
 }
 
@@ -2230,6 +2290,13 @@ bool SaveKeyboardBindingStore() {
     swprintf_s(value, L"%u",
                static_cast<unsigned>(g_keyboard_binding_backing[action]));
     if (!WritePrivateProfileStringW(L"keyboard", key, value,
+                                    temporary.c_str())) {
+      DeleteFileW(temporary.c_str());
+      return false;
+    }
+    const wchar_t* mode =
+        g_keyboard_binding_layout_aware[action] != 0u ? L"1" : L"0";
+    if (!WritePrivateProfileStringW(L"binding_modes", key, mode,
                                     temporary.c_str())) {
       DeleteFileW(temporary.c_str());
       return false;
@@ -12437,7 +12504,7 @@ uint8_t PhysicalSelectorKeyboardMask() {
                         .default_retail_code;
     }
     const uint8_t scan =
-        deathtrap::input::RetailCodeToDirectInputScan(retail_code);
+        DeathtrapPhysicalScanForKeyboardRetailCode(retail_code);
     const UINT virtual_key = VirtualKeyForDirectInputScan(scan);
     if (virtual_key != 0u &&
         (GetAsyncKeyState(static_cast<int>(virtual_key)) & 0x8000) != 0) {

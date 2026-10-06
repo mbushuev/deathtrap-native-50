@@ -94,7 +94,15 @@ void SubmitDeathtrapXInputGameplayCommands(uint32_t commands);
 // Installs the user-facing physical keyboard table. The DirectInput proxy
 // translates it to the stable retail wiring without consulting controller
 // mappings. Binding capture itself receives the untouched physical keyboard.
-void SetDeathtrapKeyboardBindings(const uint16_t* retail_codes, size_t count);
+void SetDeathtrapKeyboardBindings(const uint16_t* retail_codes,
+                                  const uint8_t* layout_aware,
+                                  size_t count);
+// Resolves a retail letter binding through the active Windows keyboard layout
+// before converting it to the physical DirectInput scan code. Non-letter
+// bindings already contain scan codes and pass through unchanged.
+uint8_t DeathtrapPhysicalScanForKeyboardRetailCode(uint16_t retail_code);
+uint16_t DeathtrapKeyboardRetailCodeForPhysicalScan(
+    uint8_t scan, uint16_t fallback_retail_code);
 bool DeathtrapKeyboardBindingMenuActive();
 bool ConsumeDeathtrapImmersiveKeyboardToggle();
 bool ConsumeDeathtrapNativeRateKeyboardToggle();

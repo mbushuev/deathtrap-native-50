@@ -74,6 +74,34 @@ int main() {
   static_assert(RetailCodeToDirectInputScan(0x96u) == 0x11u);
   static_assert(RetailCodeToDirectInputScan(0x3Bu) == 0x3Bu);
   static_assert(!IsBindableKeyboardRetailCode(0x100u));
+  constexpr auto default_modes = DefaultKeyboardBindingModes();
+  static_assert(default_modes[
+                    static_cast<size_t>(KeyboardAction::kMoveForward)] == 0u);
+  static_assert(default_modes[
+                    static_cast<size_t>(KeyboardAction::kMoveLeft)] == 0u);
+  static_assert(default_modes[
+                    static_cast<size_t>(KeyboardAction::kCastSpell)] == 0u);
+  static_assert(default_modes[
+                    static_cast<size_t>(KeyboardAction::kOperate)] == 0u);
+  static_assert(default_modes[
+                    static_cast<size_t>(KeyboardAction::kPause)] == 0u);
+
+  KeyboardBindingArray source_bindings = DefaultKeyboardBindings();
+  KeyboardBindingModeArray source_modes{};
+  auto french_layout_scans =
+      ResolveQwertyKeyboardBindingScans(source_bindings);
+  const size_t forward_action =
+      static_cast<size_t>(KeyboardAction::kMoveForward);
+  french_layout_scans[forward_action] = 0x2Cu;  // Printed W on AZERTY.
+  auto source_scans = ResolveKeyboardBindingSourceScans(
+      source_bindings, source_modes, french_layout_scans);
+  ok &= Expect(source_scans[forward_action] == 0x11u,
+               "default movement must keep the physical WASD cluster");
+  source_modes[forward_action] = 1u;
+  source_scans = ResolveKeyboardBindingSourceScans(
+      source_bindings, source_modes, french_layout_scans);
+  ok &= Expect(source_scans[forward_action] == 0x2Cu,
+               "an explicit AZERTY W binding must use the printed W key");
 
   KeyboardBindingArray remapped_bindings = DefaultKeyboardBindings();
   std::swap(remapped_bindings[
@@ -103,6 +131,39 @@ int main() {
   ok &= Expect((keyboard[0x19u] & 0x80u) != 0u &&
                    (keyboard[0x10u] & 0x80u) == 0u,
                "rebound pause must reach the game's stable P key");
+
+  // The runtime builds this table through the active Windows layout. Model
+  // an AZERTY layout here: logical Z is the physical W-position scan and
+  // logical Q is the physical A-position scan.
+  remapped_bindings = DefaultKeyboardBindings();
+  remapped_bindings[
+      static_cast<size_t>(KeyboardAction::kMoveForward)] = 0x99u;  // Z
+  remapped_bindings[
+      static_cast<size_t>(KeyboardAction::kMoveLeft)] = 0x90u;  // Q
+  auto azerty_scans = ResolveQwertyKeyboardBindingScans(remapped_bindings);
+  azerty_scans[
+      static_cast<size_t>(KeyboardAction::kMoveForward)] = 0x11u;
+  azerty_scans[
+      static_cast<size_t>(KeyboardAction::kMoveLeft)] = 0x1Eu;
+  keyboard.fill(0u);
+  keyboard[0x11u] = 0x80u;
+  keyboard[0x1Eu] = 0x80u;
+  ApplyKeyboardBindingsFromScans(azerty_scans, &keyboard);
+  ok &= Expect((keyboard[0x11u] & 0x80u) != 0u &&
+                   (keyboard[0x1Eu] & 0x80u) != 0u,
+               "layout-aware ZQ input must reach stable W/A commands");
+  auto azerty_native_targets =
+      ResolveQwertyKeyboardBindingScans(DefaultKeyboardBindings());
+  azerty_native_targets[
+      static_cast<size_t>(KeyboardAction::kMoveForward)] = 0x2Cu;
+  azerty_native_targets[
+      static_cast<size_t>(KeyboardAction::kMoveLeft)] = 0x10u;
+  TranslateCanonicalKeyboardTargets(azerty_native_targets, &keyboard);
+  ok &= Expect((keyboard[0x2Cu] & 0x80u) != 0u &&
+                   (keyboard[0x10u] & 0x80u) != 0u &&
+                   (keyboard[0x11u] & 0x80u) == 0u &&
+                   (keyboard[0x1Eu] & 0x80u) == 0u,
+               "canonical W/A commands must reach AZERTY native targets");
 
   if (!ok) {
     return EXIT_FAILURE;

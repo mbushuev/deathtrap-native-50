@@ -88,27 +88,48 @@ int wmain(int argc, wchar_t** argv) {
   const HRESULT result = create(GetModuleHandleW(nullptr), 0x0700,
                                 &direct_input, nullptr);
   HRESULT mouse_result = DIERR_NOTINITIALIZED;
+  HRESULT cooperative_result = DIERR_NOTINITIALIZED;
+  HRESULT acquire_result = DIERR_NOTINITIALIZED;
   HRESULT state_result = DIERR_NOTINITIALIZED;
+  HWND input_window = CreateWindowExW(
+      0, L"STATIC", L"Deathtrap Native input probe", WS_OVERLAPPED,
+      CW_USEDEFAULT, CW_USEDEFAULT, 320, 200, nullptr, nullptr,
+      GetModuleHandleW(nullptr), nullptr);
   if (direct_input) {
     LPDIRECTINPUTDEVICEA mouse = nullptr;
     mouse_result = direct_input->CreateDevice(GUID_SysMouse, &mouse, nullptr);
     if (mouse) {
+      mouse->SetDataFormat(&c_dfDIMouse);
+      cooperative_result = mouse->SetCooperativeLevel(
+          input_window, DISCL_EXCLUSIVE | DISCL_FOREGROUND);
+      acquire_result = mouse->Acquire();
       DIMOUSESTATE state{};
       state_result = mouse->GetDeviceState(sizeof(state), &state);
+      mouse->Unacquire();
       mouse->Release();
     }
     direct_input->Release();
   }
+  if (input_window) {
+    DestroyWindow(input_window);
+  }
   FreeLibrary(proxy);
   const bool support_log = VerifyAutomaticSupportLog(argv[1]);
   std::printf("DirectInputCreateA=0x%08lX object=%s mouse=0x%08lX "
-              "state_probe=0x%08lX support_log=%s display=%s:%lux%lu\n",
+              "cooperative=0x%08lX acquire=0x%08lX state_probe=0x%08lX "
+              "support_log=%s display=%s:%lux%lu\n",
               static_cast<unsigned long>(result),
               direct_input ? "created" : "null",
               static_cast<unsigned long>(mouse_result),
+              static_cast<unsigned long>(cooperative_result),
+              static_cast<unsigned long>(acquire_result),
               static_cast<unsigned long>(state_result),
               support_log ? "verified" : "missing",
               configured_mode == 1 ? "windowed" : "borderless",
               configured_width, configured_height);
-  return SUCCEEDED(result) && SUCCEEDED(mouse_result) && support_log ? 0 : 5;
+  return SUCCEEDED(result) && SUCCEEDED(mouse_result) &&
+          SUCCEEDED(cooperative_result) && SUCCEEDED(acquire_result) &&
+          SUCCEEDED(state_result) && support_log
+      ? 0
+      : 5;
 }

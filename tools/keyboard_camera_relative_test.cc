@@ -88,7 +88,18 @@ int main() {
   require_passthrough(context, "attack chords must retain directional grammar");
   context = EligibleContext();
   context.jump_climb_modifier = true;
-  require_passthrough(context, "directional jumps must retain legacy keys");
+  const auto jump_left = ResolveKeyboardCameraRelativePlan(
+      context, false, false, true, false);
+  const auto jump_right = ResolveKeyboardCameraRelativePlan(
+      context, false, false, false, true);
+  Require(jump_left.active && jump_left.rewrite_wasd &&
+              jump_left.native_forward && jump_left.lateral == -1 &&
+              jump_left.longitudinal == 0,
+          "holding Space must preserve camera-relative left steering");
+  Require(jump_right.active && jump_right.rewrite_wasd &&
+              jump_right.native_forward && jump_right.lateral == 1 &&
+              jump_right.longitudinal == 0,
+          "holding Space must allow the airborne course to change");
   context = EligibleContext();
   context.walk_step_modifier = true;
   require_passthrough(context, "walk/step chords must retain legacy keys");

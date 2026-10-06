@@ -77,6 +77,7 @@ $musicRouting = Join-Path $buildPath "$Configuration\music_track_routing_test.ex
 $mouseCombat = Join-Path $buildPath "$Configuration\mouse_combat_routing_test.exe"
 $inputCommands = Join-Path $buildPath "$Configuration\input_command_bindings_test.exe"
 $inputPages = Join-Path $buildPath "$Configuration\input_binding_pages_test.exe"
+$keyboardCamera = Join-Path $buildPath "$Configuration\keyboard_camera_relative_test.exe"
 $safeSave = Join-Path $buildPath "$Configuration\safe_save_test.exe"
 $selectorTime = Join-Path $buildPath "$Configuration\selector_time_dilation_test.exe"
 $selectorGameplay = Join-Path $buildPath "$Configuration\selector_gameplay_command_test.exe"
@@ -90,6 +91,7 @@ if (-not (Test-Path -LiteralPath $musicRouting)) { throw "Missing music routing 
 if (-not (Test-Path -LiteralPath $mouseCombat)) { throw "Missing mouse combat test: $mouseCombat" }
 if (-not (Test-Path -LiteralPath $inputCommands)) { throw "Missing input command test: $inputCommands" }
 if (-not (Test-Path -LiteralPath $inputPages)) { throw "Missing input page test: $inputPages" }
+if (-not (Test-Path -LiteralPath $keyboardCamera)) { throw "Missing keyboard camera-relative test: $keyboardCamera" }
 if (-not (Test-Path -LiteralPath $safeSave)) { throw "Missing safe save test: $safeSave" }
 if (-not (Test-Path -LiteralPath $selectorTime)) { throw "Missing selector time dilation test: $selectorTime" }
 if (-not (Test-Path -LiteralPath $selectorGameplay)) { throw "Missing selector gameplay command test: $selectorGameplay" }
@@ -124,6 +126,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Input command binding test failed.' }
 
 & $inputPages
 if ($LASTEXITCODE -ne 0) { throw 'Input binding page test failed.' }
+
+& $keyboardCamera
+if ($LASTEXITCODE -ne 0) { throw 'Keyboard camera-relative test failed.' }
 
 & $safeSave
 if ($LASTEXITCODE -ne 0) { throw 'Safe save eligibility test failed.' }

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
 #include "deathtrap_native_render_patch.h"
@@ -89,6 +90,8 @@ std::atomic<uint8_t> g_xinput_combat_state{0};
 std::atomic<uint32_t> g_xinput_gameplay_commands{0};
 std::array<std::atomic<uint16_t>, deathtrap::input::kKeyboardActionCount>
     g_keyboard_bindings{};
+std::array<std::atomic<uint8_t>, deathtrap::input::kKeyboardActionCount>
+    g_keyboard_binding_layout_aware{};
 std::once_flag g_keyboard_bindings_once;
 std::atomic<bool> g_immersive_keyboard_toggle_pending{false};
 std::atomic<bool> g_native_rate_keyboard_toggle_pending{false};
@@ -108,6 +111,8 @@ std::atomic<IDirectInputDeviceA*> g_support_mouse_device{nullptr};
 std::atomic<uint32_t> g_support_mouse_data_size{0};
 std::atomic<HWND> g_support_mouse_window{nullptr};
 std::atomic<uint32_t> g_support_mouse_cooperative_flags{0};
+std::atomic<bool> g_support_mouse_acquire_pending{false};
+std::atomic<uint64_t> g_support_mouse_last_retry_ms{0};
 std::atomic<uint64_t> g_support_mouse_state_calls{0};
 std::atomic<uint64_t> g_support_mouse_data_calls{0};
 std::atomic<uint64_t> g_support_mouse_failures{0};
@@ -131,6 +136,8 @@ FARPROC g_target_DllGetClassObject = nullptr;
 FARPROC g_target_DllRegisterServer = nullptr;
 FARPROC g_target_DllUnregisterServer = nullptr;
 }
+
+bool IsCurrentProcessWindow(HWND window);
 
 bool LoadSystemDinput() {
   if (g_system_dinput) {
@@ -160,12 +167,82 @@ bool LoadSystemDinput() {
   return g_target_DirectInputCreateA != nullptr;
 }
 
+bool NormalizeGameWorkingDirectory() {
+  wchar_t executable[MAX_PATH] = {};
+  const DWORD length =
+      GetModuleFileNameW(nullptr, executable, static_cast<DWORD>(MAX_PATH));
+  if (length == 0u || length >= MAX_PATH) {
+    return false;
+  }
+  std::wstring path(executable, length);
+  const size_t separator = path.find_last_of(L"\\/");
+  if (separator == std::wstring::npos ||
+      _wcsicmp(path.c_str() + separator + 1u, L"DD_CD.EXE") != 0) {
+    return false;
+  }
+  path.resize(separator);
+  return !path.empty() && SetCurrentDirectoryW(path.c_str()) != FALSE;
+}
+
+HKL ActiveGameKeyboardLayout() {
+  DWORD thread_id = 0u;
+  HWND window = g_support_mouse_window.load(std::memory_order_acquire);
+  if (!IsWindow(window)) {
+    const HWND foreground = GetForegroundWindow();
+    if (IsCurrentProcessWindow(foreground)) {
+      window = foreground;
+    }
+  }
+  if (window) {
+    thread_id = GetWindowThreadProcessId(window, nullptr);
+  }
+  if (thread_id == 0u) {
+    thread_id = GetCurrentThreadId();
+  }
+  return GetKeyboardLayout(thread_id);
+}
+
+uint8_t PhysicalScanForKeyboardRetailCode(uint16_t retail_code) {
+  if (retail_code < 0x80u || retail_code > 0x99u) {
+    return deathtrap::input::RetailCodeToDirectInputScan(retail_code);
+  }
+  const HKL layout = ActiveGameKeyboardLayout();
+  const wchar_t letter =
+      static_cast<wchar_t>(L'A' + (retail_code - 0x80u));
+  const SHORT mapped = VkKeyScanExW(letter, layout);
+  if (mapped == -1) {
+    return deathtrap::input::RetailCodeToDirectInputScan(retail_code);
+  }
+  const UINT scan = MapVirtualKeyExW(
+      static_cast<UINT>(LOBYTE(mapped)), MAPVK_VK_TO_VSC_EX, layout);
+  if (scan == 0u) {
+    return deathtrap::input::RetailCodeToDirectInputScan(retail_code);
+  }
+  const uint8_t low_scan = static_cast<uint8_t>(scan & 0x7Fu);
+  const bool extended = (scan & 0xFF00u) == 0xE000u ||
+                        (scan & 0xFF00u) == 0xE100u;
+  return static_cast<uint8_t>(low_scan | (extended ? 0x80u : 0u));
+}
+
+deathtrap::input::KeyboardBindingScanArray NativeKeyboardTargetScans() {
+  deathtrap::input::KeyboardBindingScanArray scans{};
+  for (size_t action = 0; action < scans.size(); ++action) {
+    scans[action] = PhysicalScanForKeyboardRetailCode(
+        deathtrap::input::kKeyboardActions[action].default_retail_code);
+  }
+  return scans;
+}
+
 void EnsureKeyboardBindingsInitialized() {
   std::call_once(g_keyboard_bindings_once, [] {
     const auto defaults = deathtrap::input::DefaultKeyboardBindings();
+    const auto default_modes =
+        deathtrap::input::DefaultKeyboardBindingModes();
     for (size_t index = 0; index < defaults.size(); ++index) {
       g_keyboard_bindings[index].store(defaults[index],
                                        std::memory_order_relaxed);
+      g_keyboard_binding_layout_aware[index].store(
+          default_modes[index], std::memory_order_relaxed);
     }
   });
 }
@@ -182,16 +259,28 @@ void RemapPhysicalKeyboard(uint8_t* keyboard) {
   }
 
   deathtrap::input::KeyboardBindingArray bindings{};
+  deathtrap::input::KeyboardBindingModeArray modes{};
+  deathtrap::input::KeyboardBindingScanArray layout_scans{};
   for (size_t action = 0; action < bindings.size(); ++action) {
     bindings[action] =
         g_keyboard_bindings[action].load(std::memory_order_acquire);
+    modes[action] = g_keyboard_binding_layout_aware[action].load(
+        std::memory_order_acquire);
+    layout_scans[action] =
+        PhysicalScanForKeyboardRetailCode(bindings[action]);
   }
+  // The default profile describes familiar physical key positions. A key
+  // explicitly assigned in the menu describes the printed key in the active
+  // layout. Keeping that bit separately also makes an explicit W on AZERTY
+  // distinguishable from the default physical W position (Z).
+  const auto scans = deathtrap::input::ResolveKeyboardBindingSourceScans(
+      bindings, modes, layout_scans);
   deathtrap::input::DirectInputKeyboardState physical{};
   std::memcpy(physical.data(), keyboard, physical.size());
-  const auto active = deathtrap::input::ResolveKeyboardActions(
-      bindings, physical);
+  const auto active = deathtrap::input::ResolveKeyboardActionsFromScans(
+      scans, physical);
   auto remapped = physical;
-  deathtrap::input::ApplyKeyboardBindings(bindings, &remapped);
+  deathtrap::input::ApplyKeyboardBindingsFromScans(scans, &remapped);
   std::memcpy(keyboard, remapped.data(), remapped.size());
 
   const bool immersive =
@@ -267,6 +356,41 @@ bool IsCurrentProcessWindow(HWND window) {
   DWORD process_id = 0;
   GetWindowThreadProcessId(window, &process_id);
   return process_id == GetCurrentProcessId();
+}
+
+bool SupportMouseWindowIsForeground() {
+  return IsCurrentProcessWindow(GetForegroundWindow());
+}
+
+bool IsRecoverableMouseInputFailure(HRESULT result) {
+  return result == DIERR_INPUTLOST || result == DIERR_NOTACQUIRED ||
+         result == DIERR_OTHERAPPHASPRIO;
+}
+
+HRESULT TryReacquireSupportMouse(IDirectInputDeviceA* device) {
+  if (!device ||
+      device != g_support_mouse_device.load(std::memory_order_acquire) ||
+      !g_direct_input_device_acquire || !SupportMouseWindowIsForeground()) {
+    return DIERR_OTHERAPPHASPRIO;
+  }
+  const uint64_t now_ms = GetTickCount64();
+  uint64_t last_ms =
+      g_support_mouse_last_retry_ms.load(std::memory_order_acquire);
+  if (now_ms - last_ms < 100u ||
+      !g_support_mouse_last_retry_ms.compare_exchange_strong(
+          last_ms, now_ms, std::memory_order_acq_rel,
+          std::memory_order_relaxed)) {
+    return DIERR_NOTACQUIRED;
+  }
+  const HRESULT result = g_direct_input_device_acquire(device);
+  if (SUCCEEDED(result)) {
+    g_support_mouse_acquire_pending.store(false,
+                                           std::memory_order_release);
+    AppendDeathtrapSupportLog(
+        "support_mouse_acquire_retry result=0x%08lx",
+        static_cast<unsigned long>(result));
+  }
+  return result;
 }
 
 void AccumulateSupportMouseDelta(int32_t delta_x, int32_t delta_y) {
@@ -456,10 +580,33 @@ bool PatchVtableSlot(void** vtable, size_t index, void* replacement,
 HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     IDirectInputDeviceA* device, DWORD data_size, LPVOID data) {
   PollDeathtrapFrontendXInput();
-  const HRESULT result =
+  const bool support_mouse =
+      device == g_support_mouse_device.load(std::memory_order_acquire);
+  if (support_mouse &&
+      g_support_mouse_acquire_pending.load(std::memory_order_acquire)) {
+    TryReacquireSupportMouse(device);
+  }
+  HRESULT result =
       g_direct_input_device_get_state
           ? g_direct_input_device_get_state(device, data_size, data)
           : DIERR_GENERIC;
+  if (support_mouse && IsRecoverableMouseInputFailure(result) &&
+      SUCCEEDED(TryReacquireSupportMouse(device))) {
+    result = g_direct_input_device_get_state
+                 ? g_direct_input_device_get_state(device, data_size, data)
+                 : DIERR_GENERIC;
+  }
+  if (support_mouse && FAILED(result) &&
+      g_support_mouse_acquire_pending.load(std::memory_order_acquire)) {
+    // Galaxy can keep foreground priority for a moment after spawning the
+    // game. The retail executable treats that normal DirectInput transition
+    // as fatal. Report a neutral mouse until its own window receives focus;
+    // the hook above then acquires and resumes the real device.
+    if (data && data_size != 0u) {
+      std::memset(data, 0, data_size);
+    }
+    result = DI_OK;
+  }
   if (SUCCEEDED(result) && data && data_size == 256u) {
     auto* keyboard = static_cast<uint8_t*>(data);
     // Keyboard users may freely rebind actions. The fixed controller plan is
@@ -706,6 +853,15 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
           right ? 1u : 0u, immersive_vector ? 1u : 0u,
           gameplay_accepts_combat ? 1u : 0u);
     }
+    // The patch operates in fixed canonical scan space. The retail input
+    // layer, however, resolves its W/A/etc. bindings through the active
+    // Windows layout. Translate only at the final boundary so French AZERTY
+    // receives native W/A commands while physical Z/Q remain the defaults.
+    deathtrap::input::DirectInputKeyboardState native_keyboard{};
+    std::memcpy(native_keyboard.data(), keyboard, native_keyboard.size());
+    deathtrap::input::TranslateCanonicalKeyboardTargets(
+        NativeKeyboardTargetScans(), &native_keyboard);
+    std::memcpy(keyboard, native_keyboard.data(), native_keyboard.size());
   }
   // Deathtrap uses the standard relative mouse state. Preserve the physical
   // mouse, then merge the bounded controller pointer state used by menus.
@@ -763,11 +919,31 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetData(
     LPDIDEVICEOBJECTDATA data, LPDWORD count, DWORD flags) {
   PollDeathtrapFrontendXInput();
   const DWORD capacity = count ? *count : 0u;
-  const HRESULT result =
+  const bool support_mouse =
+      device == g_support_mouse_device.load(std::memory_order_acquire);
+  if (support_mouse &&
+      g_support_mouse_acquire_pending.load(std::memory_order_acquire)) {
+    TryReacquireSupportMouse(device);
+  }
+  HRESULT result =
       g_direct_input_device_get_data
           ? g_direct_input_device_get_data(device, object_size, data, count,
                                            flags)
           : DIERR_GENERIC;
+  if (support_mouse && IsRecoverableMouseInputFailure(result) &&
+      SUCCEEDED(TryReacquireSupportMouse(device))) {
+    result = g_direct_input_device_get_data
+                 ? g_direct_input_device_get_data(device, object_size, data,
+                                                  count, flags)
+                 : DIERR_GENERIC;
+  }
+  if (support_mouse && FAILED(result) &&
+      g_support_mouse_acquire_pending.load(std::memory_order_acquire)) {
+    if (count) {
+      *count = 0u;
+    }
+    result = DI_OK;
+  }
   if (FAILED(result) || !count || !data || object_size == 0u) {
     if (device ==
         g_support_mouse_device.load(std::memory_order_acquire)) {
@@ -922,8 +1098,16 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceAcquire(
       ? g_direct_input_device_acquire(device)
       : DIERR_GENERIC;
   if (device == g_support_mouse_device.load(std::memory_order_acquire)) {
+    const bool deferred = result == DIERR_OTHERAPPHASPRIO;
+    g_support_mouse_acquire_pending.store(deferred,
+                                           std::memory_order_release);
     AppendDeathtrapSupportLog("support_mouse_acquire result=0x%08lx",
                               static_cast<unsigned long>(result));
+    if (deferred) {
+      AppendDeathtrapSupportLog(
+          "support_mouse_acquire deferred_until_foreground=1");
+      return DI_OK;
+    }
   }
   return result;
 }
@@ -934,6 +1118,8 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceUnacquire(
       ? g_direct_input_device_unacquire(device)
       : DIERR_GENERIC;
   if (device == g_support_mouse_device.load(std::memory_order_acquire)) {
+    g_support_mouse_acquire_pending.store(false,
+                                           std::memory_order_release);
     AppendDeathtrapSupportLog("support_mouse_unacquire result=0x%08lx",
                               static_cast<unsigned long>(result));
   }
@@ -1434,8 +1620,14 @@ DWORD WINAPI FrontendInputThread(void*) {
 
 DWORD WINAPI InitializeThread(void*) {
   std::call_once(g_initialize_once, [] {
+    const bool working_directory_normalized =
+        NormalizeGameWorkingDirectory();
     LoadSystemDinput();
     InitializeDeathtrapNativeRenderPatch();
+    if (working_directory_normalized) {
+      AppendDeathtrapSupportLog(
+          "support_launch working_directory=game_directory");
+    }
     InstallDxgiHooks();
     InstallDeathtrapNativeRenderHooks();
     HANDLE frontend_thread = CreateThread(
@@ -1449,7 +1641,30 @@ DWORD WINAPI InitializeThread(void*) {
 
 }  // namespace
 
+uint8_t DeathtrapPhysicalScanForKeyboardRetailCode(uint16_t retail_code) {
+  return PhysicalScanForKeyboardRetailCode(retail_code);
+}
+
+uint16_t DeathtrapKeyboardRetailCodeForPhysicalScan(
+    uint8_t scan, uint16_t fallback_retail_code) {
+  if (scan == 0u) {
+    return fallback_retail_code;
+  }
+  const UINT windows_scan = (scan & 0x80u) != 0u
+                                ? 0xE000u | (scan & 0x7Fu)
+                                : static_cast<UINT>(scan);
+  const UINT virtual_key = MapVirtualKeyExW(
+      windows_scan, MAPVK_VSC_TO_VK_EX, ActiveGameKeyboardLayout());
+  if (virtual_key >= static_cast<UINT>('A') &&
+      virtual_key <= static_cast<UINT>('Z')) {
+    return static_cast<uint16_t>(
+        0x80u + virtual_key - static_cast<UINT>('A'));
+  }
+  return fallback_retail_code;
+}
+
 void SetDeathtrapKeyboardBindings(const uint16_t* retail_codes,
+                                  const uint8_t* layout_aware,
                                   size_t count) {
   EnsureKeyboardBindingsInitialized();
   if (!retail_codes) {
@@ -1461,6 +1676,9 @@ void SetDeathtrapKeyboardBindings(const uint16_t* retail_codes,
     const uint16_t value = retail_codes[index];
     if (deathtrap::input::IsBindableKeyboardRetailCode(value)) {
       g_keyboard_bindings[index].store(value, std::memory_order_release);
+      g_keyboard_binding_layout_aware[index].store(
+          layout_aware && layout_aware[index] != 0u ? 1u : 0u,
+          std::memory_order_release);
     }
   }
 }
