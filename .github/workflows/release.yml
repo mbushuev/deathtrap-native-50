@@ -67,9 +67,12 @@ jobs:
           if ($assets.Count -ne 2) {
             throw "Expected ZIP and checksum assets; found $($assets.Count)."
           }
+          $releasePreamble = Get-Content -LiteralPath `
+            .github\release-preamble.md -Raw
           & gh release create $env:GITHUB_REF_NAME @assets `
             --draft --verify-tag `
             --title "Deathtrap Native 50 $env:GITHUB_REF_NAME" `
+            --notes $releasePreamble `
             --generate-notes
           if ($LASTEXITCODE -ne 0) {
             throw 'GitHub release creation failed.'
