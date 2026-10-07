@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current version: **0.0.231**
+Current version: **0.0.232**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -9,7 +9,7 @@ Current version: **0.0.231**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.231.png" alt="Deathtrap Native 50 v0.0.231 — Steam Deck support and localized input improvements" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.232.png" alt="Deathtrap Native 50 v0.0.232 — GOG localization and launcher stability fixes" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -66,8 +66,8 @@ redistribution terms.
   keyboard and controller.
 - Physical-mouse camera control, mouse attack/parry and mouse-wheel melee
   weapon selection.
-- Correct routing for all fifteen Steam music tracks, with reliable
-  pause/resume that preserves the current playback position.
+- Correct soundtrack playback and routing across the Steam and supported GOG
+  releases, with reliable pause/resume that preserves the current position.
 - Safe saving at stable grounded positions through the original menu, slots
   and save-file format; the original authored save points remain available.
 - Two-page in-game keyboard rebinding for all twenty gameplay and patch

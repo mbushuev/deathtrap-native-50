@@ -108,11 +108,22 @@ std::atomic<bool> g_physical_left_button_press_pending{false};
 std::atomic<uint64_t> g_last_physical_cursor_activity_ms{0};
 std::atomic<uint64_t> g_last_controller_cursor_activity_ms{0};
 std::atomic<IDirectInputDeviceA*> g_support_mouse_device{nullptr};
+std::atomic<IDirectInputDeviceA*> g_support_keyboard_device{nullptr};
 std::atomic<uint32_t> g_support_mouse_data_size{0};
 std::atomic<HWND> g_support_mouse_window{nullptr};
+std::atomic<HWND> g_support_keyboard_window{nullptr};
 std::atomic<uint32_t> g_support_mouse_cooperative_flags{0};
 std::atomic<bool> g_support_mouse_acquire_pending{false};
+std::atomic<bool> g_support_keyboard_acquire_pending{false};
 std::atomic<uint64_t> g_support_mouse_last_retry_ms{0};
+std::atomic<uint64_t> g_support_keyboard_last_retry_ms{0};
+std::atomic<bool> g_support_foreground_activation_pending{false};
+std::atomic<uint32_t> g_support_foreground_activation_attempts{0};
+std::atomic<uint64_t> g_support_foreground_activation_last_ms{0};
+std::atomic<bool> g_support_borderless_settle_pending{false};
+std::atomic<bool> g_support_borderless_maintenance_enabled{false};
+std::atomic<bool> g_support_launch_borderless_topmost{false};
+std::atomic<uint64_t> g_support_borderless_last_raise_ms{0};
 std::atomic<uint64_t> g_support_mouse_state_calls{0};
 std::atomic<uint64_t> g_support_mouse_data_calls{0};
 std::atomic<uint64_t> g_support_mouse_failures{0};
@@ -269,10 +280,9 @@ void RemapPhysicalKeyboard(uint8_t* keyboard) {
     layout_scans[action] =
         PhysicalScanForKeyboardRetailCode(bindings[action]);
   }
-  // The default profile describes familiar physical key positions. A key
-  // explicitly assigned in the menu describes the printed key in the active
-  // layout. Keeping that bit separately also makes an explicit W on AZERTY
-  // distinguishable from the default physical W position (Z).
+  // Current defaults and menu captures describe physical DirectInput
+  // positions. Keep legacy layout-aware assignments readable, but do not
+  // translate newly captured keys a second time on AZERTY layouts.
   const auto scans = deathtrap::input::ResolveKeyboardBindingSourceScans(
       bindings, modes, layout_scans);
   deathtrap::input::DirectInputKeyboardState physical{};
@@ -362,6 +372,163 @@ bool SupportMouseWindowIsForeground() {
   return IsCurrentProcessWindow(GetForegroundWindow());
 }
 
+bool TryActivateSupportWindow() {
+  if (!g_support_foreground_activation_pending.load(
+          std::memory_order_acquire)) {
+    return SupportMouseWindowIsForeground();
+  }
+  if (SupportMouseWindowIsForeground()) {
+    g_support_foreground_activation_pending.store(false,
+                                                   std::memory_order_release);
+    return true;
+  }
+  const uint64_t now_ms = GetTickCount64();
+  uint64_t last_ms = g_support_foreground_activation_last_ms.load(
+      std::memory_order_acquire);
+  if (now_ms - last_ms < 100u ||
+      !g_support_foreground_activation_last_ms.compare_exchange_strong(
+          last_ms, now_ms, std::memory_order_acq_rel,
+          std::memory_order_relaxed)) {
+    return false;
+  }
+  const uint32_t attempt =
+      g_support_foreground_activation_attempts.fetch_add(
+          1u, std::memory_order_acq_rel) +
+      1u;
+  if (attempt > 20u) {
+    g_support_foreground_activation_pending.store(false,
+                                                   std::memory_order_release);
+    AppendDeathtrapSupportLog(
+        "support_launch_foreground result=timeout attempts=%u", attempt - 1u);
+    return false;
+  }
+
+  HWND window = g_support_mouse_window.load(std::memory_order_acquire);
+  if (!IsCurrentProcessWindow(window)) {
+    window = g_support_keyboard_window.load(std::memory_order_acquire);
+  }
+  if (!IsCurrentProcessWindow(window)) {
+    return false;
+  }
+  if (IsIconic(window)) {
+    ShowWindow(window, SW_RESTORE);
+  } else {
+    ShowWindow(window, SW_SHOW);
+  }
+
+  const HWND previous_foreground = GetForegroundWindow();
+  const DWORD current_thread = GetCurrentThreadId();
+  const DWORD foreground_thread =
+      previous_foreground
+          ? GetWindowThreadProcessId(previous_foreground, nullptr)
+          : 0u;
+  const bool attached = foreground_thread != 0u &&
+                        foreground_thread != current_thread &&
+                        AttachThreadInput(current_thread, foreground_thread,
+                                          TRUE) != FALSE;
+  BringWindowToTop(window);
+  SetActiveWindow(window);
+  SetFocus(window);
+  const BOOL requested = SetForegroundWindow(window);
+  if (attached) {
+    AttachThreadInput(current_thread, foreground_thread, FALSE);
+  }
+  const bool active = SupportMouseWindowIsForeground();
+  if (active) {
+    g_support_foreground_activation_pending.store(false,
+                                                   std::memory_order_release);
+  }
+  AppendDeathtrapSupportLog(
+      "support_launch_foreground result=%u requested=%u attached=%u attempt=%u",
+      active ? 1u : 0u, requested != FALSE ? 1u : 0u,
+      attached ? 1u : 0u, attempt);
+  return active;
+}
+
+HWND SupportInputWindow() {
+  HWND window = g_support_mouse_window.load(std::memory_order_acquire);
+  if (!IsCurrentProcessWindow(window)) {
+    window = g_support_keyboard_window.load(std::memory_order_acquire);
+  }
+  return IsCurrentProcessWindow(window) ? window : nullptr;
+}
+
+void UpdateSupportLaunchWindowZOrder() {
+  HWND window = SupportInputWindow();
+  const bool foreground = SupportMouseWindowIsForeground();
+  const bool was_topmost =
+      g_support_launch_borderless_topmost.load(std::memory_order_acquire);
+  if (was_topmost && !foreground) {
+    if (window) {
+      SetWindowPos(window, HWND_NOTOPMOST, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
+                       SWP_NOOWNERZORDER);
+    }
+    g_support_launch_borderless_topmost.store(false,
+                                               std::memory_order_release);
+    AppendDeathtrapSupportLog("support_launch_borderless topmost=0");
+  }
+
+  if (!g_support_borderless_maintenance_enabled.load(
+          std::memory_order_acquire) ||
+      DeathtrapDisplayMode() != 0u || !foreground || !window) {
+    return;
+  }
+
+  const bool first_settle =
+      g_support_borderless_settle_pending.exchange(
+          false, std::memory_order_acq_rel);
+  const uint64_t now_ms = GetTickCount64();
+  const uint64_t last_raise_ms = g_support_borderless_last_raise_ms.load(
+      std::memory_order_acquire);
+  if (!first_settle && was_topmost && now_ms - last_raise_ms < 250u) {
+    return;
+  }
+
+  HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO monitor_info = {};
+  monitor_info.cbSize = sizeof(monitor_info);
+  if (!monitor || !GetMonitorInfoW(monitor, &monitor_info)) {
+    return;
+  }
+  const RECT& bounds = monitor_info.rcMonitor;
+  const int width = bounds.right - bounds.left;
+  const int height = bounds.bottom - bounds.top;
+  if (width <= 0 || height <= 0) {
+    return;
+  }
+
+  // The GOG launcher can hand foreground ownership to the game before the
+  // renderer turns its legacy window into the final monitor-sized borderless
+  // window. Windows then leaves the launcher taskbar above the game even
+  // though the game owns the foreground. The intro movies can also reorder
+  // the taskbar between clips. Reassert the completed window periodically
+  // while it remains foreground; TOPMOST is removed immediately on a real
+  // focus loss, so ordinary Alt+Tab behavior is preserved.
+  const UINT position_flags =
+      first_settle
+          ? (SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOOWNERZORDER)
+          : (SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
+             SWP_NOOWNERZORDER);
+  const BOOL positioned = SetWindowPos(
+      window, HWND_TOPMOST, bounds.left, bounds.top, width, height,
+      position_flags);
+  if (first_settle) {
+    BringWindowToTop(window);
+    SetForegroundWindow(window);
+  }
+  g_support_borderless_last_raise_ms.store(now_ms,
+                                            std::memory_order_release);
+  g_support_launch_borderless_topmost.store(positioned != FALSE,
+                                             std::memory_order_release);
+  if (first_settle || !was_topmost) {
+    AppendDeathtrapSupportLog(
+        "support_launch_borderless result=%u topmost=%u bounds=%ld,%ld,%ld,%ld",
+        positioned != FALSE ? 1u : 0u, positioned != FALSE ? 1u : 0u,
+        bounds.left, bounds.top, bounds.right, bounds.bottom);
+  }
+}
+
 bool IsRecoverableMouseInputFailure(HRESULT result) {
   return result == DIERR_INPUTLOST || result == DIERR_NOTACQUIRED ||
          result == DIERR_OTHERAPPHASPRIO;
@@ -388,6 +555,32 @@ HRESULT TryReacquireSupportMouse(IDirectInputDeviceA* device) {
                                            std::memory_order_release);
     AppendDeathtrapSupportLog(
         "support_mouse_acquire_retry result=0x%08lx",
+        static_cast<unsigned long>(result));
+  }
+  return result;
+}
+
+HRESULT TryReacquireSupportKeyboard(IDirectInputDeviceA* device) {
+  if (!device ||
+      device != g_support_keyboard_device.load(std::memory_order_acquire) ||
+      !g_direct_input_device_acquire || !SupportMouseWindowIsForeground()) {
+    return DIERR_OTHERAPPHASPRIO;
+  }
+  const uint64_t now_ms = GetTickCount64();
+  uint64_t last_ms =
+      g_support_keyboard_last_retry_ms.load(std::memory_order_acquire);
+  if (now_ms - last_ms < 100u ||
+      !g_support_keyboard_last_retry_ms.compare_exchange_strong(
+          last_ms, now_ms, std::memory_order_acq_rel,
+          std::memory_order_relaxed)) {
+    return DIERR_NOTACQUIRED;
+  }
+  const HRESULT result = g_direct_input_device_acquire(device);
+  if (SUCCEEDED(result)) {
+    g_support_keyboard_acquire_pending.store(false,
+                                               std::memory_order_release);
+    AppendDeathtrapSupportLog(
+        "support_keyboard_acquire_retry result=0x%08lx",
         static_cast<unsigned long>(result));
   }
   return result;
@@ -582,9 +775,15 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
   PollDeathtrapFrontendXInput();
   const bool support_mouse =
       device == g_support_mouse_device.load(std::memory_order_acquire);
+  const bool support_keyboard =
+      device == g_support_keyboard_device.load(std::memory_order_acquire);
   if (support_mouse &&
       g_support_mouse_acquire_pending.load(std::memory_order_acquire)) {
     TryReacquireSupportMouse(device);
+  }
+  if (support_keyboard &&
+      g_support_keyboard_acquire_pending.load(std::memory_order_acquire)) {
+    TryReacquireSupportKeyboard(device);
   }
   HRESULT result =
       g_direct_input_device_get_state
@@ -596,12 +795,25 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
                  ? g_direct_input_device_get_state(device, data_size, data)
                  : DIERR_GENERIC;
   }
+  if (support_keyboard && IsRecoverableMouseInputFailure(result) &&
+      SUCCEEDED(TryReacquireSupportKeyboard(device))) {
+    result = g_direct_input_device_get_state
+                 ? g_direct_input_device_get_state(device, data_size, data)
+                 : DIERR_GENERIC;
+  }
   if (support_mouse && FAILED(result) &&
       g_support_mouse_acquire_pending.load(std::memory_order_acquire)) {
     // Galaxy can keep foreground priority for a moment after spawning the
     // game. The retail executable treats that normal DirectInput transition
     // as fatal. Report a neutral mouse until its own window receives focus;
     // the hook above then acquires and resumes the real device.
+    if (data && data_size != 0u) {
+      std::memset(data, 0, data_size);
+    }
+    result = DI_OK;
+  }
+  if (support_keyboard && FAILED(result) &&
+      g_support_keyboard_acquire_pending.load(std::memory_order_acquire)) {
     if (data && data_size != 0u) {
       std::memset(data, 0, data_size);
     }
@@ -921,9 +1133,15 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetData(
   const DWORD capacity = count ? *count : 0u;
   const bool support_mouse =
       device == g_support_mouse_device.load(std::memory_order_acquire);
+  const bool support_keyboard =
+      device == g_support_keyboard_device.load(std::memory_order_acquire);
   if (support_mouse &&
       g_support_mouse_acquire_pending.load(std::memory_order_acquire)) {
     TryReacquireSupportMouse(device);
+  }
+  if (support_keyboard &&
+      g_support_keyboard_acquire_pending.load(std::memory_order_acquire)) {
+    TryReacquireSupportKeyboard(device);
   }
   HRESULT result =
       g_direct_input_device_get_data
@@ -937,8 +1155,22 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetData(
                                                   count, flags)
                  : DIERR_GENERIC;
   }
+  if (support_keyboard && IsRecoverableMouseInputFailure(result) &&
+      SUCCEEDED(TryReacquireSupportKeyboard(device))) {
+    result = g_direct_input_device_get_data
+                 ? g_direct_input_device_get_data(device, object_size, data,
+                                                  count, flags)
+                 : DIERR_GENERIC;
+  }
   if (support_mouse && FAILED(result) &&
       g_support_mouse_acquire_pending.load(std::memory_order_acquire)) {
+    if (count) {
+      *count = 0u;
+    }
+    result = DI_OK;
+  }
+  if (support_keyboard && FAILED(result) &&
+      g_support_keyboard_acquire_pending.load(std::memory_order_acquire)) {
     if (count) {
       *count = 0u;
     }
@@ -1094,6 +1326,10 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetData(
 
 HRESULT STDMETHODCALLTYPE HookDirectInputDeviceAcquire(
     IDirectInputDeviceA* device) {
+  if (g_support_foreground_activation_pending.load(
+          std::memory_order_acquire)) {
+    TryActivateSupportWindow();
+  }
   const HRESULT result = g_direct_input_device_acquire
       ? g_direct_input_device_acquire(device)
       : DIERR_GENERIC;
@@ -1109,6 +1345,18 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceAcquire(
       return DI_OK;
     }
   }
+  if (device == g_support_keyboard_device.load(std::memory_order_acquire)) {
+    const bool deferred = result == DIERR_OTHERAPPHASPRIO;
+    g_support_keyboard_acquire_pending.store(deferred,
+                                              std::memory_order_release);
+    AppendDeathtrapSupportLog("support_keyboard_acquire result=0x%08lx",
+                              static_cast<unsigned long>(result));
+    if (deferred) {
+      AppendDeathtrapSupportLog(
+          "support_keyboard_acquire deferred_until_foreground=1");
+      return DI_OK;
+    }
+  }
   return result;
 }
 
@@ -1121,6 +1369,12 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceUnacquire(
     g_support_mouse_acquire_pending.store(false,
                                            std::memory_order_release);
     AppendDeathtrapSupportLog("support_mouse_unacquire result=0x%08lx",
+                              static_cast<unsigned long>(result));
+  }
+  if (device == g_support_keyboard_device.load(std::memory_order_acquire)) {
+    g_support_keyboard_acquire_pending.store(false,
+                                              std::memory_order_release);
+    AppendDeathtrapSupportLog("support_keyboard_unacquire result=0x%08lx",
                               static_cast<unsigned long>(result));
   }
   return result;
@@ -1167,6 +1421,33 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceSetCooperativeLevel(
         (flags & DISCL_FOREGROUND) != 0u ? 1u : 0u,
         IsCurrentProcessWindow(window) ? 1u : 0u);
   }
+  if (device == g_support_keyboard_device.load(std::memory_order_acquire)) {
+    g_support_keyboard_window.store(window, std::memory_order_release);
+    AppendDeathtrapSupportLog(
+        "support_keyboard_cooperative result=0x%08lx flags=0x%08lx "
+        "exclusive=%u foreground=%u window_valid=%u",
+        static_cast<unsigned long>(result), static_cast<unsigned long>(flags),
+        (flags & DISCL_EXCLUSIVE) != 0u ? 1u : 0u,
+        (flags & DISCL_FOREGROUND) != 0u ? 1u : 0u,
+        IsCurrentProcessWindow(window) ? 1u : 0u);
+  }
+  if (SUCCEEDED(result) && IsCurrentProcessWindow(window) &&
+      (flags & DISCL_FOREGROUND) != 0u &&
+      !SupportMouseWindowIsForeground()) {
+    g_support_foreground_activation_attempts.store(0u,
+                                                    std::memory_order_release);
+    g_support_foreground_activation_last_ms.store(0u,
+                                                   std::memory_order_release);
+    g_support_foreground_activation_pending.store(true,
+                                                   std::memory_order_release);
+    g_support_borderless_settle_pending.store(true,
+                                               std::memory_order_release);
+    g_support_borderless_maintenance_enabled.store(
+        true, std::memory_order_release);
+    g_support_borderless_last_raise_ms.store(0u,
+                                              std::memory_order_release);
+    TryActivateSupportWindow();
+  }
   return result;
 }
 
@@ -1202,10 +1483,16 @@ HRESULT STDMETHODCALLTYPE HookDirectInputCreateDeviceA(
           ? g_direct_input_create_device(direct_input, device_guid, device,
                                          outer)
           : DIERR_GENERIC;
+  const bool support_mouse = IsEqualGUID(device_guid, GUID_SysMouse);
+  const bool support_keyboard = IsEqualGUID(device_guid, GUID_SysKeyboard);
   if (SUCCEEDED(result) && device && *device &&
-      IsEqualGUID(device_guid, GUID_SysMouse)) {
-    g_support_mouse_device.store(*device, std::memory_order_release);
-    g_support_mouse_data_size.store(0, std::memory_order_release);
+      (support_mouse || support_keyboard)) {
+    if (support_mouse) {
+      g_support_mouse_device.store(*device, std::memory_order_release);
+      g_support_mouse_data_size.store(0, std::memory_order_release);
+    } else {
+      g_support_keyboard_device.store(*device, std::memory_order_release);
+    }
     void** vtable = *reinterpret_cast<void***>(*device);
     const bool acquire_hooked = PatchVtableSlot(
         vtable, 7, reinterpret_cast<void*>(&HookDirectInputDeviceAcquire),
@@ -1228,7 +1515,9 @@ HRESULT STDMETHODCALLTYPE HookDirectInputCreateDeviceA(
         reinterpret_cast<void*>(&HookDirectInputDeviceSetCooperativeLevel),
         &g_direct_input_device_set_cooperative_level);
     AppendDeathtrapSupportLog(
-        "support_mouse_device result=0x%08lx hooks=%u%u%u%u%u%u",
+        support_mouse
+            ? "support_mouse_device result=0x%08lx hooks=%u%u%u%u%u%u"
+            : "support_keyboard_device result=0x%08lx hooks=%u%u%u%u%u%u",
         static_cast<unsigned long>(result), acquire_hooked ? 1u : 0u,
         unacquire_hooked ? 1u : 0u,
         g_direct_input_device_get_state ? 1u : 0u,
@@ -1304,6 +1593,11 @@ SwapChainPresent1Fn OriginalPresent1(IDXGISwapChain1* swap_chain) {
 
 HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* swap_chain,
                                       UINT sync_interval, UINT flags) {
+  if (g_support_foreground_activation_pending.load(
+          std::memory_order_acquire)) {
+    TryActivateSupportWindow();
+  }
+  UpdateSupportLaunchWindowZOrder();
   if (g_suppress_page_restore) {
     g_suppressed_page_restores.fetch_add(1, std::memory_order_relaxed);
     return S_OK;
@@ -1328,6 +1622,11 @@ HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* swap_chain,
 HRESULT STDMETHODCALLTYPE HookPresent1(
     IDXGISwapChain1* swap_chain, UINT sync_interval, UINT flags,
     const DXGI_PRESENT_PARAMETERS* parameters) {
+  if (g_support_foreground_activation_pending.load(
+          std::memory_order_acquire)) {
+    TryActivateSupportWindow();
+  }
+  UpdateSupportLaunchWindowZOrder();
   if (g_suppress_page_restore) {
     g_suppressed_page_restores.fetch_add(1, std::memory_order_relaxed);
     return S_OK;
@@ -1741,11 +2040,6 @@ uint64_t GetDeathtrapNativeSuppressedPresentCount() {
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
   if (reason == DLL_PROCESS_ATTACH) {
     DisableThreadLibraryCalls(instance);
-    HANDLE thread = CreateThread(nullptr, 0, &InitializeThread, nullptr, 0,
-                                 nullptr);
-    if (thread) {
-      CloseHandle(thread);
-    }
   } else if (reason == DLL_PROCESS_DETACH) {
     g_stop_frontend_input.store(true, std::memory_order_release);
   }
@@ -1794,30 +2088,32 @@ extern "C" HRESULT WINAPI Proxy_DirectInputCreateA(
 }
 
 extern "C" BOOL WINAPI Proxy_DeathtrapWidescreenWorldRenderActive() {
+  InitializeThread(nullptr);
   return DeathtrapWidescreenWorldRenderActive() ? TRUE : FALSE;
 }
 
 extern "C" DWORD WINAPI Proxy_DeathtrapWidescreenAspectX1000() {
-  InitializeDeathtrapNativeRenderPatch();
+  InitializeThread(nullptr);
   return DeathtrapWidescreenAspectX1000();
 }
 
 extern "C" DWORD WINAPI Proxy_DeathtrapDisplayMode() {
-  InitializeDeathtrapNativeRenderPatch();
+  InitializeThread(nullptr);
   return DeathtrapDisplayMode();
 }
 
 extern "C" DWORD WINAPI Proxy_DeathtrapWindowWidth() {
-  InitializeDeathtrapNativeRenderPatch();
+  InitializeThread(nullptr);
   return DeathtrapWindowWidth();
 }
 
 extern "C" DWORD WINAPI Proxy_DeathtrapWindowHeight() {
-  InitializeDeathtrapNativeRenderPatch();
+  InitializeThread(nullptr);
   return DeathtrapWindowHeight();
 }
 
 extern "C" DWORD WINAPI Proxy_DeathtrapDdrawFlipPolicy() {
+  InitializeThread(nullptr);
   constexpr DWORD kSkipPreFlipPresent = 0x01u;
   constexpr DWORD kSkipPostFlipPresent = 0x02u;
 

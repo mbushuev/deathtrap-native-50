@@ -85,6 +85,15 @@ int main() {
                     static_cast<size_t>(KeyboardAction::kOperate)] == 0u);
   static_assert(default_modes[
                     static_cast<size_t>(KeyboardAction::kPause)] == 0u);
+  static_assert(CapturedKeyboardBindingMode(0x96u) == 0u);
+  static_assert(CapturedKeyboardBindingMode(0x99u) == 0u);
+  // On French AZERTY, logical Q maps to the physical A-position scan (0x1E),
+  // while Dungeon's captured retail Q still means the physical Q position
+  // (0x10). Conflict detection must compare the latter for new captures.
+  static_assert(ResolveKeyboardBindingSourceScan(0x90u, 0u, 0x1Eu) ==
+                0x10u);
+  static_assert(ResolveKeyboardBindingSourceScan(0x90u, 1u, 0x1Eu) ==
+                0x1Eu);
 
   KeyboardBindingArray source_bindings = DefaultKeyboardBindings();
   KeyboardBindingModeArray source_modes{};
@@ -101,7 +110,7 @@ int main() {
   source_scans = ResolveKeyboardBindingSourceScans(
       source_bindings, source_modes, french_layout_scans);
   ok &= Expect(source_scans[forward_action] == 0x2Cu,
-               "an explicit AZERTY W binding must use the printed W key");
+               "legacy logical-layout mode must remain readable");
 
   KeyboardBindingArray remapped_bindings = DefaultKeyboardBindings();
   std::swap(remapped_bindings[

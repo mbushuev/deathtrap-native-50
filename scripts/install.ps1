@@ -23,6 +23,15 @@ if (-not $GameDirectory) {
 $game = (Resolve-Path -LiteralPath $GameDirectory).Path
 $dungeon = Join-Path $game 'Dungeon.dll'
 $executable = Join-Path $game 'DD_CD.EXE'
+$mss32 = Join-Path $game 'MSS32.DLL'
+$gogMusicWrapper = Join-Path $game 'WIN32.dll'
+$gogMusicFirstTrack = Join-Path $game 'MUSIC\track02.ogg'
+$localizedGogMss32Sha256 =
+    'CC7E8D381B21049175FF25F2F628347718DF7C8070661DFB31EC4C71FC47AB85'
+$musicEnabledGogMss32Sha256 =
+    '43C879A24FF746674A959B85C0223C73F92CCBD4BB7E81D81100BEEC232FB410'
+$gogMusicImportOffset = 0x24188
+$gogMusicImportRedirectRequired = $false
 $expectedDungeons = @(
     # English Steam and GOG releases.
     '95FE9CE0FFF387F00704548F152E4340815213FCB3833DBE1B5C42871E7D2E56',
@@ -67,6 +76,24 @@ function Get-FileSha256 {
     }
     finally {
         $stream.Dispose()
+    }
+}
+
+# GOG ships the same Miles binary in every language, but only the English
+# installer redirects its WINMM import to GOG's local WIN32.dll CD-audio/OGG
+# wrapper. The French, German and Italian packages leave two bytes unpatched,
+# so Miles sees zero Redbook tracks even though MUSIC\trackNN.ogg is present.
+# Detect that exact known binary now; the actual two-byte edit is performed
+# only after the rollback copy has been created below.
+if (Test-Path -LiteralPath $mss32 -PathType Leaf) {
+    $mss32Hash = Get-FileSha256 -Path $mss32
+    if ($mss32Hash -eq $localizedGogMss32Sha256) {
+        foreach ($requiredMusicFile in @($gogMusicWrapper, $gogMusicFirstTrack)) {
+            if (-not (Test-Path -LiteralPath $requiredMusicFile -PathType Leaf)) {
+                throw "Required GOG music file was not found: $requiredMusicFile"
+            }
+        }
+        $gogMusicImportRedirectRequired = $true
     }
 }
 
@@ -386,7 +413,7 @@ function Set-NativeDisplayResolution {
 
 if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
     New-Item -ItemType Directory -Force -Path $backup | Out-Null
-    foreach ($existing in @(
+    $backupFiles = @(
         'DINPUT.dll',
         'deathtrap_native.ini',
         'DDraw.dll',
@@ -397,11 +424,36 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
         'dgVoodoo.conf',
         'ASYLUM\keys.cfg',
         'ASYLUM\config.dat'
-    )) {
+    )
+    if ($gogMusicImportRedirectRequired) {
+        $backupFiles += 'MSS32.DLL'
+    }
+    foreach ($existing in $backupFiles) {
         $path = Join-Path $game $existing
         if (Test-Path -LiteralPath $path) {
             $backupName = $existing -replace '[\\/]', '_'
             Copy-Item -LiteralPath $path -Destination (Join-Path $backup $backupName) -Force
+        }
+    }
+    if ($gogMusicImportRedirectRequired) {
+        $mss32Bytes = [System.IO.File]::ReadAllBytes($mss32)
+        $expectedImport = [System.Text.Encoding]::ASCII.GetBytes('WINMM.dll')
+        $replacementImport = [System.Text.Encoding]::ASCII.GetBytes('WIN32.dll')
+        if ($mss32Bytes.Length -lt
+                ($gogMusicImportOffset + $expectedImport.Length)) {
+            throw 'Known localized GOG MSS32.DLL is unexpectedly truncated.'
+        }
+        for ($index = 0; $index -lt $expectedImport.Length; $index++) {
+            if ($mss32Bytes[$gogMusicImportOffset + $index] -ne
+                    $expectedImport[$index]) {
+                throw 'Known localized GOG MSS32.DLL has an unexpected import table.'
+            }
+            $mss32Bytes[$gogMusicImportOffset + $index] =
+                $replacementImport[$index]
+        }
+        [System.IO.File]::WriteAllBytes($mss32, $mss32Bytes)
+        if ((Get-FileSha256 -Path $mss32) -ne $musicEnabledGogMss32Sha256) {
+            throw 'GOG music import redirect failed verification.'
         }
     }
     $logsDirectory = Join-Path $game 'logs'
@@ -478,6 +530,9 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
     Write-Host 'Installed the tested native-canvas Dd7to9 layer and configuration.'
     Write-Host 'Installed dgVoodoo 2.86.2 x86 D3D9 as the final D3D11 backend.'
     Write-Host 'Installed the modern keyboard, mouse and XInput control profile.'
+    if ($gogMusicImportRedirectRequired) {
+        Write-Host 'Enabled the installed GOG OGG soundtrack for this localization.'
+    }
     Write-Host (
         'Configured the current primary monitor resolution: ' +
         "$($nativeDisplay.Width)x$($nativeDisplay.Height).")

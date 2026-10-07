@@ -8,6 +8,30 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.232 — GOG localization and launcher stability fixes
+
+- Restores music in the French, German and Italian GOG releases by safely
+  enabling their installed GOG OGG soundtrack backend. The installer verifies
+  the exact known `MSS32.DLL`, preserves it in the timestamped rollback copy
+  and validates the patched result before completing installation.
+- Fixes intermittent GOG Galaxy desktop-shortcut crashes by deferring both
+  mouse and keyboard acquisition until the game owns foreground input. Native
+  initialization now starts synchronously on the first proxy call instead of
+  racing the legacy frontend from a loader-time worker thread.
+- Brings launcher-started games to the foreground reliably and keeps the
+  borderless game above the Windows taskbar across both intro movies. The
+  temporary topmost state is removed immediately on focus loss, preserving
+  normal Alt+Tab behavior.
+- Corrects keyboard rebinding on French AZERTY layouts. Captured keys remain
+  tied to their physical DirectInput positions, conflict detection uses the
+  same physical mapping, and the translated key label refreshes immediately
+  without leaving and reopening Keyboard Setup.
+- Migrates keyboard assignments written by 0.0.231 away from its incorrect
+  double layout translation while retaining the standard physical `WASD` /
+  `ZQSD` movement cluster.
+- Retains the complete Steam Deck support and every gameplay, camera,
+  controller, widescreen and presentation improvement from earlier releases.
+
 ## 0.0.231 — Steam Deck support and input refinements
 
 - Carries the complete Steam Deck experience forward in the current release:

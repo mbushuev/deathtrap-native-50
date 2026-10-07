@@ -1770,6 +1770,8 @@ uint8_t __cdecl HookRootMenuInput() {
   return resolved;
 }
 
+bool ApplyVisibleKeyboardBindingPage();
+
 void CommitPendingKeyboardBindingEdit() {
   if (!g_keyboard_binding_menu_active ||
       !g_keyboard_binding_edit_pending) {
@@ -1802,20 +1804,28 @@ void CommitPendingKeyboardBindingEdit() {
           edit_page, edit_row, value, &g_keyboard_binding_backing)) {
     return;
   }
-  g_keyboard_binding_layout_aware[changed] = 1u;
+  // The retail capture routine reports its own QWERTY-position key code. On
+  // AZERTY, for example, pressing the physical Z key reports retail W. Keep
+  // that captured position in physical mode; translating it a second time as
+  // a printed-layout key would move the binding to the physical W key as soon
+  // as the menu closes.
+  g_keyboard_binding_layout_aware[changed] =
+      deathtrap::input::CapturedKeyboardBindingMode(value);
   // Preserve the one-key-per-action rule across both pages. Only the row
   // explicitly selected by the user is trusted; native redraws and page
   // transitions are never allowed to bulk-copy the eleven-word window.
   if (value != 0u) {
     const uint8_t changed_scan =
-        DeathtrapPhysicalScanForKeyboardRetailCode(value);
+        deathtrap::input::ResolveKeyboardBindingSourceScan(
+            value, g_keyboard_binding_layout_aware[changed],
+            DeathtrapPhysicalScanForKeyboardRetailCode(value));
     for (size_t action = 0; action < g_keyboard_binding_backing.size();
          ++action) {
       const uint16_t other_value = g_keyboard_binding_backing[action];
       const uint8_t other_scan =
-          g_keyboard_binding_layout_aware[action] != 0u
-              ? DeathtrapPhysicalScanForKeyboardRetailCode(other_value)
-              : deathtrap::input::RetailCodeToDirectInputScan(other_value);
+          deathtrap::input::ResolveKeyboardBindingSourceScan(
+              other_value, g_keyboard_binding_layout_aware[action],
+              DeathtrapPhysicalScanForKeyboardRetailCode(other_value));
       if (action != changed && changed_scan != 0u &&
           other_scan == changed_scan) {
         g_keyboard_binding_backing[action] = 0u;
@@ -1826,6 +1836,13 @@ void CommitPendingKeyboardBindingEdit() {
   SetDeathtrapKeyboardBindings(g_keyboard_binding_backing.data(),
                                g_keyboard_binding_layout_aware.data(),
                                g_keyboard_binding_backing.size());
+  // Retail redraws the just-captured raw QWERTY-position code immediately.
+  // Re-apply our active-layout label to the backing window and repaint both
+  // DirectDraw pages so AZERTY users do not see the key rename only after
+  // leaving and reopening Keyboard Setup.
+  if (ApplyVisibleKeyboardBindingPage()) {
+    g_keyboard_binding_repaint_frames = 2u;
+  }
 }
 
 bool ApplyVisibleKeyboardBindingPage() {
@@ -2253,19 +2270,11 @@ void InitializeKeyboardBindingStore() {
     const uint16_t value = static_cast<uint16_t>(configured);
     if (deathtrap::input::IsBindableKeyboardRetailCode(value)) {
       g_keyboard_binding_backing[action] = value;
-      wchar_t mode[8] = {};
-      const DWORD mode_length = GetPrivateProfileStringW(
-          L"binding_modes", key, L"", mode,
-          static_cast<DWORD>(std::size(mode)), path.c_str());
-      if (mode_length != 0u) {
-        g_keyboard_binding_layout_aware[action] =
-            wcstol(mode, nullptr, 10) != 0 ? 1u : 0u;
-      } else if (value != descriptor.default_retail_code) {
-        // Files written by versions before 0.0.231 had no mode metadata.
-        // A value that differs from the stock profile necessarily came from
-        // the keyboard menu and therefore names a layout-aware printed key.
-        g_keyboard_binding_layout_aware[action] = 1u;
-      }
+      // Retail captures are DirectInput/QWERTY-position codes, including on
+      // AZERTY systems. 0.0.231 incorrectly persisted explicit assignments as
+      // logical-layout keys, which translated them twice after leaving the
+      // editor. Migrate every existing assignment back to physical mode.
+      g_keyboard_binding_layout_aware[action] = 0u;
     }
   }
   g_keyboard_bindings_initialized = true;
@@ -3038,6 +3047,19 @@ bool IsKnownSteamMssWrapper(HMODULE module, uint8_t* tracks,
   return true;
 }
 
+bool IsKnownGogOggMusicBackend(HMODULE module) {
+  if (!module || !GetModuleHandleW(L"WIN32.dll")) {
+    return false;
+  }
+  wchar_t path[MAX_PATH] = {};
+  WIN32_FILE_ATTRIBUTE_DATA attributes = {};
+  const DWORD path_length = GetModuleFileNameW(module, path, MAX_PATH);
+  return path_length != 0u && path_length < MAX_PATH &&
+      GetFileAttributesExW(path, GetFileExInfoStandard, &attributes) &&
+      attributes.nFileSizeHigh == 0u &&
+      attributes.nFileSizeLow == 159232u;
+}
+
 bool InstallDeathtrapMusicTrackFix() {
   if (!g_music_track_fix_enabled) {
     AppendNativeLog("music_redbook fix=disabled");
@@ -3064,6 +3086,18 @@ bool InstallDeathtrapMusicTrackFix() {
       mss ? GetProcAddress(mss, "_AIL_redbook_status@4") : nullptr);
   auto* const set_volume = reinterpret_cast<uint8_t*>(
       mss ? GetProcAddress(mss, "_AIL_redbook_set_volume@8") : nullptr);
+  // GOG's WIN32.dll already translates Redbook calls to the installed
+  // MUSIC/trackNN.ogg files. Localized releases need their two-byte MSS import
+  // redirect repaired by the installer, after which native playback is the
+  // correct and least invasive backend.
+  if (IsKnownGogOggMusicBackend(mss)) {
+    g_music_track_fix_installed.store(true, std::memory_order_release);
+    AppendNativeLog(
+        "music_redbook fix=active backend=GOG_OGG native_tracks=15");
+    AppendDeathtrapSupportLog(
+        "support_music backend=GOG_OGG state=active");
+    return true;
+  }
   uint32_t* track_index = nullptr;
   if (!IsKnownSteamMssWrapper(mss, tracks, play, track_info, &track_index)) {
     AppendNativeLog(

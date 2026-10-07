@@ -1,8 +1,9 @@
 Deathtrap Native 50 @VERSION@
 ================================
 
-Free unofficial modernization patch for the 32-bit Steam release of
-Ian Livingstone's Deathtrap Dungeon (1998).
+Free unofficial modernization patch for the original 32-bit PC release of
+Ian Livingstone's Deathtrap Dungeon (1998). Tested with the Steam release and
+the English, French, German and Italian GOG releases.
 
 Developed using OpenAI Codex under human direction and validated through
 extensive manual playtesting and automated tests.
@@ -24,7 +25,8 @@ need to download or configure dgVoodoo before the first launch.
 2. Extract every file from this patch ZIP directly beside DD_CD.EXE. Preserve
    the included payload directory.
 3. Double-click INSTALL.cmd once.
-4. Start Deathtrap Dungeon normally through Steam or DD_CD.EXE.
+4. Start Deathtrap Dungeon normally through Steam, GOG Galaxy, its desktop
+   shortcut or DD_CD.EXE.
 
 QUICK INSTALL - STEAM DECK
 
@@ -167,7 +169,7 @@ files may be partially or completely incompatible.
 MOUSE AND KEYBOARD
 
 Mouse movement     Rotate modern camera / first-person look
-Left mouse         Attack; A/D choose a side and S selects the turning attack
+Left mouse         Turn toward the camera direction and attack
 Right mouse        Block or parry
 Mouse wheel        Previous/next available melee weapon
 W / S              Walk forward/backward

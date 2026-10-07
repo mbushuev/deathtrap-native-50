@@ -104,11 +104,23 @@ using KeyboardBindingModeArray =
 using DirectInputKeyboardState = std::array<uint8_t, 256>;
 
 constexpr KeyboardBindingModeArray DefaultKeyboardBindingModes() {
-  // The stock profile describes physical positions. Keyboard Setup translates
-  // their labels for the active layout (WASD -> ZQSD on French AZERTY) without
-  // moving any action or creating collisions. Explicit user assignments use
-  // layout-aware mode instead.
+  // The retail input and capture routines both describe physical DirectInput
+  // positions. Keyboard Setup translates only their labels for the active
+  // layout (WASD -> ZQSD on French AZERTY), without translating input twice.
   return {};
+}
+
+constexpr uint8_t CapturedKeyboardBindingMode(uint16_t) {
+  // Dungeon's capture routine polls its fixed DirectInput-position table and
+  // returns that position's retail code. This is physical even when the label
+  // painted for the active Windows layout is Z/Q/S/D or another arrangement.
+  return 0u;
+}
+
+constexpr uint8_t ResolveKeyboardBindingSourceScan(
+    uint16_t binding, uint8_t layout_aware, uint8_t layout_scan) {
+  return layout_aware != 0u ? layout_scan
+                            : RetailCodeToDirectInputScan(binding);
 }
 
 constexpr KeyboardBindingScanArray ResolveQwertyKeyboardBindingScans(
@@ -126,9 +138,8 @@ inline KeyboardBindingScanArray ResolveKeyboardBindingSourceScans(
     const KeyboardBindingScanArray& layout_scans) {
   KeyboardBindingScanArray scans{};
   for (size_t action = 0; action < scans.size(); ++action) {
-    scans[action] = layout_aware[action] != 0u
-                        ? layout_scans[action]
-                        : RetailCodeToDirectInputScan(bindings[action]);
+    scans[action] = ResolveKeyboardBindingSourceScan(
+        bindings[action], layout_aware[action], layout_scans[action]);
   }
   return scans;
 }
