@@ -4,7 +4,7 @@ Current version: **0.0.231**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
-  <a href="https://discord.gg/9tP8qFG7Y"><img src="https://img.shields.io/badge/Join_the_community-Discord-5865F2?style=for-the-badge&amp;logo=discord&amp;logoColor=white" alt="Join the Deathtrap Native 50 Discord community"></a>
+  <a href="https://discord.gg/JeMdHz4Np"><img src="https://img.shields.io/badge/Join_the_community-Discord-5865F2?style=for-the-badge&amp;logo=discord&amp;logoColor=white" alt="Join the Deathtrap Native 50 Discord community"></a>
   <a href="https://ko-fi.com/utkiduck"><img src="assets/ko-fi-support.png" alt="Leave an optional tip for Deathtrap Native 50 on Ko-fi" height="28"></a>
 </p>
 
@@ -527,7 +527,7 @@ Dungeon, its assets, names or trademarks.
 ## Support and diagnostics
 
 For installation help and bug reports, join the
-[`#help-and-bug-reports` Discord channel](https://discord.gg/9tP8qFG7Y).
+[`#help-and-bug-reports` Discord channel](https://discord.gg/JeMdHz4Np).
 
 Every launch automatically creates one compact timestamped support log under
 the game's `logs` directory. No diagnostic option needs to be enabled. The log
