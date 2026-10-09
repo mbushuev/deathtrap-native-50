@@ -10,6 +10,11 @@ Thanks to the community members who helped test public builds:
 
 ## 0.0.232 — GOG localization and launcher stability fixes
 
+- Packaging hotfix: fixes Steam Deck ZIP extraction by storing portable folder
+  paths, keeping the installer and its `payload` directory together in Ark and
+  Dolphin. An incomplete extraction now produces clear instructions instead of
+  looking for files in an unrelated `Downloads/config` directory. Game binaries
+  and gameplay are unchanged by this packaging hotfix.
 - Restores music in the French, German and Italian GOG releases by safely
   enabling their installed GOG OGG soundtrack backend. The installer verifies
   the exact known `MSS32.DLL`, preserves it in the timestamped rollback copy

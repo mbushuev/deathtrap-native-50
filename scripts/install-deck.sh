@@ -100,6 +100,41 @@ if [[ -n "$display_width" || -n "$display_height" ]]; then
         die 'Display dimensions must be at least 640x480.'
 fi
 
+# Identify and validate the package before looking for a game or opening its
+# Proton prefix. Only a real source checkout may use the developer layout.
+if [[ -d "$script_dir/payload" ]]; then
+    payload_root="$script_dir/payload"
+    native_dll="$payload_root/DINPUT.dll"
+    native_ini="$payload_root/deathtrap_native.ini"
+    keys_source="$payload_root/keys.cfg"
+    dxwrapper_dir="$payload_root/dxwrapper"
+    dxwrapper_ini="$payload_root/dxwrapper.ini"
+elif [[ "${script_dir##*/}" == scripts &&
+        -f "$script_dir/../CMakeLists.txt" ]]; then
+    repo_root="$(cd -- "$script_dir/.." && pwd -P)"
+    native_dll="$repo_root/dist/DINPUT.dll"
+    native_ini="$repo_root/config/deathtrap_native.ini"
+    keys_source="$repo_root/config/keys.cfg"
+    dxwrapper_dir="$repo_root/third_party/deathtrap-dxwrapper-release225/x86"
+    dxwrapper_ini="$repo_root/config/dxwrapper-dgvoodoo.ini"
+else
+    die "Release payload folder was not found next to $script_dir/INSTALL-DECK.sh. Extract the complete release ZIP, keeping INSTALL-DECK.sh and the payload folder together, then try again."
+fi
+
+declare -A source_files=(
+    [DINPUT.dll]="$native_dll"
+    [deathtrap_native.ini]="$native_ini"
+    [DDraw.dll]="$dxwrapper_dir/DDraw.dll"
+    [dxwrapper.dll]="$dxwrapper_dir/dxwrapper.dll"
+    [dxwrapper.ini]="$dxwrapper_ini"
+)
+for destination in "${!source_files[@]}"; do
+    [[ -f "${source_files[$destination]}" ]] ||
+        die "Installer payload is missing: ${source_files[$destination]}. Extract the complete release ZIP and try again."
+done
+[[ -f "$keys_source" ]] ||
+    die "Installer payload is missing: $keys_source. Extract the complete release ZIP and try again."
+
 declare -a steamapps_roots=()
 
 append_steamapps_root() {
@@ -243,35 +278,6 @@ if ((skip_proton_setup == 0)); then
             die 'The Proton prefix is still in use. Close the game and try again.'
     fi
 fi
-
-if [[ -d "$script_dir/payload" ]]; then
-    payload_root="$script_dir/payload"
-    native_dll="$payload_root/DINPUT.dll"
-    native_ini="$payload_root/deathtrap_native.ini"
-    keys_source="$payload_root/keys.cfg"
-    dxwrapper_dir="$payload_root/dxwrapper"
-    dxwrapper_ini="$payload_root/dxwrapper.ini"
-else
-    repo_root="$(cd -- "$script_dir/.." && pwd -P)"
-    native_dll="$repo_root/dist/DINPUT.dll"
-    native_ini="$repo_root/config/deathtrap_native.ini"
-    keys_source="$repo_root/config/keys.cfg"
-    dxwrapper_dir="$repo_root/third_party/deathtrap-dxwrapper-release225/x86"
-    dxwrapper_ini="$repo_root/config/dxwrapper-dgvoodoo.ini"
-fi
-
-declare -A source_files=(
-    [DINPUT.dll]="$native_dll"
-    [deathtrap_native.ini]="$native_ini"
-    [DDraw.dll]="$dxwrapper_dir/DDraw.dll"
-    [dxwrapper.dll]="$dxwrapper_dir/dxwrapper.dll"
-    [dxwrapper.ini]="$dxwrapper_ini"
-)
-for destination in "${!source_files[@]}"; do
-    [[ -f "${source_files[$destination]}" ]] ||
-        die "Installer payload is missing: ${source_files[$destination]}"
-done
-[[ -f "$keys_source" ]] || die "Installer payload is missing: $keys_source"
 
 verify_payload_hash() {
     local path="$1" expected="$2" actual

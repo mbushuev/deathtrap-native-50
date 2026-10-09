@@ -203,8 +203,65 @@ if ([System.IO.File]::ReadAllBytes($manifestPath) -contains 13) {
     throw 'SHA256SUMS.txt must use LF line endings for SteamOS.'
 }
 
-Compress-Archive -Path (Join-Path $stageRoot '*') -DestinationPath $archivePath `
-    -CompressionLevel Optimal
+# Windows PowerShell 5.1 Compress-Archive stores backslashes in nested entry
+# names. Linux archive tools can treat those as literal filename characters,
+# leaving INSTALL-DECK.sh without its payload directory. ZIP paths must use /.
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$archiveFiles = @(Get-ChildItem -LiteralPath $stageRoot -Recurse -File |
+    Sort-Object FullName)
+$archive = [System.IO.Compression.ZipFile]::Open(
+    $archivePath, [System.IO.Compression.ZipArchiveMode]::Create)
+try {
+    foreach ($file in $archiveFiles) {
+        $entryName = $file.FullName.Substring($stageRoot.Length + 1).Replace('\', '/')
+        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+            $archive, $file.FullName, $entryName,
+            [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+    }
+}
+finally {
+    $archive.Dispose()
+}
+
+# Validate the actual ZIP, not only the staging directory. Check both portable
+# entry names and exact contents before generating the downloadable checksum.
+$archive = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
+try {
+    if ($archive.Entries.Count -ne $archiveFiles.Count) {
+        throw 'Release ZIP does not contain exactly the staged files.'
+    }
+    foreach ($entry in $archive.Entries) {
+        if ($entry.FullName.Contains('\') -or
+                $entry.FullName.StartsWith('/') -or
+                $entry.FullName -match '(^|/)\.\.?(/|$)|:') {
+            throw "Non-portable release ZIP path: $($entry.FullName)"
+        }
+    }
+    foreach ($file in $archiveFiles) {
+        $entryName = $file.FullName.Substring($stageRoot.Length + 1).Replace('\', '/')
+        $entry = $archive.GetEntry($entryName)
+        if (-not $entry) {
+            throw "Release ZIP is missing: $entryName"
+        }
+        $stream = $entry.Open()
+        $hasher = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $entryHash = [System.BitConverter]::ToString(
+                $hasher.ComputeHash($stream)).Replace('-', '')
+        }
+        finally {
+            $hasher.Dispose()
+            $stream.Dispose()
+        }
+        if ($entryHash -ne (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash) {
+            throw "Release ZIP content does not match the staged file: $entryName"
+        }
+    }
+}
+finally {
+    $archive.Dispose()
+}
 $archiveHash = (Get-FileHash -LiteralPath $archivePath `
     -Algorithm SHA256).Hash.ToLowerInvariant()
 [System.IO.File]::WriteAllText(

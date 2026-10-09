@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 installer="$repo_root/scripts/install-deck.sh"
+release_archive="${1-}"
 test_root="$(mktemp -d)"
 
 report_error() {
@@ -22,6 +23,8 @@ fail() {
     printf 'Steam Deck installer test failed: %s\n' "$*" >&2
     exit 1
 }
+
+(($# <= 1)) || fail 'Usage: bash scripts/test-install-deck.sh [RELEASE.zip]'
 
 create_game_fixture() {
     local game="$1"
@@ -92,6 +95,36 @@ if command -v shellcheck >/dev/null 2>&1; then
     shellcheck "$installer" "$0"
 fi
 
+# A separately copied installer or a ZIP extracted with literal backslashes
+# must fail clearly, before looking for a Steam game or touching its files.
+for incomplete_case in standalone backslash-names partial-payload; do
+    incomplete_root="$test_root/$incomplete_case"
+    mkdir -p -- "$incomplete_root"
+    cp -- "$installer" "$incomplete_root/INSTALL-DECK.sh"
+    if [[ "$incomplete_case" == backslash-names ]]; then
+        printf 'bad extraction\n' >"$incomplete_root/payload\\deathtrap_native.ini"
+    elif [[ "$incomplete_case" == partial-payload ]]; then
+        mkdir -p -- "$incomplete_root/payload"
+    fi
+    incomplete_game="$test_root/$incomplete_case-game"
+    create_game_fixture "$incomplete_game"
+    if bash "$incomplete_root/INSTALL-DECK.sh" --game-dir "$incomplete_game" \
+            >"$incomplete_root/error.log" 2>&1; then
+        fail "incomplete package was accepted: $incomplete_case"
+    fi
+    if [[ "$incomplete_case" == partial-payload ]]; then
+        grep -Fq "Installer payload is missing: $incomplete_root/payload/" \
+            "$incomplete_root/error.log"
+    else
+        grep -Fq 'Release payload folder was not found next to' \
+            "$incomplete_root/error.log"
+    fi
+    grep -Fq 'Extract the complete release ZIP' "$incomplete_root/error.log"
+    [[ ! -e "$incomplete_game/back" && ! -e "$incomplete_game/DINPUT.dll" ]] ||
+        fail 'incomplete package modified the game'
+    assert_text_line "$incomplete_game/ASYLUM/keys.cfg" 'OLD_KEY 1'
+done
+
 direct_game="$test_root/direct/Deathtrap Dungeon"
 create_game_fixture "$direct_game"
 printf 'old dgVoodoo D3D9\n' >"$direct_game/D3D9.dll"
@@ -110,21 +143,31 @@ grep -q '^previous install$' "$latest_backup/DINPUT.dll"
 verify_install "$direct_game" 1280 800 1
 
 release_root="$test_root/release"
-mkdir -p -- "$release_root/payload/dxwrapper" "$release_root/payload/dgVoodoo"
-cp -- "$installer" "$release_root/INSTALL-DECK.sh"
-cp -- "$repo_root/dist/DINPUT.dll" "$release_root/payload/DINPUT.dll"
-cp -- "$repo_root/config/deathtrap_native.ini" "$release_root/payload/deathtrap_native.ini"
-cp -- "$repo_root/config/keys.cfg" "$release_root/payload/keys.cfg"
-cp -- "$repo_root/config/dxwrapper-dgvoodoo.ini" "$release_root/payload/dxwrapper.ini"
-cp -- "$repo_root/config/dgVoodoo-recommended.conf" "$release_root/payload/dgVoodoo.conf"
-cp -- "$repo_root/third_party/deathtrap-dxwrapper-release225/x86/DDraw.dll" \
-    "$release_root/payload/dxwrapper/DDraw.dll"
-cp -- "$repo_root/third_party/deathtrap-dxwrapper-release225/x86/dxwrapper.dll" \
-    "$release_root/payload/dxwrapper/dxwrapper.dll"
-cp -- "$repo_root/third_party/dgVoodoo2-2.86.2/x86/D3D9.dll" \
-    "$release_root/payload/dgVoodoo/D3D9.dll"
-cp -- "$repo_root/third_party/dgVoodoo2-2.86.2/x86/D3DImm.dll" \
-    "$release_root/payload/dgVoodoo/D3DImm.dll"
+if [[ -n "$release_archive" ]]; then
+    command -v bsdtar >/dev/null 2>&1 ||
+        fail 'bsdtar is required to test Linux/Ark-compatible ZIP extraction'
+    python3 "$repo_root/scripts/test-release-package.py" "$release_archive"
+    mkdir -p -- "$release_root"
+    # Ark uses libarchive: do not use unzip, which silently repairs the old
+    # backslash paths and masked the broken release package in earlier tests.
+    bsdtar -xf "$release_archive" -C "$release_root"
+else
+    mkdir -p -- "$release_root/payload/dxwrapper" "$release_root/payload/dgVoodoo"
+    cp -- "$installer" "$release_root/INSTALL-DECK.sh"
+    cp -- "$repo_root/dist/DINPUT.dll" "$release_root/payload/DINPUT.dll"
+    cp -- "$repo_root/config/deathtrap_native.ini" "$release_root/payload/deathtrap_native.ini"
+    cp -- "$repo_root/config/keys.cfg" "$release_root/payload/keys.cfg"
+    cp -- "$repo_root/config/dxwrapper-dgvoodoo.ini" "$release_root/payload/dxwrapper.ini"
+    cp -- "$repo_root/config/dgVoodoo-recommended.conf" "$release_root/payload/dgVoodoo.conf"
+    cp -- "$repo_root/third_party/deathtrap-dxwrapper-release225/x86/DDraw.dll" \
+        "$release_root/payload/dxwrapper/DDraw.dll"
+    cp -- "$repo_root/third_party/deathtrap-dxwrapper-release225/x86/dxwrapper.dll" \
+        "$release_root/payload/dxwrapper/dxwrapper.dll"
+    cp -- "$repo_root/third_party/dgVoodoo2-2.86.2/x86/D3D9.dll" \
+        "$release_root/payload/dgVoodoo/D3D9.dll"
+    cp -- "$repo_root/third_party/dgVoodoo2-2.86.2/x86/D3DImm.dll" \
+        "$release_root/payload/dgVoodoo/D3DImm.dll"
+fi
 
 packaged_game="$test_root/packaged/Deathtrap Dungeon"
 create_game_fixture "$packaged_game"
@@ -170,7 +213,7 @@ WINE REGISTRY Version 2
 EOF
 cp -- "$compat_data/pfx/user.reg" "$test_root/original-user.reg"
 export HOME="$fake_home"
-bash "$installer" --width 1280 --height 800 \
+bash "$release_root/INSTALL-DECK.sh" --width 1280 --height 800 \
     --skip-game-hash-check >/dev/null
 verify_install "$proton_game" 1280 800 0
 for override in \
