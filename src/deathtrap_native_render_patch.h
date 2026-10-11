@@ -121,6 +121,8 @@ bool PollDeathtrapPresentationMouseDelta(int32_t* delta_x, int32_t* delta_y);
 
 // Frontend-safe gate for the DirectInput mouse-to-retail-combat translator.
 bool DeathtrapGameplayAcceptsMouseCombat();
+// Read-only physical attack snapshot; it never consumes the click latch.
+bool DeathtrapPhysicalMouseCombatActive();
 
 // The melee and ranged selectors share one native active-weapon field.
 // Ranged IDs occupy the verified 8..13 interval.

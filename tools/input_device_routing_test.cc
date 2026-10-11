@@ -3,13 +3,17 @@
 #define DeathtrapModernCameraConsumesMouse TestCameraConsumesMouse
 #define PollDeathtrapFrontendXInput TestPollFrontend
 #define SubmitDeathtrapPhysicalMouseDelta TestSubmitMouse
+#define DeathtrapGameplayAcceptsMouseCombat TestAcceptsCombat
 #include "../src/dinput_native_proxy.cc"
 #include "../src/controller_vibration.h"
 #include <iostream>
 
 static int32_t received_x = 0, received_y = 0;
 static bool owns_mouse = true;
+static bool accepts_combat = false;
+static bool physical_control_down = false;
 bool TestCameraConsumesMouse() { return owns_mouse; }
+bool TestAcceptsCombat() { return accepts_combat; }
 void TestPollFrontend() {}
 void TestSubmitMouse(int32_t x, int32_t y) {
   received_x += x; received_y += y;
@@ -18,6 +22,11 @@ static DIDEVICEOBJECTDATA queued{};
 static LONG next_x = 0, next_y = 0;
 HRESULT STDMETHODCALLTYPE FakeState(IDirectInputDeviceA*, DWORD size, void* p) {
   std::memset(p, 0, size);
+  if (size == 256u) {
+    static_cast<uint8_t*>(p)[DIK_LCONTROL] =
+        physical_control_down ? 0x80u : 0u;
+    return DI_OK;
+  }
   auto* state = static_cast<DIMOUSESTATE*>(p);
   state->lX = next_x; state->lY = next_y;
   next_x = next_y = 0;
@@ -75,6 +84,89 @@ int main() {
   count = 1;
   HookDirectInputDeviceGetData(mouse, sizeof(out), &out, &count, 0);
   if (count != 1 || out.dwData != 7 || received_x != 12) return 6;
+  // Exercise the real post-remap keyboard merge, not just the command helper.
+  // Controller caution must reach the active layout's native Ctrl+W/S scans,
+  // coexist with jump, suppress synthetic Shift, and release on the next poll.
+  using deathtrap::input::Command;
+  using deathtrap::input::CommandBit;
+  using deathtrap::input::KeyboardAction;
+  uint8_t keyboard_state[256]{};
+  g_support_keyboard_device.store(keyboard);
+  g_xinput_gameplay_commands.store(CommandBit(Command::kStepForward) |
+      CommandBit(Command::kRun) | CommandBit(Command::kJumpClimb));
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  const auto targets = NativeKeyboardTargetScans();
+  const auto native_scan = [&targets](KeyboardAction action) {
+    return targets[static_cast<size_t>(action)];
+  };
+  if (!(keyboard_state[DIK_LCONTROL] & 0x80u) ||
+      !(keyboard_state[native_scan(KeyboardAction::kMoveForward)] & 0x80u) ||
+      !(keyboard_state[DIK_SPACE] & 0x80u) ||
+      (keyboard_state[DIK_LSHIFT] & 0x80u)) return 11;
+  g_xinput_gameplay_commands.store(CommandBit(Command::kStepBackward));
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if (!(keyboard_state[DIK_LCONTROL] & 0x80u) ||
+      !(keyboard_state[native_scan(KeyboardAction::kMoveBackward)] & 0x80u) ||
+      (keyboard_state[native_scan(KeyboardAction::kMoveForward)] & 0x80u)) return 12;
+  g_xinput_gameplay_commands.store(0u);
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if ((keyboard_state[DIK_LCONTROL] & 0x80u) ||
+      (keyboard_state[native_scan(KeyboardAction::kMoveForward)] & 0x80u) ||
+      (keyboard_state[native_scan(KeyboardAction::kMoveBackward)] & 0x80u) ||
+      (keyboard_state[DIK_SPACE] & 0x80u)) return 13;
+  // Keyboard rebinding must not alter fixed controller commands.
+  g_keyboard_bindings[static_cast<size_t>(KeyboardAction::kMoveForward)]
+      .store(0x91u);  // R instead of W.
+  g_xinput_gameplay_commands.store(CommandBit(Command::kStepForward));
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if (!(keyboard_state[DIK_LCONTROL] & 0x80u) ||
+      !(keyboard_state[native_scan(KeyboardAction::kMoveForward)] & 0x80u)) return 14;
+  g_keyboard_bindings[static_cast<size_t>(KeyboardAction::kCastSpell)]
+      .store(0x91u);  // Physical spell rebinding must not rewrite B.
+  g_xinput_gameplay_commands.store(CommandBit(Command::kCastSpell));
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if (!(keyboard_state[native_scan(KeyboardAction::kCastSpell)] & 0x80u) ||
+      (keyboard_state[DIK_LCONTROL] & 0x80u)) return 17;
+  g_xinput_gameplay_commands.store(0u);
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if (keyboard_state[native_scan(KeyboardAction::kCastSpell)] & 0x80u) return 18;
+  g_physical_left_button_press_pending.store(true);
+  if (!DeathtrapPhysicalMouseCombatActive() ||
+      !g_physical_left_button_press_pending.load()) return 19;
+  g_physical_left_button_press_pending.store(false);
+  if (DeathtrapPhysicalMouseCombatActive()) return 20;
+  g_keyboard_bindings[static_cast<size_t>(KeyboardAction::kSidestepLeft)]
+      .store(0x91u);
+  g_xinput_gameplay_commands.store(CommandBit(Command::kLeftSidestep));
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if (!(keyboard_state[native_scan(KeyboardAction::kSidestepLeft)] & 0x80u) ||
+      (keyboard_state[native_scan(KeyboardAction::kSidestepRight)] & 0x80u) ||
+      (keyboard_state[native_scan(KeyboardAction::kMoveForward)] & 0x80u) ||
+      (keyboard_state[native_scan(KeyboardAction::kMoveBackward)] & 0x80u) ||
+      (keyboard_state[DIK_LCONTROL] & 0x80u)) return 21;
+  g_xinput_gameplay_commands.store(CommandBit(Command::kRightSidestep));
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if (!(keyboard_state[native_scan(KeyboardAction::kSidestepRight)] & 0x80u) ||
+      (keyboard_state[native_scan(KeyboardAction::kSidestepLeft)] & 0x80u) ||
+      (keyboard_state[native_scan(KeyboardAction::kMoveForward)] & 0x80u) ||
+      (keyboard_state[DIK_LCONTROL] & 0x80u)) return 22;
+  g_xinput_gameplay_commands.store(0u);
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if ((keyboard_state[native_scan(KeyboardAction::kSidestepRight)] & 0x80u) ||
+      (keyboard_state[native_scan(KeyboardAction::kSidestepLeft)] & 0x80u)) return 23;
+  g_xinput_gameplay_commands.store(CommandBit(Command::kStepForward));
+  // A mouse attack owns the direction chord. Synthetic LB Ctrl must be
+  // removed, while a genuinely held keyboard Ctrl remains untouched.
+  accepts_combat = true;
+  g_physical_left_button_down.store(true);
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if ((keyboard_state[DIK_LCONTROL] & 0x80u) ||
+      !(keyboard_state[native_scan(KeyboardAction::kAttack)] & 0x80u)) return 15;
+  physical_control_down = true;
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if (!(keyboard_state[DIK_LCONTROL] & 0x80u) ||
+      !(keyboard_state[native_scan(KeyboardAction::kAttack)] & 0x80u)) return 16;
   std::cout << "PASS actual callbacks: keyboard 3 preserved; motion counted once; "
-               "peek, buttons and menu axes preserved; vibration gain clamps\n";
+               "peek, buttons and menu axes preserved; vibration gain clamps; "
+               "LB/RB step chords, spell release/rebinding and mouse priority preserved\n";
 }

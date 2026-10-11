@@ -73,6 +73,8 @@ verify_install() {
     grep -q '^D3D_TYPE1_SHADOWS 1' "$game/ASYLUM/config.dat"
     assert_text_line "$game/deathtrap_native.ini" \
         'VibrationOutputGainPercent=300'
+    assert_text_line "$game/deathtrap_native.ini" 'MovementThresholdPercent=45'
+    assert_text_line "$game/deathtrap_native.ini" 'RunThresholdPercent=90'
     assert_text_line "$game/dxwrapper.ini" 'DdrawClearFlipBackBuffer = 1'
     assert_text_line "$game/dxwrapper.ini" 'DdrawUseExternalD3D9 = 1'
     if ((expect_launcher)); then
@@ -237,5 +239,54 @@ cmp -s "$test_root/original-user.reg" "$latest_backup/proton-user.reg" ||
     fail 'original Proton registry backup does not match'
 grep -q '^old fallback launch helper$' \
     "$latest_backup/deathtrap-native50-deck-launch.sh"
+
+# A custom game and prefix outside Steam's library layout, with spaces in both
+# paths, must work without relying on the shell's current working directory.
+custom_game="$test_root/Custom games/Dungeon copy"
+custom_prefix="$test_root/Custom prefixes/245010"
+create_game_fixture "$custom_game"
+mkdir -p -- "$custom_prefix/pfx"
+cp -- "$test_root/original-user.reg" "$custom_prefix/pfx/user.reg"
+(
+    cd -- "$test_root"
+    bash "$release_root/INSTALL-DECK.sh" --game-dir "$custom_game" \
+        --compat-data "$custom_prefix" --width 1280 --height 800 \
+        --skip-game-hash-check >/dev/null
+)
+verify_install "$custom_game" 1280 800 0
+grep -Fqx '"dinput"="native,builtin"' "$custom_prefix/pfx/user.reg"
+custom_backup="$(find "$custom_game/back" -mindepth 1 -maxdepth 1 -type d \
+    -print -quit)"
+cmp -s "$test_root/original-user.reg" "$custom_backup/proton-user.reg" ||
+    fail 'custom Proton registry backup does not match'
+
+# Registered external/microSD libraries use libraryfolders.vdf, not a guessed
+# installation path. First reject ambiguity without touching the second game.
+external_library="$test_root/Micro SD library with spaces"
+external_game="$external_library/steamapps/common/Deathtrap Dungeon"
+external_prefix="$external_library/steamapps/compatdata/245010"
+create_game_fixture "$external_game"
+mkdir -p -- "$external_prefix/pfx"
+cp -- "$test_root/original-user.reg" "$external_prefix/pfx/user.reg"
+cp -- "$steamapps/appmanifest_245010.acf" \
+    "$external_library/steamapps/appmanifest_245010.acf"
+printf '"libraryfolders"\n{\n "1"\n {\n "path" "%s"\n }\n}\n' \
+    "$external_library" >"$steamapps/libraryfolders.vdf"
+if bash "$release_root/INSTALL-DECK.sh" --skip-game-hash-check \
+        >"$test_root/ambiguous.log" 2>&1; then
+    fail 'multiple Steam copies were accepted without an explicit choice'
+fi
+grep -Fq 'More than one Deathtrap Dungeon installation was found' \
+    "$test_root/ambiguous.log"
+[[ ! -e "$external_game/back" && ! -e "$external_game/DINPUT.dll" ]] ||
+    fail 'ambiguous discovery modified the external game'
+mv -- "$steamapps/appmanifest_245010.acf" \
+    "$steamapps/appmanifest_245010.acf.disabled"
+bash "$release_root/INSTALL-DECK.sh" --width 1280 --height 800 \
+    --skip-game-hash-check >"$test_root/external.log"
+verify_install "$external_game" 1280 800 0
+grep -Fqx "Installed Deathtrap Native 50 into: $external_game" \
+    "$test_root/external.log"
+grep -Fqx '"d3d9"="builtin"' "$external_prefix/pfx/user.reg"
 
 printf 'Steam Deck installer tests passed.\n'

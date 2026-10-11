@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current version: **0.0.232**
+Current version: **0.0.233**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -9,7 +9,7 @@ Current version: **0.0.232**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.232.png" alt="Deathtrap Native 50 v0.0.232 — GOG localization and launcher stability fixes" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.233.png" alt="Deathtrap Native 50 v0.0.233 — Steam Deck and controller movement refinements" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -51,6 +51,9 @@ redistribution terms.
   with collision handling and support for the game's authored camera shots.
 - Camera-relative Xbox-compatible controller movement with faster, more
   responsive turning while retaining the original animation and collision.
+- Separate left-stick zones for turning in place, walking and running, with
+  cautious camera-relative movement on LB, native side-steps on RB and spell
+  casting on B.
 - Full controller support in gameplay, menus, loading screens and movies,
   including menu navigation and a right-stick pointer.
 - Radial inventory selector with the game's own icons for melee, ranged,
@@ -415,18 +418,24 @@ slot screens and save-file format.
 
 ### Xbox-compatible controller
 
+> [!IMPORTANT]
+> **Gamepad controls changed in 0.0.233 on Steam Deck and Windows.** Spells
+> moved from **RB to B**. **LB** is now cautious camera-relative movement;
+> **RB** is native side-steps and cautious forward/backward steps without
+> turning. **B** still goes back or cancels in menus and selectors.
+
 | Input | Gameplay | Menus and selectors |
 |---|---|---|
-| Left stick | Camera-relative movement; full tilt runs | Navigate |
+| Left stick | Small tilt turns in place; medium tilt walks; near-full tilt runs | Navigate |
 | Right stick | Rotate the camera / first-person look | Move pointer or select radial slot |
 | `A` | Jump or climb | Confirm; skip supported movies/screens |
-| `B` | — | Back |
+| `B` | Cast/use contextual spell action | Back/cancel |
 | `X` | Operate/interact | Alternate skip on supported screens |
 | `Y` | Unassigned | Unassigned |
 | `RT` | Attack; combine with the left stick for directional attacks | — |
 | `LT` | Block/parry | — |
-| `RB` | Cast/use contextual spell action | — |
-| Hold `LB` + left stick | Original side-step movement | — |
+| Hold `RB` + left stick | Original left/right side-step animations; cautious forward/backward steps without turning | — |
+| Hold `LB` + left stick | Cautious steps along the full modern movement direction, including diagonals | — |
 | `Start/Menu` | Open pause menu | Back/leave menu |
 | `R3` | Toggle original retail first-person view | — |
 | `L3` | Toggle body-visible immersive first person | — |
@@ -437,6 +446,28 @@ slot screens and save-file format.
 D-pad categories are up for melee weapons, right for ranged items, down for
 spells/shields, and left for potions/charms. Camera input is suppressed while
 the radial selector owns the right stick.
+
+With the modern third-person camera, the left stick turns the character toward
+the selected camera-relative course before greater deflection starts walking.
+`LB` uses the game's original cautious step while keeping the same complete
+camera-relative course as ordinary movement, including sideways and diagonal
+stick directions; full deflection while holding `LB` never runs. Immersive
+first person keeps its full vector without turning the view with the stick.
+`RB` keeps the character facing the same way: left/right uses the original
+`J`/`K` side-step actions and up/down uses `Ctrl` + `W`/`S` cautious steps.
+For diagonal stick input, `RB` selects the dominant axis rather than redirecting
+a forward animation sideways. Full-direction cautious movement remains on
+`LB`. `RB` takes priority if
+both shoulders are held. Release a selector/menu `B` press before pressing
+`B` again to cast; cancellation never triggers a spell.
+The original retail/tank fallback retains `Ctrl` + `W` / `S` and `J` / `K`
+steps when the modern heading/vector route is unavailable. First-person small
+deflections remain stationary rather than turning the view with the left stick.
+The turn, walk and run thresholds and their release thresholds are adjustable
+under `[XInput]` in `deathtrap_native.ini` and are measured after the left-stick
+deadzone. `MovementResponseMs` gently eases rising input; reducing or releasing
+the stick remains immediate. Walk/run entry and release use separate thresholds
+to avoid chatter. These input changes do not blend or retime native animations.
 
 Keyboard bindings can be changed through the game's Keyboard Setup screen.
 Use the `<<` and `>>` controls on the right to switch between its two pages;

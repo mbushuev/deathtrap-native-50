@@ -219,16 +219,22 @@ slot screens and save-file format.
 
 XBOX-COMPATIBLE CONTROLLER
 
-Left stick         Camera-relative movement; full tilt runs / menu navigation
+IMPORTANT: GAMEPAD CONTROLS HAVE CHANGED IN 0.0.233 (STEAM DECK AND WINDOWS).
+Spell casting moves from RB to B. LB is cautious camera-relative movement,
+including diagonals. RB is original left/right side-steps and cautious
+forward/backward steps without turning. B remains Back/Cancel in menus and
+selectors; other button assignments are unchanged.
+
+Left stick         Small tilt turns in place, medium walks, near-full runs / menus
 Right stick        Camera or first-person look / menu pointer / radial choice
 A                  Jump or climb / confirm / skip supported screens
-B                  Back in menus
+B                  Cast/use contextual spell action / back or cancel in menus
 X                  Operate or interact / alternate screen skip
 Y                  Unassigned
 RT                 Attack; left stick selects directional attacks
 LT                 Block or parry
-RB                 Cast/use contextual spell action
-LB + left stick    Original side-step movement
+RB + left stick    Original left/right side-steps / cautious forward/backward steps
+LB + left stick    Cautious steps with full modern stick direction / diagonals
 Start/Menu         Open pause menu / leave menu
 R3                 Original retail first-person view
 L3                 Body-visible immersive first-person view
@@ -238,6 +244,22 @@ D-pad hold         Open radial selector; choose with right stick
 
 D-pad categories: up melee, right ranged, down spells/shields, left
 potions/charms.
+
+Small left-stick deflections turn in place with the modern third-person camera.
+LB uses the original cautious step with the same full camera-relative course as
+ordinary modern third-person movement, including diagonals. Immersive first
+person keeps its complete movement vector. The retail/tank fallback retains
+Ctrl+W/S and J/K steps if the modern heading/vector route is unavailable.
+RB keeps body direction: left/right uses original J/K side-step animations;
+up/down uses Ctrl+W/S cautious steps. Diagonal RB input chooses the dominant
+axis, never a forward animation redirected sideways. Full-direction cautious
+movement stays on LB. RB wins if both shoulders are held.
+B casts in gameplay; a B press used to cancel must be released before casting.
+Cautious steps never run at full deflection. The thresholds in [XInput] use the
+radial stick range after LeftStickDeadzone. MovementResponseMs eases rising
+input, while release/deceleration is immediate. Separate walk/run entry and
+release thresholds prevent chatter; native animations are not retimed/blended.
+Small first-person deflections do not turn the view with the left stick.
 
 PROJECTS AND REPOSITORIES USED
 

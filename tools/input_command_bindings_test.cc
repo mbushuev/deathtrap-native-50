@@ -27,7 +27,8 @@ int main() {
                    !empty.left_shift && !empty.space && !empty.e &&
                    !empty.q && !empty.j && !empty.k && !empty.tab &&
                    !empty.escape && !empty.up && !empty.down && !empty.left &&
-                   !empty.right && !empty.enter && !empty.menu_space,
+                   !empty.right && !empty.enter && !empty.menu_space &&
+                   !empty.left_control,
                "empty command mask must not press a retail key");
 
   const uint32_t complete =
@@ -74,6 +75,26 @@ int main() {
   ok &= Expect(!frontend.w && !frontend.e && !frontend.tab,
                "frontend commands must not leak into gameplay actions");
 
+  const auto cautious_forward = ResolveRetailKeyboardPlan(
+      CommandBit(Command::kStepForward) | CommandBit(Command::kRun) |
+      CommandBit(Command::kJumpClimb));
+  ok &= Expect(cautious_forward.w && cautious_forward.left_control &&
+                   !cautious_forward.s && !cautious_forward.left_shift &&
+                   cautious_forward.space,
+               "forward caution must emit Ctrl+W, suppress run and retain jump");
+  const auto cautious_backward = ResolveRetailKeyboardPlan(
+      CommandBit(Command::kStepBackward));
+  ok &= Expect(cautious_backward.s && cautious_backward.left_control &&
+                   !cautious_backward.w && !cautious_backward.left_shift,
+               "backward caution must emit exactly Ctrl+S");
+  const auto lateral_step = ResolveRetailKeyboardPlan(
+      CommandBit(Command::kLeftSidestep));
+  ok &= Expect(lateral_step.j && !lateral_step.left_control && !lateral_step.w &&
+                   !lateral_step.s && !lateral_step.left_shift,
+               "lateral steps must retain J/K without a forward Ctrl chord");
+  ok &= Expect(!frontend.left_control && !all.left_control,
+               "menus and ordinary controller actions must not press Ctrl");
+
   ok &= Expect(ResolveRootMenuEscapeAction(6u, true, true) == 5u,
                "root Escape must return to an active game");
   ok &= Expect(ResolveRootMenuEscapeAction(6u, true, false) == 0u,
@@ -82,6 +103,22 @@ int main() {
                "a mouse click on Quit must remain Quit");
   ok &= Expect(ResolveRootMenuEscapeAction(4u, true, true) == 4u,
                "non-Quit root actions must remain untouched");
+
+  const auto cast = deathtrap::input::ResolveControllerCastButtonPlan(
+      true, false, false);
+  ok &= Expect(cast.cast && !cast.blocked_until_release,
+               "an unconsumed gameplay B press must cast");
+  const auto cancel = deathtrap::input::ResolveControllerCastButtonPlan(
+      true, true, false);
+  const auto still_held = deathtrap::input::ResolveControllerCastButtonPlan(
+      true, false, cancel.blocked_until_release);
+  const auto released = deathtrap::input::ResolveControllerCastButtonPlan(
+      false, false, still_held.blocked_until_release);
+  const auto fresh_press = deathtrap::input::ResolveControllerCastButtonPlan(
+      true, false, released.blocked_until_release);
+  ok &= Expect(!cancel.cast && !still_held.cast && !released.cast &&
+                   !released.blocked_until_release && fresh_press.cast,
+               "selector/menu B must require release before a new spell");
 
   if (!ok) {
     return EXIT_FAILURE;

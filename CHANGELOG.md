@@ -8,6 +8,41 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.233 — Steam Deck and controller movement refinements
+
+**Important: gamepad controls have changed on Steam Deck and Windows.** Spell
+casting moves from `RB` to `B`; `LB` is cautious camera-relative movement and
+`RB` is native side-steps/cautious forward-backward steps. `B` remains Back in
+menus and selectors; other button assignments are unchanged.
+
+- Retains the complete Steam Deck experience: approximately 50 FPS presentation,
+  widescreen, modern camera and controls, controller menus and selectors,
+  Proton/DXVK rendering and Deck-tuned vibration.
+- Separates camera-relative controller turning from walking: small left-stick
+  deflections turn the character in place without issuing movement input.
+- Raises walk/run entry to 45%/90% of the post-deadzone stick range, with
+  release at 40%/85%, so moderate input stays turn-only and running requires
+  a deliberate near-full tilt. Cautious-step and combat thresholds are unchanged.
+- Eases rising left-stick magnitude and turn strength, with independent
+  walk-entry/release thresholds to avoid chatter. Stick release/deceleration
+  remains immediate; original walk/run animation timing is unchanged.
+- Adds original cautious steps on `LB` with the complete ordinary modern
+  camera-relative stick course, including diagonals. Immersive first person
+  keeps its full vector; the retail/tank fallback retains the original cardinal
+  steps. Cautious mode never emits a run command.
+- Keeps controller steps independent of keyboard rebinding and preserves
+  directional attacks, jump inputs, selector ownership and menu controls.
+- Moves spell casting from `RB` to `B`, keeping menu/selector Back on `B`
+  without leaking a cancelled/held press into gameplay casting.
+- Adds native cautious actions on `RB`: original `J`/`K` side-step states for
+  left/right and `Ctrl` + `W`/`S` steps for forwards/backwards, without turning
+  the body or running. Diagonal stick input selects the dominant axis; the
+  forward-step animation is not redirected sideways. `LB` retains its full
+  camera-relative cautious course, including diagonals.
+- Includes the portable ZIP layout and clear incomplete-extraction diagnostics
+  from the 0.0.232 packaging hotfix. Steam Deck installation supports automatic
+  Steam discovery, installation inside the game directory and custom paths.
+
 ## 0.0.232 — GOG localization and launcher stability fixes
 
 - Packaging hotfix: fixes Steam Deck ZIP extraction by storing portable folder

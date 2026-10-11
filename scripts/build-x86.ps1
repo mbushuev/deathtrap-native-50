@@ -78,6 +78,7 @@ $mouseCombat = Join-Path $buildPath "$Configuration\mouse_combat_routing_test.ex
 $inputCommands = Join-Path $buildPath "$Configuration\input_command_bindings_test.exe"
 $inputPages = Join-Path $buildPath "$Configuration\input_binding_pages_test.exe"
 $keyboardCamera = Join-Path $buildPath "$Configuration\keyboard_camera_relative_test.exe"
+$controllerMovement = Join-Path $buildPath "$Configuration\controller_movement_test.exe"
 $safeSave = Join-Path $buildPath "$Configuration\safe_save_test.exe"
 $selectorTime = Join-Path $buildPath "$Configuration\selector_time_dilation_test.exe"
 $selectorGameplay = Join-Path $buildPath "$Configuration\selector_gameplay_command_test.exe"
@@ -92,6 +93,7 @@ if (-not (Test-Path -LiteralPath $mouseCombat)) { throw "Missing mouse combat te
 if (-not (Test-Path -LiteralPath $inputCommands)) { throw "Missing input command test: $inputCommands" }
 if (-not (Test-Path -LiteralPath $inputPages)) { throw "Missing input page test: $inputPages" }
 if (-not (Test-Path -LiteralPath $keyboardCamera)) { throw "Missing keyboard camera-relative test: $keyboardCamera" }
+if (-not (Test-Path -LiteralPath $controllerMovement)) { throw "Missing controller movement test: $controllerMovement" }
 if (-not (Test-Path -LiteralPath $safeSave)) { throw "Missing safe save test: $safeSave" }
 if (-not (Test-Path -LiteralPath $selectorTime)) { throw "Missing selector time dilation test: $selectorTime" }
 if (-not (Test-Path -LiteralPath $selectorGameplay)) { throw "Missing selector gameplay command test: $selectorGameplay" }
@@ -129,6 +131,12 @@ if ($LASTEXITCODE -ne 0) { throw 'Input binding page test failed.' }
 
 & $keyboardCamera
 if ($LASTEXITCODE -ne 0) { throw 'Keyboard camera-relative test failed.' }
+
+& $controllerMovement
+if ($LASTEXITCODE -ne 0) { throw 'Controller movement zones/steps test failed.' }
+
+& (Join-Path $buildPath "$Configuration\controller_base_bindings_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'Controller base binding boundary test failed.' }
 
 & $safeSave
 if ($LASTEXITCODE -ne 0) { throw 'Safe save eligibility test failed.' }

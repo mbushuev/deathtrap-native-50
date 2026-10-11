@@ -138,6 +138,7 @@ The public release archive has this layout:
 
 ```text
 INSTALL.cmd
+INSTALL-DECK.sh
 install.ps1
 README.txt
 SHA256SUMS.txt
@@ -474,8 +475,11 @@ chalk and consumable selections require A. `SelectorRadius` and
 
 The validated 4:3 center is `SelectorCenterY=316`; the retail UI uses an
 upward-growing Y axis with its origin near the bottom edge, not D3D screen
-coordinates. `MovementThresholdPercent=14` is applied to the circular left-
-stick magnitude. Version 0.0.128 feeds forward magnitude through the game's
+coordinates. Circular left-stick thresholds are measured after its deadzone:
+`TurnThresholdPercent=10` starts turn-only input, walking begins above
+`MovementThresholdPercent=45`, and drops back to turn-only at
+`MovementReleaseThresholdPercent=40`. Version 0.0.128 feeds forward magnitude
+through the game's
 native DirectInput joystick poll and `JOY_*` action bindings. With
 `CameraRelativeMovement=1`, desired screen-space direction becomes a bounded
 heading delta at the shared `+0x82750` ground-state dispatcher. The delta is
@@ -488,9 +492,12 @@ camera; this changes only the longitudinal component and leaves left/right
 unchanged. `MovementTurnDegreesPerTick=30` allows a full-speed 180-degree
 course correction in roughly six original game ticks (about 0.36 seconds),
 reducing the wide running arc without bypassing the native heading writer.
-Running engages at `RunThresholdPercent=50` and
-disengages only below `RunReleaseThresholdPercent=30`; this hysteresis prevents
-noisy diagonal samples from interrupting a run with a one-tick walk transition.
+Running engages at `RunThresholdPercent=90` and disengages at or below
+`RunReleaseThresholdPercent=85`. This small hysteresis gap prevents chatter
+while returning to walking promptly when the stick is relaxed.
+`MovementResponseMs=100` eases rising magnitude; reducing/releasing the stick
+removes input immediately, without a delayed run latch. Native animation
+timing is unchanged. RT and cautious steps retain `ActionThresholdPercent=14`.
 
 Keyboard/mouse users get the same camera-space course selection by default with
 `KeyboardMouse/CameraRelativeMovement=1`. The DirectInput proxy observes the

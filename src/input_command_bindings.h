@@ -26,6 +26,8 @@ enum class Command : uint32_t {
   kMenuRight = 1u << 15,
   kMenuConfirm = 1u << 16,
   kMenuSpace = 1u << 17,
+  kStepForward = 1u << 18,
+  kStepBackward = 1u << 19,
 };
 
 constexpr uint32_t CommandBit(Command command) {
@@ -55,15 +57,19 @@ struct RetailKeyboardPlan {
   bool right = false;
   bool enter = false;
   bool menu_space = false;
+  bool left_control = false;
 };
 
 constexpr RetailKeyboardPlan ResolveRetailKeyboardPlan(uint32_t mask) {
+  const bool step_forward = CommandActive(mask, Command::kStepForward);
+  const bool step_backward = CommandActive(mask, Command::kStepBackward);
+  const bool cautious = step_forward || step_backward;
   return {
-      CommandActive(mask, Command::kMoveForward),
-      CommandActive(mask, Command::kMoveBackward),
+      CommandActive(mask, Command::kMoveForward) || step_forward,
+      CommandActive(mask, Command::kMoveBackward) || step_backward,
       CommandActive(mask, Command::kMoveLeft),
       CommandActive(mask, Command::kMoveRight),
-      CommandActive(mask, Command::kRun),
+      CommandActive(mask, Command::kRun) && !cautious,
       CommandActive(mask, Command::kJumpClimb),
       CommandActive(mask, Command::kOperate),
       CommandActive(mask, Command::kCastSpell),
@@ -77,7 +83,22 @@ constexpr RetailKeyboardPlan ResolveRetailKeyboardPlan(uint32_t mask) {
       CommandActive(mask, Command::kMenuRight),
       CommandActive(mask, Command::kMenuConfirm),
       CommandActive(mask, Command::kMenuSpace),
+      cautious,
   };
+}
+
+struct ControllerCastButtonPlan {
+  bool cast = false;
+  bool blocked_until_release = false;
+};
+
+// B is shared by casting and frontend/selector cancellation. A consumed
+// press stays consumed even if the selector closes while B is still held.
+constexpr ControllerCastButtonPlan ResolveControllerCastButtonPlan(
+    bool down, bool cancel_owner, bool previously_blocked) {
+  if (!down) return {};
+  const bool blocked = cancel_owner || previously_blocked;
+  return {!blocked, blocked};
 }
 
 // The retail root-menu input routine returns 6 for Quit, including when its

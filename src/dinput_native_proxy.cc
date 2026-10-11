@@ -864,6 +864,7 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     merge_controller_key(DIK_A, controller_plan.a);
     merge_controller_key(DIK_D, controller_plan.d);
     merge_controller_key(DIK_LSHIFT, controller_plan.left_shift);
+    merge_controller_key(DIK_LCONTROL, controller_plan.left_control);
     merge_controller_key(DIK_SPACE, controller_plan.space);
     merge_controller_key(DIK_E, controller_plan.e);
     merge_controller_key(DIK_Q, controller_plan.q);
@@ -1028,6 +1029,12 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     }
     if (combat_plan.modifier_down) {
       keyboard[DIK_F] |= 0x80u;
+      // A physical mouse attack can coincide with LB. Do not let the
+      // controller's cautious-step Ctrl compete with its retail F+direction
+      // attack. A real keyboard Ctrl retains its original behavior.
+      if (controller_plan.left_control && !keyboard_walk_step) {
+        keyboard[DIK_LCONTROL] &= static_cast<uint8_t>(~0x80u);
+      }
     }
     if (keyboard_camera_plan.rewrite_wasd) {
       keyboard[DIK_W] &= static_cast<uint8_t>(~0x80u);
@@ -2027,6 +2034,11 @@ void SubmitDeathtrapXInputCombatState(bool attack, bool forward, bool backward,
 
 void SubmitDeathtrapXInputGameplayCommands(uint32_t commands) {
   g_xinput_gameplay_commands.store(commands, std::memory_order_release);
+}
+
+bool DeathtrapPhysicalMouseCombatActive() {
+  return g_physical_left_button_down.load(std::memory_order_acquire) ||
+      g_physical_left_button_press_pending.load(std::memory_order_acquire);
 }
 
 void SetDeathtrapNativePageRestorePresentSuppressed(bool suppressed) {

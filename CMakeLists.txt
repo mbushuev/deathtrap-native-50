@@ -91,6 +91,19 @@ target_compile_definitions(input_device_routing_test PRIVATE
 target_compile_options(input_device_routing_test PRIVATE /W4 /permissive- /EHsc /utf-8)
 target_link_libraries(input_device_routing_test PRIVATE d3d11 dxgi dxguid minhook winmm)
 
+add_executable(controller_base_bindings_test
+  tools/controller_base_bindings_test.cc
+  src/dinput_native_proxy.cc
+  src/native_d3d11_present_guard.cc)
+target_compile_features(controller_base_bindings_test PRIVATE cxx_std_17)
+target_compile_definitions(controller_base_bindings_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(controller_base_bindings_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(controller_base_bindings_test PRIVATE
+  d3d11 dxgi dxguid minhook winmm)
+
 add_executable(camera_spring_arm_test
   tools/camera_spring_arm_test.cc)
 target_compile_features(camera_spring_arm_test PRIVATE cxx_std_17)
@@ -131,6 +144,12 @@ add_executable(keyboard_camera_relative_test
 target_compile_features(keyboard_camera_relative_test PRIVATE cxx_std_17)
 target_include_directories(keyboard_camera_relative_test PRIVATE src)
 target_compile_options(keyboard_camera_relative_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
+
+add_executable(controller_movement_test tools/controller_movement_test.cc)
+target_compile_features(controller_movement_test PRIVATE cxx_std_17)
+target_include_directories(controller_movement_test PRIVATE src)
+target_compile_options(controller_movement_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
 
 add_executable(input_command_bindings_test
