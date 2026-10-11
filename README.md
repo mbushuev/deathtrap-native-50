@@ -9,7 +9,7 @@ Current version: **0.0.233**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.233.png" alt="Deathtrap Native 50 v0.0.233 — Steam Deck and controller movement refinements" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.233-clean.png" alt="Deathtrap Native 50 v0.0.233 — Steam Deck and controller movement refinements" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
