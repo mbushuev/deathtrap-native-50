@@ -28,6 +28,9 @@ $config = Get-Content -LiteralPath $configPath -Raw
 if ($config -notmatch '(?m)^DebugLog=0\s*$') {
     throw 'Release configuration must set Diagnostics/DebugLog=0.'
 }
+if ($config -notmatch '(?m)^ExtendedLogs=0\s*$') {
+    throw 'Release configuration must set Diagnostics/ExtendedLogs=0.'
+}
 $dgVoodooConfigPath = Join-Path $repoRoot 'config\dgVoodoo-recommended.conf'
 $dgVoodooConfig = Get-Content -LiteralPath $dgVoodooConfigPath -Raw
 if ($dgVoodooConfig -notmatch `

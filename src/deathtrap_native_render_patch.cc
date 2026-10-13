@@ -34,13 +34,17 @@
 #include "camera_room_collision.h"
 #include "controller_vibration.h"
 #include "controller_movement.h"
+#include "controller_camera_recenter.h"
+#include "controller_selector_text.h"
 #include "deathtrap_music_route.h"
 #include "immersive_first_person.h"
 #include "input_binding_pages.h"
 #include "input_command_bindings.h"
+#include "game_text.h"
 #include "mouse_combat_routing.h"
 #include "safe_save.h"
 #include "selector_time_dilation.h"
+#include "timing_diagnostics.h"
 #include "widescreen_layout.h"
 #include "selector_gameplay_command.h"
 
@@ -56,6 +60,19 @@ enum class DungeonImageVariant : uint8_t {
 
 DungeonImageVariant g_dungeon_image_variant =
     DungeonImageVariant::kUnsupported;
+
+deathtrap::text::Language ActiveGameTextLanguage() {
+  switch (g_dungeon_image_variant) {
+    case DungeonImageVariant::kFrenchGog:
+      return deathtrap::text::Language::kFrench;
+    case DungeonImageVariant::kGermanGog:
+      return deathtrap::text::Language::kGerman;
+    case DungeonImageVariant::kItalianGog:
+      return deathtrap::text::Language::kItalian;
+    default:
+      return deathtrap::text::Language::kEnglish;
+  }
+}
 
 struct DungeonDataRva {
   uintptr_t english;
@@ -283,6 +300,12 @@ constexpr DungeonCodeRva kSelectSpellRva{0x0007BAF0u};
 constexpr DungeonCodeRva kUseConsumableRva{0x0007B9C0u};
 constexpr DungeonCodeRva kUseChalkRva{0x000458B0u};
 constexpr DungeonCodeRva kInventorySlotDrawRva{0x000772A0u};
+constexpr DungeonDataRva kInventoryNamesRva{
+    0x000F85D0u, 0x000F9028u, 0x000F8AA0u, 0x000F8C78u};
+constexpr DungeonCodeRva kGameTextWidthRva{0x0003A030u};
+constexpr DungeonCodeRva kGameTextQueueRva{0x0003A080u};
+constexpr DungeonDataRva kCurrentFontPointerRva{
+    0x00104948u, 0x001053A8u, 0x00104E18u, 0x00104FF8u};
 constexpr DungeonDataRva kGameRootPointerRva{
     0x00235EA4u, 0x00236904u, 0x00236374u, 0x00236554u};
 // Dungeon.dll+0x17B50 is called only by the root menu at +0xF1E0. The retail
@@ -830,6 +853,7 @@ SceneSnapshot g_previous_snapshot;
 SceneSnapshot g_older_snapshot;
 LARGE_INTEGER g_qpc_frequency{};
 bool g_debug_log = false;
+std::atomic<bool> g_extended_log_enabled{false};
 bool g_music_track_fix_enabled = true;
 bool g_safe_save_anywhere_enabled = true;
 bool g_selector_slow_motion_enabled = true;
@@ -1012,6 +1036,8 @@ struct ThirdPersonOrbitState {
 };
 
 ThirdPersonOrbitState g_third_person_orbit_state;
+deathtrap::camera::Recenter g_camera_recenter;
+double g_camera_recenter_duration_seconds = 0.42;
 std::mutex g_camera_collision_mesh_mutex;
 std::unordered_map<uintptr_t, CameraCollisionMesh>
     g_camera_collision_meshes;
@@ -1873,10 +1899,17 @@ bool ApplyVisibleKeyboardBindingPage() {
         visible[row] = DeathtrapKeyboardRetailCodeForPhysicalScan(
             physical_scan, binding);
       }
-      const char* const label =
-          deathtrap::input::kKeyboardActions[action_index]
-              .label;
-      std::snprintf(labels[row].data(), labels[row].size(), "%s", label);
+      if (ActiveGameTextLanguage() != deathtrap::text::Language::kEnglish &&
+          action_index < g_keyboard_binding_original_labels.size()) {
+        // Preserve the game's own translations for the original eleven
+        // actions. Only the added second-page actions need our dictionary.
+        labels[row] = g_keyboard_binding_original_labels[action_index];
+        labels[row].back() = '\0';
+      } else {
+        const char* const label = deathtrap::text::AddedActionLabel(
+            ActiveGameTextLanguage(), action_index);
+        std::snprintf(labels[row].data(), labels[row].size(), "%s", label);
+      }
     }
   }
   return WriteKeyboardBindingValues(visible) &&
@@ -2080,7 +2113,9 @@ void __cdecl HookKeyboardBindingDrawText(int32_t x, int32_t y,
       return;
     }
   }
-  g_original_keyboard_binding_draw_text(x, y, flags, text);
+  g_original_keyboard_binding_draw_text(
+      x, y, flags,
+      deathtrap::text::HardwareCaption(ActiveGameTextLanguage(), text));
 }
 
 template <typename T>
@@ -4069,6 +4104,7 @@ void SetCustomHeadViewSelected(bool enabled, const char* source) {
   if (previous == next) {
     return;
   }
+  g_camera_recenter.Cancel();
   g_custom_camera_view_mode.store(static_cast<uint32_t>(next),
                                   std::memory_order_release);
   if (!enabled) {
@@ -4892,6 +4928,7 @@ bool InitializeThirdPersonOrbit(void* controller, int32_t native_x,
       std::atan2(dy, std::max(horizontal, 1.0)),
       g_third_person_orbit_min_pitch_radians,
       g_third_person_orbit_max_pitch_radians);
+  g_camera_recenter.Cancel();
   // The retail candidate is frequently only a few hundred world units from
   // Lara. It remains useful for seeding yaw/pitch, but adopting its distance
   // pinned the modern camera to the minimum radius. Start the spring arm at a
@@ -4930,6 +4967,7 @@ bool InitializeThirdPersonOrbit(void* controller, int32_t native_x,
 }
 
 void ResetThirdPersonOrbit(const char* reason) {
+  g_camera_recenter.Cancel();
   if (g_third_person_orbit_state.owned_publication_active) {
     g_owned_camera_presentation_cut_pending.store(
         true, std::memory_order_release);
@@ -4950,6 +4988,37 @@ void ResetThirdPersonOrbit(const char* reason) {
   g_third_person_orbit_state = {};
   g_third_person_heading_reference_valid.store(false,
                                                 std::memory_order_release);
+}
+
+deathtrap::camera::RecenterContext CameraRecenterContext(bool manual_look) {
+  deathtrap::camera::RecenterContext context;
+  context.gameplay = DeathtrapGameplayReady(false) &&
+      !g_xinput_menu_mode.load(std::memory_order_acquire);
+  context.foreground = IsGameForeground();
+  context.modern_third_person = g_third_person_orbit_enabled &&
+      CurrentCustomCameraViewMode() == CustomCameraViewMode::kModernThirdPerson;
+  context.orbit_engaged = g_third_person_orbit_state.engaged &&
+      !g_third_person_orbit_state.suspended;
+  context.selector = KeyboardSelectorOpen() ||
+      g_controller_selector.direction_down || g_controller_selector.row_open;
+  context.scripted = g_scripted_camera_override_active.load(
+      std::memory_order_acquire);
+  context.first_person = CustomHeadViewSelected() || RetailFirstPersonActive() ||
+      g_xinput_first_person_toggled.load(std::memory_order_acquire);
+  context.manual_look = manual_look;
+  return context;
+}
+
+bool AdvanceCameraRecenterSourceTick(bool fresh_input, bool manual_look) {
+  if (!g_camera_recenter.Active()) return false;
+  const auto context = CameraRecenterContext(manual_look);
+  if (!context.Eligible()) {
+    g_camera_recenter.Cancel();
+    return false;
+  }
+  return fresh_input && g_camera_recenter.Advance(
+      context, static_cast<double>(kOriginalPeriodMilliseconds) / 1000.0,
+      &g_third_person_orbit_state.yaw, &g_third_person_orbit_state.pitch);
 }
 
 bool BuildThirdPersonOrbitPosition(void* controller,
@@ -5033,6 +5102,7 @@ bool BuildThirdPersonOrbitPosition(void* controller,
         static_cast<double>(
             focus[1] - g_third_person_orbit_state.previous_player[1]));
     if (focus_jump > 2500.0) {
+      g_camera_recenter.Cancel();
       // A level/portal teleport can leave the retail camera's delayed desired
       // point thousands of units from the new player position. Re-seeding the
       // modern orbit from that value produced a large, late direction jump.
@@ -5110,7 +5180,9 @@ bool BuildThirdPersonOrbitPosition(void* controller,
       g_third_person_orbit_state.pitch, active_minimum_pitch,
       active_maximum_pitch);
 
-  if (input_sequence != g_third_person_orbit_state.last_input_sequence) {
+  const bool fresh_input =
+      input_sequence != g_third_person_orbit_state.last_input_sequence;
+  if (fresh_input) {
     // Mode-3 consumes controller state at Dungeon's deterministic 16.7 Hz
     // source boundary. A wall-clock delta gives constant stick input unequal
     // yaw arcs whenever Windows scheduling varies; interpolation then merely
@@ -5190,6 +5262,9 @@ bool BuildThirdPersonOrbitPosition(void* controller,
     }
   }
 
+  const bool recenter_moved = AdvanceCameraRecenterSourceTick(
+      fresh_input, stick_moved || mouse_moved || presentation_mouse_moved);
+
   g_third_person_heading_reference_microradians.store(
       static_cast<int32_t>(std::lround(
           g_third_person_orbit_state.yaw * 1000000.0)),
@@ -5207,9 +5282,9 @@ bool BuildThirdPersonOrbitPosition(void* controller,
       g_third_person_orbit_state.pitch - control_pitch_before;
   g_third_person_orbit_state.motion_active_this_tick =
       player_motion > 8.0 || stick_moved || mouse_moved ||
-      presentation_mouse_moved;
+      presentation_mouse_moved || recenter_moved;
   g_third_person_orbit_state.orbit_input_active_this_tick =
-      stick_moved || mouse_moved || presentation_mouse_moved;
+      stick_moved || mouse_moved || presentation_mouse_moved || recenter_moved;
   const uint64_t orbit_now_ms = GetTickCount64();
   if (g_third_person_orbit_state.orbit_input_active_this_tick) {
     g_third_person_orbit_state.last_orbit_activity_ms = orbit_now_ms;
@@ -10073,6 +10148,7 @@ void __cdecl HookMode3Camera(void* controller) {
   g_scripted_camera_override_active.store(scripted,
                                            std::memory_order_release);
   if (scripted) {
+    g_camera_recenter.Cancel();
     g_custom_head_publication_active.store(false,
                                             std::memory_order_release);
     g_custom_head_last_publication_ms.store(0,
@@ -12087,6 +12163,7 @@ int __cdecl HookDamageHandler(void* target, int32_t requested_damage,
 }
 
 void ReleaseInjectedControllerInput() {
+  g_camera_recenter.Cancel();
   g_controller_cast_blocked_until_release = true;
   g_xinput_camera_relative_intent.store(false,
                                         std::memory_order_release);
@@ -12177,7 +12254,7 @@ struct NativeInventorySlotDrawState {
   int16_t y = 0;
   uint8_t icon = 0xFFu;
   uint8_t selected = 0;
-  uint8_t available = 0;
+  uint8_t show_quantity = 0;
   uint8_t slot = 0;
   uint8_t blank = 0;
   uint8_t reserved = 0;
@@ -12185,6 +12262,89 @@ struct NativeInventorySlotDrawState {
 };
 #pragma pack(pop)
 static_assert(sizeof(NativeInventorySlotDrawState) == 12u);
+
+using GameTextSetFontFn = void(__cdecl*)(uint32_t);
+using GameTextWidthFn = int32_t(__cdecl*)(const char*);
+using GameTextQueueFn = void(__cdecl*)(uint32_t, int32_t, int32_t, int32_t,
+                                      const char*, ...);
+GameTextSetFontFn g_selector_text_set_font = nullptr;
+GameTextWidthFn g_selector_text_width = nullptr;
+GameTextQueueFn g_selector_text_queue = nullptr;
+
+bool ReadControllerSelectorName(uint32_t category, uint32_t slot,
+                                 std::array<char, 128>* name) {
+  if (!name || !g_dungeon_base) return false;
+  name->fill(0);
+  const int32_t item = deathtrap::selector_text::ItemForSlot(category, slot);
+  if (item == deathtrap::selector_text::kEmptyItem) return false;
+  if (item == deathtrap::selector_text::kChalkItem) {
+    std::snprintf(name->data(), name->size(), "%s",
+                  deathtrap::selector_text::ChalkName(ActiveGameTextLanguage()));
+    return true;
+  }
+  uintptr_t address = 0;
+  if (!SafeReadValue(g_dungeon_base + kInventoryNamesRva + item * 4u,
+                     &address) || !address) return false;
+  // Read only the original, bounded OEM string. Never use engine asset/config
+  // IDs such as POTIONHL as display names, and never format the name itself.
+  for (size_t index = 0; index < name->size(); ++index) {
+    char character = 0;
+    if (!SafeReadValue(reinterpret_cast<const void*>(address + index),
+                       &character)) return false;
+    if (character == 0) return index > 0;
+    if (static_cast<unsigned char>(character) < 32u) return false;
+    (*name)[index] = character;
+  }
+  name->fill(0);
+  return false;
+}
+
+void QueueControllerSelectorName() {
+  if (!g_selector_text_set_font || !g_selector_text_width ||
+      !g_selector_text_queue || !g_dungeon_base) return;
+  std::array<char, 128> name{};
+  uintptr_t viewport = 0;
+  uintptr_t previous_font = 0;
+  std::array<int32_t, 4> bounds{};
+  if (!ReadControllerSelectorName(g_controller_selector.category,
+                                  g_controller_selector.slot, &name) ||
+      !SafeReadValue(g_dungeon_base + kUiViewportPointerRva, &viewport) ||
+      !viewport || !SafeRead(reinterpret_cast<const void*>(viewport + 0x18u),
+                              bounds.data(), sizeof(bounds)) ||
+      bounds[2] <= bounds[0] || bounds[3] <= bounds[1] ||
+      !SafeReadValue(g_dungeon_base + kCurrentFontPointerRva,
+                     &previous_font) || !previous_font) return;
+  // Use the actual gold gameplay font, not a menu font whose foreground
+  // index becomes black under the active gameplay palette.
+  g_selector_text_set_font(deathtrap::selector_text::kNameFontResource);
+  const auto lines = deathtrap::selector_text::WrapName(
+      name.data(), 2 * std::max(8, g_xinput_selector_radius - 32),
+      g_selector_text_width);
+  const int32_t count = lines[1].empty() ? 1 : 2;
+  // Text primitives inherit the widened render-context gutter once more
+  // than native HUD sprites. Compensate exactly as the pickup-message hook
+  // does, rather than centering independently inside the widened viewport.
+  const int32_t center_x = bounds[0] + (bounds[2] - bounds[0]) / 2 -
+      g_centered_ui_context_compensation_x;
+  // The existing ring's cells use (x,y)=(-16,center_y-16). Native sprite
+  // alignment reverses Y before adding a 32px cell's extent. Its visual
+  // center is therefore bottom-center_y+32, not bottom-center_y.
+  const int32_t center_y = bounds[3] - g_xinput_selector_center_y + 32;
+  constexpr int32_t kLineHeight = 18;
+  for (int32_t row = 0; row < count; ++row) {
+    if (lines[row].empty()) continue;
+    const int32_t width = g_selector_text_width(lines[row].c_str());
+    if (width <= 0) continue;
+    // Queue into the same scene as the retail icons, never EE50 (which would
+    // recursively present a separate frame). The queued command retains its
+    // font pointer; restoring the caller's font does not change this text.
+    g_selector_text_queue(1u, center_x - width / 2,
+        center_y - count * kLineHeight / 2 + row * kLineHeight, 0,
+        "%s", lines[row].c_str());
+  }
+  SafeWrite(g_dungeon_base + kCurrentFontPointerRva,
+             &previous_font, sizeof(previous_font));
+}
 
 void __cdecl HookInventorySlotDraw(void* raw_slot) {
   if (!g_original_inventory_slot_draw || !raw_slot) {
@@ -12218,6 +12378,12 @@ void __cdecl HookInventorySlotDraw(void* raw_slot) {
       std::cos(angle) * static_cast<double>(g_xinput_selector_radius) - 16.0));
   slot.selected = slot.slot == g_controller_selector.slot ? 1u : 0u;
   g_original_inventory_slot_draw(&slot);
+  // Byte 6 controls quantity drawing, NOT inventory availability. All melee
+  // slots leave it zero (including the always-available sword and fists).
+  // A missing item is represented by the native empty icon 0xFF/blank flag.
+  if (slot.selected && slot.icon != 0xFFu && !slot.blank) {
+    QueueControllerSelectorName();
+  }
 }
 
 bool NativeInventoryItemAvailable(int32_t item_id) {
@@ -12724,6 +12890,50 @@ bool ReadLivePlayerHeading(int32_t* heading,
     *live_controller = controller;
   }
   return true;
+}
+
+void HandleControllerCameraRecenter(WORD pressed, double right_x,
+                                     double right_y,
+                                     bool selector_captures_controls) {
+  if (selector_captures_controls ||
+      (pressed & (XINPUT_GAMEPAD_START | XINPUT_GAMEPAD_BACK)) != 0) {
+    g_camera_recenter.Cancel();
+    return;
+  }
+  const auto context = CameraRecenterContext(
+      std::abs(right_x) > 0.0001 || std::abs(right_y) > 0.0001);
+  if (!context.Eligible()) {
+    g_camera_recenter.Cancel();
+    return;
+  }
+  if ((pressed & XINPUT_GAMEPAD_Y) == 0) return;
+  int32_t heading = 0;
+  if (!ReadLivePlayerHeading(&heading, nullptr)) return;
+  double head_rise = 240.0;
+  std::array<int32_t, 3> focus{}, head{};
+  if (ReadCameraFocusPosition(g_third_person_orbit_state.controller, &focus) &&
+      ResolveLivePlayerHeadMount(g_previous_snapshot, focus, &head, nullptr)) {
+    const double live_rise = static_cast<double>(head[1]) - focus[1];
+    if (live_rise >= 0.0 && live_rise <= 800.0) head_rise = live_rise;
+  }
+  const auto target = deathtrap::camera::BehindActorRecenterTarget(
+      heading, kPlayerHeadingUnitsPerTurn,
+      g_third_person_orbit_state.radius, head_rise);
+  if (!target.valid) return;
+  const double target_pitch = std::clamp(target.pitch,
+      g_third_person_orbit_min_pitch_radians,
+      g_third_person_orbit_max_pitch_radians);
+  if (g_camera_recenter.Begin(context,
+          g_third_person_orbit_state.yaw, g_third_person_orbit_state.pitch,
+          target.yaw, target_pitch,
+          g_camera_recenter_duration_seconds)) {
+    g_third_person_orbit_state.filtered_input_x = 0.0;
+    g_third_person_orbit_state.filtered_input_y = 0.0;
+    AppendNativeLog("camera_recenter source=Y heading=%d yaw=%.2f pitch=%.2f "
+        "head_rise=%.1f duration_ms=%u", heading,
+        target.yaw * 180.0 / kOrbitPi, target_pitch * 180.0 / kOrbitPi,
+        head_rise, static_cast<unsigned>(g_camera_recenter_duration_seconds * 1000));
+  }
 }
 
 bool LivePlayerUsesGroundStateDispatcher() {
@@ -13856,6 +14066,8 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         (pressed & XINPUT_GAMEPAD_LEFT_THUMB) != 0) {
       ToggleCustomHeadView("L3");
     }
+    HandleControllerCameraRecenter(pressed, right_x, right_y,
+                                   selector_captures_controls);
     const bool first_person_requested =
         g_xinput_first_person_toggled.load(std::memory_order_acquire);
     set_gameplay_command(
@@ -13897,6 +14109,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         !selector_captures_controls && !first_person_active &&
             CustomCameraOwnsMode3());
   } else {
+    g_camera_recenter.Cancel();
     PublishCameraRelativeMovementIntent(false, 0, 0.0);
     PublishNativeJoystickMovement(false, 0.0, 0.0);
     g_xinput_direct_heading_steering_was_active = false;
@@ -14037,6 +14250,7 @@ void UpdateDeathtrapXInput() {
   g_xinput_controller_present.store(connected, std::memory_order_release);
   LogSupportControllerPresence(connected);
   if (!connected || !IsGameForeground()) {
+    g_camera_recenter.Cancel();
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
     if (g_xinput_was_connected) {
       ReleaseInjectedControllerInput();
@@ -14061,6 +14275,7 @@ void UpdateDeathtrapXInput() {
   // only gameplay so engine actions and the native selector never run from a
   // foreign input thread.
   if (!gameplay) {
+    g_camera_recenter.Cancel();
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
     return;
   }
@@ -18808,10 +19023,148 @@ void ResetSceneHistory() {
   }
 }
 
+thread_local deathtrap::timing::Frame* g_active_timing_frame = nullptr;
+thread_local deathtrap::timing::Window g_timing_window;
+thread_local int64_t g_timing_clock_origin = 0;
+
+double TimingMilliseconds(int64_t ticks) {
+  return static_cast<double>(ticks) * 1000.0 /
+      static_cast<double>(g_qpc_frequency.QuadPart);
+}
+
+void LogTimingSummary(const deathtrap::timing::Summary& sample) {
+  const auto& mode = sample.mode;
+  const uint32_t target_ms = mode.scheduler_rate > 0
+      ? (100u / static_cast<uint32_t>(mode.scheduler_rate)) * 10u : 0u;
+  AppendDeathtrapSupportLog(
+      "support_timing schema=1 reason=%s t_ms=%.1f wall_ms=%.1f ticks=%llu "
+      "gameplay=%u foreground=%u subframes=%u passes=%u requested_rate=%d "
+      "scheduler_rate=%d target_source_ms=%u selector=%u slow=%u "
+      "source_hz=%.3f interval_samples=%llu source_avg_ms=%.3f "
+      "source_max_ms=%.3f outside_avg_ms=%.3f outside_max_ms=%.3f gaps=%llu "
+      "hook_avg_ms=%.3f hook_max_ms=%.3f",
+      sample.mode_changed ? "mode_change" : "periodic", sample.begin_ms,
+      sample.WallMilliseconds(), static_cast<unsigned long long>(sample.ticks),
+      mode.gameplay ? 1u : 0u, mode.foreground ? 1u : 0u, mode.subframes,
+      mode.presentation_passes, mode.requested_rate, mode.scheduler_rate,
+      target_ms, mode.selector_mode, mode.slow_motion ? 1u : 0u,
+      sample.source_intervals.Hertz(),
+      static_cast<unsigned long long>(sample.source_intervals.count),
+      sample.source_intervals.Average(), sample.source_intervals.maximum,
+      sample.outside_hooks.Average(), sample.outside_hooks.maximum,
+      static_cast<unsigned long long>(sample.long_gaps), sample.hooks.Average(),
+      sample.hooks.maximum);
+  AppendDeathtrapSupportLog(
+      "support_timing_render t_ms=%.1f render_calls_hz=%.3f "
+      "synthetic_renders=%llu retail_calls=%llu synthetic_avg_ms=%.3f "
+      "synthetic_max_ms=%.3f retail_avg_ms=%.3f retail_max_ms=%.3f "
+      "pacing_avg_ms=%.3f pacing_max_ms=%.3f present_observed=%u "
+      "dxgi_ok_hz=%.3f dxgi_interval_samples=%llu present_calls=%llu present_avg_ms=%.3f "
+      "present_max_ms=%.3f sync_min=%u sync_max=%u flags=0x%08X "
+      "present_failures=%llu present_non_display=%llu last_hr=0x%08X "
+      "restore_suppressed=%llu",
+      sample.begin_ms,
+      sample.RenderHertz(),
+      static_cast<unsigned long long>(sample.synthetic_renders),
+      static_cast<unsigned long long>(sample.retail_calls),
+      sample.synthetic.Average(), sample.synthetic.maximum,
+      sample.retail.Average(), sample.retail.maximum,
+      sample.pacing.Average(), sample.pacing.maximum,
+      sample.present_calls ? 1u : 0u, sample.PresentHertz(),
+      static_cast<unsigned long long>(sample.timed_present_ok > 0u
+          ? sample.timed_present_ok - 1u : 0u),
+      static_cast<unsigned long long>(sample.present_calls),
+      sample.presents.Average(), sample.presents.maximum,
+      sample.present_calls ? sample.sync_min : 0u, sample.sync_max,
+      sample.present_flags,
+      static_cast<unsigned long long>(sample.present_failures),
+      static_cast<unsigned long long>(sample.present_non_display),
+      static_cast<uint32_t>(sample.last_present_result),
+      static_cast<unsigned long long>(sample.restore_suppressed));
+}
+
+class NativeTimingTick {
+ public:
+  NativeTimingTick() {
+    if (!g_extended_log_enabled.load(std::memory_order_relaxed) ||
+        g_active_timing_frame || g_qpc_frequency.QuadPart <= 0) {
+      return;
+    }
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    if (!g_timing_clock_origin) {
+      g_timing_clock_origin = now.QuadPart;
+    }
+    frame_.begin_ms = TimingMilliseconds(now.QuadPart - g_timing_clock_origin);
+    interpolated_before_ = g_interpolated_frames.load(std::memory_order_relaxed);
+    suppressed_before_ = GetDeathtrapNativeSuppressedPresentCount();
+    g_active_timing_frame = &frame_;
+    active_ = true;
+  }
+  bool Active() const { return active_; }
+  void Configure(const deathtrap::timing::Mode& mode) { mode_ = mode; }
+  ~NativeTimingTick() {
+    if (!active_) {
+      return;
+    }
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    frame_.end_ms = TimingMilliseconds(now.QuadPart - g_timing_clock_origin);
+    frame_.synthetic_renders =
+        g_interpolated_frames.load(std::memory_order_relaxed) -
+        interpolated_before_;
+    frame_.restore_suppressed = GetDeathtrapNativeSuppressedPresentCount() -
+        suppressed_before_;
+    g_active_timing_frame = nullptr;
+    deathtrap::timing::Summary summary;
+    if (g_timing_window.Add(mode_, frame_, &summary)) {
+      LogTimingSummary(summary);
+    }
+  }
+
+ private:
+  bool active_ = false;
+  deathtrap::timing::Frame frame_;
+  deathtrap::timing::Mode mode_;
+  uint64_t interpolated_before_ = 0;
+  uint64_t suppressed_before_ = 0;
+};
+
+enum class NativeTimingSpanKind { kSynthetic, kRetail, kPacing };
+
+class NativeTimingSpan {
+ public:
+  explicit NativeTimingSpan(NativeTimingSpanKind kind)
+      : frame_(g_active_timing_frame), kind_(kind) {
+    if (frame_) {
+      QueryPerformanceCounter(&start_);
+    }
+  }
+  ~NativeTimingSpan() {
+    if (!frame_) {
+      return;
+    }
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    const double elapsed = TimingMilliseconds(now.QuadPart - start_.QuadPart);
+    switch (kind_) {
+      case NativeTimingSpanKind::kSynthetic: frame_->synthetic_ms += elapsed; break;
+      case NativeTimingSpanKind::kRetail: frame_->retail_ms += elapsed; break;
+      case NativeTimingSpanKind::kPacing: frame_->pacing_ms += elapsed; break;
+    }
+  }
+
+ private:
+  deathtrap::timing::Frame* frame_;
+  NativeTimingSpanKind kind_;
+  LARGE_INTEGER start_{};
+};
+
 void WaitUntil(const LARGE_INTEGER& target) {
   if (!g_qpc_frequency.QuadPart) {
     return;
   }
+  const NativeTimingSpan timing(NativeTimingSpanKind::kPacing);
   for (;;) {
     LARGE_INTEGER now{};
     QueryPerformanceCounter(&now);
@@ -18943,6 +19296,7 @@ InterpolatedPassResult RenderInterpolatedPass(
     void* context, const SceneSnapshot* older,
     const SceneSnapshot& previous, SceneSnapshot& current,
     double phase, bool update_temporal_state, uint64_t source_tick) {
+  const NativeTimingSpan timing(NativeTimingSpanKind::kSynthetic);
   InterpolatedPassResult result;
   const UiRenderStateSnapshot ui_before = CaptureUiRenderState();
   g_active_presentation_trace.midpoint_camera_focus_valid = false;
@@ -19064,6 +19418,10 @@ InterpolatedPassResult RenderInterpolatedPass(
 }
 
 void CallOriginalRenderPresentWait(void* context, int wait) {
+  const NativeTimingSpan timing(NativeTimingSpanKind::kRetail);
+  if (g_active_timing_frame) {
+    ++g_active_timing_frame->retail_calls;
+  }
   g_original_render_present_wait(context, wait);
 }
 
@@ -19109,6 +19467,7 @@ void PublishSelectorTimePlan(const deathtrap::selector_time::Plan& plan) {
 }
 
 void __cdecl HookRenderPresentWait(void* context, int wait) {
+  NativeTimingTick timing;
   if (ConsumeDeathtrapImmersiveKeyboardToggle() && IsGameForeground() &&
       DeathtrapGameplayReady(false)) {
     ToggleCustomHeadView("keyboard_binding");
@@ -19122,6 +19481,11 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
     AppendNativeLog("runtime native interpolation=%s passes=%u via keyboard",
                     toggled ? "ENABLED" : "DISABLED",
                     toggled ? toggled - 1u : 0u);
+    if (timing.Active()) {
+      AppendDeathtrapSupportLog(
+          "support_timing_toggle source=keyboard old_subframes=%u "
+          "new_subframes=%u", previous, toggled);
+    }
   }
   // Consume input only once at the real scheduler boundary. Synthetic render
   // phases never poll DirectInput and never feed another weapon action back
@@ -19137,6 +19501,22 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
   const int effective_wait = selector_time.active
                                  ? static_cast<int>(selector_time.scheduler_rate)
                                  : wait;
+  if (timing.Active()) {
+    deathtrap::timing::Mode mode;
+    mode.requested_rate = wait;
+    mode.scheduler_rate = effective_wait;
+    mode.subframes = subframes;
+    mode.presentation_passes = std::clamp(presentation_passes, 1u, 24u);
+    uint8_t selector = 0;
+    if (g_dungeon_base) {
+      SafeReadValue(g_dungeon_base + kUiSelectorModeRva, &selector);
+    }
+    mode.selector_mode = selector;
+    mode.slow_motion = selector_time.active;
+    mode.gameplay = DeathtrapGameplayReady(false);
+    mode.foreground = IsGameForeground();
+    timing.Configure(mode);
+  }
   // The retail rate setter is not a per-frame request; it publishes one
   // persistent global scheduler period. Always write the effective rate here,
   // including the original value on selector exit, or the process remains at
@@ -19527,6 +19907,9 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
 
 void InitializePatchState() {
   g_debug_log = ConfiguredDebugLog();
+  g_extended_log_enabled.store(
+      ConfiguredInteger(L"Diagnostics", L"ExtendedLogs", 0) != 0,
+      std::memory_order_relaxed);
   const std::wstring display_mode =
       ConfiguredText(L"Display", L"Mode", L"borderless");
   g_display_windowed = _wcsicmp(display_mode.c_str(), L"windowed") == 0;
@@ -19622,6 +20005,8 @@ void InitializePatchState() {
       static_cast<double>(std::clamp(
           ConfiguredInteger(L"Camera", L"ResponseTimeMs", 50), 20, 300)) /
       1000.0;
+  g_camera_recenter_duration_seconds = static_cast<double>(std::clamp(
+      ConfiguredInteger(L"Camera", L"RecenterTimeMs", 420), 120, 1200)) / 1000.0;
   int32_t minimum_pitch_degrees = std::clamp(
       ConfiguredInteger(L"Camera", L"MinimumPitchDegrees", -35), -50, 70);
   int32_t maximum_pitch_degrees = std::clamp(
@@ -19773,6 +20158,10 @@ void InitializePatchState() {
   const uint32_t subframes = ConfiguredSubframes();
   g_subframes.store(subframes, std::memory_order_relaxed);
   LogCompactSupportEnvironment(subframes);
+  AppendDeathtrapSupportLog(
+      "support_extended_config schema=1 enabled=%u interval_ms=2000 debug=%u",
+      g_extended_log_enabled.load(std::memory_order_relaxed) ? 1u : 0u,
+      g_debug_log ? 1u : 0u);
 
   HMODULE dungeon = GetModuleHandleW(L"Dungeon.dll");
   if (!dungeon) {
@@ -19974,6 +20363,142 @@ bool PatchDungeonCode(uintptr_t rva,
   DWORD ignored = 0;
   VirtualProtect(address, Size, old_protection, &ignored);
   return written;
+}
+
+constexpr DungeonCodeRva kFontAtlasSetupRva{0x00059A80u};
+constexpr DungeonCodeRva kFontAtlasLoopCompareRva{0x00059B77u};
+constexpr DungeonCodeRva kFontHeightBranchRva{0x0003A166u};
+constexpr DungeonCodeRva kFontHeightIndexRva{0x0003A171u};
+constexpr DungeonDataRva kFontGlyphCacheRva{
+    0x001051A0u, 0x00105C00u, 0x00105670u, 0x00105850u};
+constexpr DungeonDataRva kFontAtlasPixelsRva{
+    0x00205DE0u, 0x00206840u, 0x002062B0u, 0x00206490u};
+using FontAtlasSetupFn = void(__cdecl*)(const void* font);
+FontAtlasSetupFn g_original_font_atlas_setup = nullptr;
+uintptr_t g_font_atlas_loop_limit = 0;
+bool g_font_text_fix_installed = false;
+std::array<bool, deathtrap::text::kMaximumFontGlyphs + 1>
+    g_font_counts_logged{};
+
+// Replaces ONLY the original five-byte CMP at the CPU atlas-loop boundary.
+// CALL/RET leave all registers intact; CMP supplies the exact flags consumed
+// by the following retail JB. Texture creation/upload/presentation stay native.
+__declspec(naked) void CompareFontAtlasLoopLimit() {
+  __asm {
+    cmp eax, dword ptr [g_font_atlas_loop_limit]
+    ret
+  }
+}
+
+void __cdecl HookFontAtlasSetup(const void* font) {
+  if (!g_original_font_atlas_setup || !g_dungeon_base) {
+    return;
+  }
+  deathtrap::text::RetailFontHeader header{};
+  std::array<deathtrap::text::RetailFontGlyph,
+             deathtrap::text::kMaximumFontGlyphs> glyphs{};
+  size_t count = 0;
+  if (SafeRead(font, &header, sizeof(header)) &&
+      header.signature == deathtrap::text::kRetailFontSignature &&
+      header.glyph_count > 0 && header.glyph_count <= glyphs.size() &&
+      SafeRead(static_cast<const uint8_t*>(font) + sizeof(header),
+               glyphs.data(), header.glyph_count * sizeof(glyphs[0]))) {
+    count = deathtrap::text::AtlasGlyphCount(header, glyphs.data(),
+                                            header.glyph_count);
+  }
+  // Unsupported/malformed fonts retain the retail 96-glyph behavior.
+  // Valid fonts use their actual count, not a hard-coded 160/224 that could
+  // read past a smaller credits font or overflow the original atlas.
+  const size_t effective_count = count ? count : 96u;
+  const uintptr_t cache = reinterpret_cast<uintptr_t>(
+      g_dungeon_base + kFontGlyphCacheRva);
+  g_font_atlas_loop_limit = cache +
+      (deathtrap::text::kFirstFontCharacter + effective_count) * 32u;
+  __try {
+    // Switching to a smaller font must not reuse a preceding font's glyphs
+    // or textured pixels. The native cache has exactly 256 32-byte slots.
+    std::memset(reinterpret_cast<void*>(cache), 0, 256u * 32u);
+    std::memset(g_dungeon_base + kFontAtlasPixelsRva, 0, 256u * 256u);
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    g_font_atlas_loop_limit = cache + 128u * 32u;
+  }
+  if (count && !g_font_counts_logged[count]) {
+    g_font_counts_logged[count] = true;
+    AppendDeathtrapSupportLog(
+        "support_font_atlas glyphs=%u declared=%u encoding=cp850",
+        static_cast<unsigned>(count), header.glyph_count);
+  }
+  g_original_font_atlas_setup(font);
+}
+
+bool InstallGameTextFix() {
+  if (g_font_text_fix_installed) {
+    return true;
+  }
+  if (!g_dungeon_base ||
+      g_dungeon_image_variant == DungeonImageVariant::kUnsupported) {
+    return false;
+  }
+  constexpr std::array<uint8_t, 8> kSetupPrologue = {
+      0x81, 0xEC, 0xA8, 0x00, 0x00, 0x00, 0x33, 0xD2};
+  constexpr std::array<uint8_t, 2> kSignedBranch = {0x7D, 0x03};
+  constexpr std::array<uint8_t, 2> kUnsignedBranch = {0x73, 0x03};
+  constexpr std::array<uint8_t, 3> kSignedIndex = {0x0F, 0xBE, 0xC0};
+  constexpr std::array<uint8_t, 3> kUnsignedIndex = {0x0F, 0xB6, 0xC0};
+  std::array<uint8_t, 5> original_compare{0x3D};
+  const uintptr_t retail_limit = reinterpret_cast<uintptr_t>(
+      g_dungeon_base + kFontGlyphCacheRva) + 128u * 32u;
+  std::memcpy(original_compare.data() + 1, &retail_limit, 4);
+  if (!MatchesDungeonCode(kFontAtlasSetupRva, kSetupPrologue) ||
+      !MatchesDungeonCode(kFontAtlasLoopCompareRva, original_compare) ||
+      !MatchesDungeonCode(kFontHeightBranchRva, kSignedBranch) ||
+      !MatchesDungeonCode(kFontHeightIndexRva, kSignedIndex)) {
+    AppendDeathtrapSupportLog("support_game_text state=signature_mismatch");
+    return false;
+  }
+  void* const target = g_dungeon_base + kFontAtlasSetupRva;
+  const MH_STATUS create = MH_CreateHook(
+      target, reinterpret_cast<void*>(&HookFontAtlasSetup),
+      reinterpret_cast<void**>(&g_original_font_atlas_setup));
+  if (create != MH_OK) {
+    AppendDeathtrapSupportLog("support_game_text state=create_failed status=%d",
+                             static_cast<int>(create));
+    return false;
+  }
+  std::array<uint8_t, 5> dynamic_compare{0xE8};
+  const uint32_t displacement = static_cast<uint32_t>(
+      reinterpret_cast<uintptr_t>(&CompareFontAtlasLoopLimit) -
+      reinterpret_cast<uintptr_t>(g_dungeon_base +
+                                  kFontAtlasLoopCompareRva + 5u));
+  std::memcpy(dynamic_compare.data() + 1, &displacement, 4);
+  g_font_atlas_loop_limit = retail_limit;
+  const bool patched =
+      PatchDungeonCode(kFontAtlasLoopCompareRva, original_compare,
+                       dynamic_compare) &&
+      PatchDungeonCode(kFontHeightBranchRva, kSignedBranch, kUnsignedBranch) &&
+      PatchDungeonCode(kFontHeightIndexRva, kSignedIndex, kUnsignedIndex);
+  const MH_STATUS enable = patched ? MH_EnableHook(target) : MH_UNKNOWN;
+  if (!patched || enable != MH_OK) {
+    PatchDungeonCode(kFontHeightIndexRva, kUnsignedIndex, kSignedIndex);
+    PatchDungeonCode(kFontHeightBranchRva, kUnsignedBranch, kSignedBranch);
+    PatchDungeonCode(kFontAtlasLoopCompareRva, dynamic_compare,
+                     original_compare);
+    MH_RemoveHook(target);
+    g_original_font_atlas_setup = nullptr;
+    AppendDeathtrapSupportLog("support_game_text state=install_failed");
+    return false;
+  }
+  g_font_text_fix_installed = true;
+  g_selector_text_set_font = reinterpret_cast<GameTextSetFontFn>(
+      g_dungeon_base + kKeyboardBindingSetFontRva);
+  g_selector_text_width = reinterpret_cast<GameTextWidthFn>(
+      g_dungeon_base + kGameTextWidthRva);
+  g_selector_text_queue = reinterpret_cast<GameTextQueueFn>(
+      g_dungeon_base + kGameTextQueueRva);
+  AppendDeathtrapSupportLog(
+      "support_game_text state=active glyphs=font_declared "
+      "encoding=cp850 height_index=unsigned ui_language=game radial_names=1");
+  return true;
 }
 
 bool InstallRootMenuEscapeHook() {
@@ -20209,6 +20734,29 @@ void AppendDeathtrapSupportLog(const char* format, ...) {
   va_start(args, format);
   AppendSupportLogV(format, args);
   va_end(args);
+}
+
+uint64_t BeginDeathtrapPresentTiming() {
+  if (!g_active_timing_frame) {
+    return 0;
+  }
+  LARGE_INTEGER now{};
+  QueryPerformanceCounter(&now);
+  return static_cast<uint64_t>(now.QuadPart);
+}
+
+void EndDeathtrapPresentTiming(uint64_t start, uint32_t sync_interval,
+                               uint32_t flags, int32_t result) {
+  if (!start || !g_active_timing_frame) {
+    return;
+  }
+  LARGE_INTEGER now{};
+  QueryPerformanceCounter(&now);
+  deathtrap::timing::RecordPresent(
+      g_active_timing_frame,
+      TimingMilliseconds(now.QuadPart - static_cast<int64_t>(start)),
+      sync_interval, flags, result,
+      TimingMilliseconds(now.QuadPart - g_timing_clock_origin));
 }
 
 const wchar_t* GetDeathtrapSessionLogPath() {
@@ -20561,6 +21109,10 @@ bool InstallDeathtrapNativeRenderHooks() {
   // Keyboard bindings are patch-owned. Load them before either gameplay or
   // the paged retail editor can poll input.
   InitializeKeyboardBindingStore();
+
+  // Extend the existing font atlas to the FNT's declared glyph count. Keep
+  // original localized strings/assets and the native renderer/upload path.
+  InstallGameTextFix();
 
   // The retail root menu maps Escape to Quit. Route only that Escape result
   // to its own native Return-to-game action when a session exists, or consume

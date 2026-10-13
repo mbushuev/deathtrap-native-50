@@ -210,12 +210,37 @@ selector. This prevents keyboard-to-controller switching from permanently
 blocking the radial menu.
 
 The hook at `Dungeon.dll+0x772A0` receives the retail 12-byte inventory-slot
-draw state (coordinates, icon, selected/available flags, slot number and
+draw state (coordinates, icon, selection/quantity-display flags, slot number and
 quantity). While a controller selector is open, it copies that state, changes
 only the coordinates and selected flag, and calls the original renderer. This
 creates the radial presentation from native game assets without copying icon
 textures or feeding overlay graphics into interpolation. The D3D11 layer no
 longer paints its old debug squares.
+
+For the selected available slot, the hook also queues its original localized
+pickup name through the native `+0x3A080` text command producer. The name table
+is profile-specific (EN `+0xF85D0`, FR `+0xF9028`, DE `+0xF8AA0`, IT `+0xF8C78`);
+the ranged row's seventh slot remains empty and its eighth chalk slot has a
+localized special label. Names use the original gold gameplay `0x1112` font
+(verified against the actual gameplay RGB palette), native string
+widths and viewport bounds, with at most two lines inside the radial gap. The
+caller's font and all icon/quantity/availability state are preserved. This
+never invokes the immediate frontend text presenter or consumes an item.
+Name presence follows the actual native icon/blank fields, not the quantity
+flag (which is zero for all melee weapons). Text compensates the widescreen
+context gutter and uses the visual midpoint of the upward-aligned 32px cells.
+
+The gameplay `Y` edge starts a 420 ms shortest-arc third-person orbit return
+to a snapshot of the actor heading in the third-person coordinate convention
+(not the opposite head-view yaw). Pitch places the requested endpoint 96 world
+units above the resolved head center; a stable torso-relative fallback is used
+if the head cannot be resolved. The configured pitch bounds remain active,
+and the old retail starting tilt is not restored. It advances
+only for a fresh native source input sample, never for a synthetic rendering
+pass. It changes yaw/pitch only, leaving actor heading, spring-arm radius and
+the existing collision/interpolation owners intact. Manual look, focus loss,
+disconnect, selectors, menus, first-person transitions, scripted takeover and
+teleport/reset cancel the operation rather than leaving a deferred request.
 
 Version 0.0.128 feeds forward magnitude into the retail DirectInput joystick
 poll at `Dungeon.dll+0x51500`. The game's own `JOY_*` bindings, deadzone/action

@@ -138,11 +138,23 @@ if ($LASTEXITCODE -ne 0) { throw 'Controller movement zones/steps test failed.' 
 & (Join-Path $buildPath "$Configuration\controller_base_bindings_test.exe")
 if ($LASTEXITCODE -ne 0) { throw 'Controller base binding boundary test failed.' }
 
+& (Join-Path $buildPath "$Configuration\game_text_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'Localized game text/font bounds test failed.' }
+
+& (Join-Path $buildPath "$Configuration\controller_ui_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'Radial names/camera recenter ownership test failed.' }
+
 & $safeSave
 if ($LASTEXITCODE -ne 0) { throw 'Safe save eligibility test failed.' }
 
 & $selectorTime
 if ($LASTEXITCODE -ne 0) { throw 'Selector time dilation test failed.' }
+
+& (Join-Path $buildPath "$Configuration\timing_diagnostics_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'Timing diagnostics aggregation test failed.' }
+
+& (Join-Path $buildPath "$Configuration\timing_diagnostics_runtime_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'Timing diagnostics runtime/toggle test failed.' }
 
 & $selectorGameplay
 if ($LASTEXITCODE -ne 0) { throw 'Selector gameplay command test failed.' }

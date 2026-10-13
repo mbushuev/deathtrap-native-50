@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current version: **0.0.233**
+Current version: **0.0.234**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -9,7 +9,7 @@ Current version: **0.0.233**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.233-clean.png" alt="Deathtrap Native 50 v0.0.233 — Steam Deck and controller movement refinements" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.234.png" alt="Deathtrap Native 50 v0.0.234 — Steam Deck, controller camera and localized interface improvements" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -75,6 +75,10 @@ redistribution terms.
   and save-file format; the original authored save points remain available.
 - Two-page in-game keyboard rebinding for all twenty gameplay and patch
   actions, with modern defaults and support for the function keys.
+- Game-language keyboard labels and hardware captions, with the original
+  accented font glyphs preserved in rendered menus and gameplay messages.
+- Localized selected-item names in controller radial selectors, and a smooth
+  third-person camera return behind the character with `Y`.
 - Longer gameplay prompts and safe automatic per-launch support logs.
 
 See the [user-facing changelog](CHANGELOG.md) for the complete consolidated
@@ -412,6 +416,12 @@ normal presentation rate. This also applies to the body-visible immersive
 first-person view. The percentage can be changed under `[Selector]` in
 `deathtrap_native.ini`.
 
+Keyboard action labels follow the game's English, French, German or Italian
+language, independently of the Windows keyboard layout. Original actions keep
+their original translations; the added actions and first-person inversion
+caption are localized too. Accented characters use the game's original fonts
+and encoding, without replacing letters or changing Windows language settings.
+
 The patch enables the retail Save command at safe grounded positions outside
 the original save points. Saving and loading still use the original menu,
 slot screens and save-file format.
@@ -431,7 +441,7 @@ slot screens and save-file format.
 | `A` | Jump or climb | Confirm; skip supported movies/screens |
 | `B` | Cast/use contextual spell action | Back/cancel |
 | `X` | Operate/interact | Alternate skip on supported screens |
-| `Y` | Unassigned | Unassigned |
+| `Y` | Smoothly return the third-person camera behind the character | — |
 | `RT` | Attack; combine with the left stick for directional attacks | — |
 | `LT` | Block/parry | — |
 | Hold `RB` + left stick | Original left/right side-step animations; cautious forward/backward steps without turning | — |
@@ -446,6 +456,17 @@ slot screens and save-file format.
 D-pad categories are up for melee weapons, right for ranged items, down for
 spells/shields, and left for potions/charms. Camera input is suppressed while
 the radial selector owns the right stick.
+
+The selected weapon, spell or item's original localized name appears in the
+center of the radial selector. Long names use up to two lines; empty or
+unavailable slots show no name.
+
+Press `Y` to smoothly return the modern third-person camera behind the
+character, slightly above head height. The character is not turned by this
+action, and normal camera collision checks remain active. Right-stick or
+mouse look interrupts the return. Menus, selectors, first-person views and
+scripted shots do not accept it. The default duration is 420 ms; change
+`RecenterTimeMs` under `[Camera]` to adjust it independently of rendering FPS.
 
 With the modern third-person camera, the left stick turns the character toward
 the selected camera-relative course before greater deflection starts walking.
@@ -575,3 +596,25 @@ initial investigation.
 the much larger development telemetry to the same per-launch file and should
 only be done when specifically requested. Heavy `CameraProbe` and
 `HeadJointProbe` streams should remain disabled unless requested.
+
+To collect extended diagnostics when asked, open `deathtrap_native.ini` and
+change only `ExtendedLogs=0` to `ExtendedLogs=1` under `[Diagnostics]`.
+Restart, reproduce the issue, then close the game and send the newest
+`deathtrap-native-*.log` from `logs`. For an F11 issue, switch between the two
+render-rate modes during that session. Afterwards restore `ExtendedLogs=0`.
+No other setting, timed run, external tool or separate log file is needed.
+
+Extended logs are off by default and independent of DebugLog. They record
+two-second summaries of measured source-tick intervals (including gameplay
+outside our render hook), synthetic rendering, retail rendering/waiting,
+explicit pacing waits, and DXGI Present duration, sync interval, flags and
+results when that Windows hook is available. F11, selector, menu and foreground
+transitions split the samples so intentional selector slow motion is not mixed
+with ordinary play. `source_hz` is measured, not the nominal configured rate.
+`render_calls_hz` derives render-call frequency from measured source cadence;
+`dxgi_ok_hz` measures intervals between successful non-test DXGI submissions,
+not monitor scanouts. Fewer than one interval is insufficient for a rate.
+`present_observed=0` means unavailable,
+not zero FPS (for example on Proton/DXVK). Present time is included in render
+time, so these durations must not be added together. With ExtendedLogs off, its
+clock probes and periodic records are skipped; existing support logs remain.

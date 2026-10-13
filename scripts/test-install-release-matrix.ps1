@@ -115,7 +115,8 @@ try {
         Check ($dllVersion.ProductVersion -eq $version) "Wrong $name patch version."
         $ini = Get-Content -LiteralPath (Join-Path $game 'deathtrap_native.ini') -Raw
         foreach ($line in @('MovementThresholdPercent=45', 'RunThresholdPercent=90',
-                            'VibrationOutputGainPercent=100', 'DebugLog=0')) {
+                            'VibrationOutputGainPercent=100', 'DebugLog=0',
+                            'ExtendedLogs=0')) {
             Check ($ini -match "(?m)^$([regex]::Escape($line))\s*$") `
                 "Wrong $name default: $line"
         }

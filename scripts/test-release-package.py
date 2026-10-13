@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check the downloadable ZIP without silently repairing Windows path names."""
 
+import configparser
 import hashlib
 from pathlib import PurePosixPath
 import sys
@@ -51,6 +52,11 @@ def verify_archive(path):
             raise ValueError("INSTALL-DECK.sh must use LF line endings")
         if b"\r" in archive.read("SHA256SUMS.txt"):
             raise ValueError("SHA256SUMS.txt must use LF line endings")
+        settings = configparser.ConfigParser(interpolation=None)
+        settings.read_string(archive.read("payload/deathtrap_native.ini").decode("utf-8"))
+        for name in ("DebugLog", "ExtendedLogs"):
+            if settings.get("Diagnostics", name, fallback=None) != "0":
+                raise ValueError(f"Diagnostics/{name} must be disabled in the ZIP")
     print("Release ZIP paths, required files and checksums passed.")
 
 

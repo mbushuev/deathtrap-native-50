@@ -1616,10 +1616,16 @@ HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* swap_chain,
     allowed = AllowNativeD3D11Present(swap_chain);
   }
   const SwapChainPresentFn original = OriginalPresent(swap_chain);
+  const uint64_t timing_start = outer && allowed && original
+      ? BeginDeathtrapPresentTiming() : 0u;
   const HRESULT result =
       !allowed ? S_OK
                : (original ? original(swap_chain, sync_interval, flags)
                            : E_FAIL);
+  if (timing_start) {
+    EndDeathtrapPresentTiming(timing_start, sync_interval, flags,
+                             static_cast<int32_t>(result));
+  }
   if (outer) {
     g_inside_present = false;
   }
@@ -1645,11 +1651,17 @@ HRESULT STDMETHODCALLTYPE HookPresent1(
     allowed = AllowNativeD3D11Present(swap_chain);
   }
   const SwapChainPresent1Fn original = OriginalPresent1(swap_chain);
+  const uint64_t timing_start = outer && allowed && original
+      ? BeginDeathtrapPresentTiming() : 0u;
   const HRESULT result =
       !allowed ? S_OK
                : (original ? original(swap_chain, sync_interval, flags,
                                       parameters)
                            : E_FAIL);
+  if (timing_start) {
+    EndDeathtrapPresentTiming(timing_start, sync_interval, flags,
+                             static_cast<int32_t>(result));
+  }
   if (outer) {
     g_inside_present = false;
   }

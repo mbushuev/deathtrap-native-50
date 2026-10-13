@@ -8,6 +8,36 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.234 — Steam Deck, controller camera and localized interface improvements
+
+- Retains the complete Windows and Steam Deck experience from 0.0.233,
+  including approximately 50 FPS presentation, widescreen, modern camera,
+  controller menus, radial selectors, cautious movement and Deck-tuned vibration.
+- Adds localized names for selected weapons, spells and items in the center of
+  controller radial selectors. Names follow the game's language, use the
+  original yellow gameplay font and wrap long entries to two bounded lines.
+  The native icon/blank state determines presence, so melee weapons and other
+  available entries are labeled without depending on a quantity display.
+- Adds a smooth camera return on `Y` in modern third person: the camera moves
+  behind the character, slightly above the head, without turning the character
+  or changing the selected distance. Normal collision checks remain active.
+  Mouse/right-stick look interrupts the return; menus, selectors, first-person
+  views and scripted shots retain their existing input ownership.
+- Restores the original accented font glyphs in gameplay messages and menus
+  without replacing the game's fonts, text files or other assets.
+- Localizes the added keyboard-action labels and the first-person inversion
+  caption for the supported French, German and Italian GOG releases, while
+  preserving their original keyboard-action labels and custom bindings.
+- Adds optional extended support logs for diagnosing timing and rendering
+  problems. Change only `ExtendedLogs=0` to `ExtendedLogs=1` under
+  `[Diagnostics]`, restart and reproduce the issue; measurements distinguish
+  normal play, selector slow motion, render-rate modes, rendering waits and
+  observed DXGI submissions. Extended logs and development diagnostics are
+  disabled by default; compact per-launch support logs remain automatic.
+- Preserves the portable ZIP layout and Steam Deck installation options:
+  automatic Steam discovery, installation inside the game folder and an
+  explicit custom path containing `DD_CD.EXE`.
+
 ## 0.0.233 — Steam Deck and controller movement refinements
 
 **Important: gamepad controls have changed on Steam Deck and Windows.** Spell

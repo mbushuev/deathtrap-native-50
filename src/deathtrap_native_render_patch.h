@@ -13,6 +13,12 @@ const wchar_t* GetDeathtrapSessionLogPath();
 // builds. Never pass user paths or other private data to this function.
 void AppendDeathtrapSupportLog(const char* format, ...);
 
+// Optional Diagnostics/ExtendedLogs instrumentation. A zero start token means
+// disabled or outside the source-render scope; no clock query is then made.
+uint64_t BeginDeathtrapPresentTiming();
+void EndDeathtrapPresentTiming(uint64_t start, uint32_t sync_interval,
+                               uint32_t flags, int32_t result);
+
 enum class DeathtrapNativeRenderPatchState : uint32_t {
   kNotAttempted,
   kDisabled,

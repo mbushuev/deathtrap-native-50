@@ -473,6 +473,14 @@ Up/down equip on release; ranged,
 chalk and consumable selections require A. `SelectorRadius` and
 `SelectorCenterY` adjust the ring in the game's logical coordinate space.
 
+The selected available entry shows its original localized item name in the
+center of the ring. Long names wrap to two bounded lines, and empty entries
+show no name. In modern third person, a fresh `Y` press smoothly returns the
+camera behind the character, slightly above head height, without turning
+the actor. Manual right-stick/mouse look interrupts it; menus, selectors,
+first person and scripted camera shots do not accept it. `RecenterTimeMs`
+under `[Camera]` defaults to 420 ms independently of presentation FPS.
+
 The validated 4:3 center is `SelectorCenterY=316`; the retail UI uses an
 upward-growing Y axis with its origin near the bottom edge, not D3D screen
 coordinates. Circular left-stick thresholds are measured after its deadzone:

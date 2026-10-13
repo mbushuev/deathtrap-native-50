@@ -75,6 +75,8 @@ verify_install() {
         'VibrationOutputGainPercent=300'
     assert_text_line "$game/deathtrap_native.ini" 'MovementThresholdPercent=45'
     assert_text_line "$game/deathtrap_native.ini" 'RunThresholdPercent=90'
+    assert_text_line "$game/deathtrap_native.ini" 'ExtendedLogs=0'
+    assert_text_line "$game/deathtrap_native.ini" 'DebugLog=0'
     assert_text_line "$game/dxwrapper.ini" 'DdrawClearFlipBackBuffer = 1'
     assert_text_line "$game/dxwrapper.ini" 'DdrawUseExternalD3D9 = 1'
     if ((expect_launcher)); then

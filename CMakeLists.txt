@@ -111,6 +111,30 @@ target_include_directories(camera_spring_arm_test PRIVATE src)
 target_compile_options(camera_spring_arm_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
 
+add_executable(game_text_test
+  tools/game_text_test.cc
+  src/dinput_native_proxy.cc
+  src/native_d3d11_present_guard.cc)
+target_compile_features(game_text_test PRIVATE cxx_std_17)
+target_compile_definitions(game_text_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(game_text_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(game_text_test PRIVATE
+  d3d11 dxgi dxguid minhook winmm)
+
+add_executable(controller_ui_test
+  tools/controller_ui_test.cc
+  src/dinput_native_proxy.cc
+  src/native_d3d11_present_guard.cc)
+target_compile_features(controller_ui_test PRIVATE cxx_std_17)
+target_compile_definitions(controller_ui_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(controller_ui_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(controller_ui_test PRIVATE
+  d3d11 dxgi dxguid minhook winmm)
+
 add_executable(camera_room_collision_test
   tools/camera_room_collision_test.cc)
 target_compile_features(camera_room_collision_test PRIVATE cxx_std_17)
@@ -179,6 +203,24 @@ target_compile_features(selector_time_dilation_test PRIVATE cxx_std_17)
 target_include_directories(selector_time_dilation_test PRIVATE src)
 target_compile_options(selector_time_dilation_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
+
+add_executable(timing_diagnostics_test tools/timing_diagnostics_test.cc)
+target_compile_features(timing_diagnostics_test PRIVATE cxx_std_17)
+target_include_directories(timing_diagnostics_test PRIVATE src)
+target_compile_options(timing_diagnostics_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+
+add_executable(timing_diagnostics_runtime_test
+  tools/timing_diagnostics_runtime_test.cc
+  src/dinput_native_proxy.cc
+  src/native_d3d11_present_guard.cc)
+target_compile_features(timing_diagnostics_runtime_test PRIVATE cxx_std_17)
+target_compile_definitions(timing_diagnostics_runtime_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(timing_diagnostics_runtime_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(timing_diagnostics_runtime_test PRIVATE
+  d3d11 dxgi dxguid minhook winmm)
 
 add_executable(selector_gameplay_command_test
   tools/selector_gameplay_command_test.cc)
