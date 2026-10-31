@@ -415,6 +415,7 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
     New-Item -ItemType Directory -Force -Path $backup | Out-Null
     $backupFiles = @(
         'DINPUT.dll',
+        'native50-e3-model.n50p',
         'deathtrap_native.ini',
         'DDraw.dll',
         'dxwrapper.dll',
@@ -467,6 +468,13 @@ if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {
         }
     }
     $dllDestination = Join-Path $game 'DINPUT.dll'
+    $modelDelta = Join-Path (Split-Path -Parent $dll) 'native50-e3-model.n50p'
+    if (-not (Test-Path -LiteralPath $modelDelta -PathType Leaf)) {
+        $modelDelta = Join-Path $repoRoot 'assets\models\e3-model.n50p'
+    }
+    if (Test-Path -LiteralPath $modelDelta -PathType Leaf) {
+        Copy-Item -LiteralPath $modelDelta -Destination (Join-Path $game 'native50-e3-model.n50p') -Force
+    }
     $iniDestination = Join-Path $game 'deathtrap_native.ini'
     if (-not $dll.Equals($dllDestination,
             [System.StringComparison]::OrdinalIgnoreCase)) {

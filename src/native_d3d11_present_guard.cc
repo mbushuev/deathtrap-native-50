@@ -100,30 +100,41 @@ class Sampler {
     if (!EnsureResources(source_desc)) {
       return false;
     }
-    for (uint32_t row = 0; row < kRows; ++row) {
-      for (uint32_t column = 0; column < kColumns; ++column) {
-        const uint32_t center_x = static_cast<uint32_t>(
-            (uint64_t(2 * column + 1) * source_desc.Width) /
-            (2 * kColumns));
-        const uint32_t center_y = static_cast<uint32_t>(
-            (uint64_t(2 * row + 1) * source_desc.Height) /
-            (2 * kRows));
-        const uint32_t left = std::min(
-            source_desc.Width - block_width_,
-            center_x > block_width_ / 2 ? center_x - block_width_ / 2 : 0u);
-        const uint32_t top = std::min(
-            source_desc.Height - block_height_,
-            center_y > block_height_ / 2 ? center_y - block_height_ / 2 : 0u);
-        const D3D11_BOX box = {left, top, 0, left + block_width_,
-                               top + block_height_, 1};
-        context_->CopySubresourceRegion(
-            sample_.Get(), 0, column * block_width_, row * block_height_, 0,
-            source, 0, &box);
+    {
+      const DeathtrapDiagnosticScope diagnostic(
+          deathtrap::timing::Part::kGuardCopies);
+      for (uint32_t row = 0; row < kRows; ++row) {
+        for (uint32_t column = 0; column < kColumns; ++column) {
+          const uint32_t center_x = static_cast<uint32_t>(
+              (uint64_t(2 * column + 1) * source_desc.Width) /
+              (2 * kColumns));
+          const uint32_t center_y = static_cast<uint32_t>(
+              (uint64_t(2 * row + 1) * source_desc.Height) /
+              (2 * kRows));
+          const uint32_t left = std::min(
+              source_desc.Width - block_width_,
+              center_x > block_width_ / 2 ? center_x - block_width_ / 2 : 0u);
+          const uint32_t top = std::min(
+              source_desc.Height - block_height_,
+              center_y > block_height_ / 2 ? center_y - block_height_ / 2 : 0u);
+          const D3D11_BOX box = {left, top, 0, left + block_width_,
+                                 top + block_height_, 1};
+          context_->CopySubresourceRegion(
+              sample_.Get(), 0, column * block_width_, row * block_height_, 0,
+              source, 0, &box);
+        }
       }
+      context_->CopyResource(staging_.Get(), sample_.Get());
     }
-    context_->CopyResource(staging_.Get(), sample_.Get());
     D3D11_MAPPED_SUBRESOURCE mapped = {};
-    if (FAILED(context_->Map(staging_.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+    HRESULT mapped_result;
+    {
+      const DeathtrapDiagnosticScope diagnostic(
+          deathtrap::timing::Part::kGuardMap);
+      mapped_result = context_->Map(staging_.Get(), 0, D3D11_MAP_READ, 0,
+                                   &mapped);
+    }
+    if (FAILED(mapped_result)) {
       return false;
     }
     *visual = {};
@@ -226,6 +237,51 @@ struct State {
   uint64_t rejected = 0;
   std::mutex mutex;
 };
+
+void LogExtendedGraphicsEnvironment(State* state) {
+  if (!DeathtrapExtendedLogsEnabled()) {
+    return;
+  }
+  ComPtr<IDXGIDevice> dxgi_device;
+  ComPtr<IDXGIAdapter> adapter;
+  DXGI_ADAPTER_DESC adapter_desc{};
+  bool adapter_valid = SUCCEEDED(state->device.As(&dxgi_device)) &&
+      SUCCEEDED(dxgi_device->GetAdapter(&adapter)) &&
+      SUCCEEDED(adapter->GetDesc(&adapter_desc));
+  char adapter_name[512] = {};
+  if (adapter_valid) {
+    WideCharToMultiByte(CP_UTF8, 0, adapter_desc.Description, -1, adapter_name,
+                       static_cast<int>(sizeof(adapter_name)), nullptr, nullptr);
+  }
+  DXGI_SWAP_CHAIN_DESC swap_desc{};
+  const bool swap_valid = SUCCEEDED(state->swap_chain->GetDesc(&swap_desc));
+  ComPtr<IDXGIOutput> output;
+  DXGI_OUTPUT_DESC output_desc{};
+  DEVMODEW display{};
+  display.dmSize = sizeof(display);
+  const bool display_valid =
+      SUCCEEDED(state->swap_chain->GetContainingOutput(&output)) &&
+      SUCCEEDED(output->GetDesc(&output_desc)) &&
+      EnumDisplaySettingsW(output_desc.DeviceName, ENUM_CURRENT_SETTINGS,
+                            &display) != FALSE;
+  AppendDeathtrapSupportLog(
+      "support_extended_graphics schema=1 adapter_valid=%u adapter=\"%s\" "
+      "vendor=0x%04X device=0x%04X dedicated_vram_mb=%llu feature_level=0x%04X "
+      "swap_valid=%u backbuffer=%ux%u format=%u msaa=%u buffers=%u "
+      "swap_effect=%u windowed=%u output_valid=%u output_hz=%u "
+      "readback_guard=1 sample_copies=%u",
+      adapter_valid ? 1u : 0u, adapter_name, adapter_desc.VendorId,
+      adapter_desc.DeviceId,
+      static_cast<unsigned long long>(adapter_desc.DedicatedVideoMemory) /
+          (1024u * 1024u),
+      static_cast<unsigned>(state->device->GetFeatureLevel()),
+      swap_valid ? 1u : 0u, swap_desc.BufferDesc.Width,
+      swap_desc.BufferDesc.Height, static_cast<unsigned>(swap_desc.BufferDesc.Format),
+      swap_desc.SampleDesc.Count, swap_desc.BufferCount,
+      static_cast<unsigned>(swap_desc.SwapEffect), swap_desc.Windowed ? 1u : 0u,
+      display_valid ? 1u : 0u, display_valid ? display.dmDisplayFrequency : 0u,
+      kColumns * kRows);
+}
 
 std::mutex g_states_mutex;
 std::unordered_map<IDXGISwapChain*, std::shared_ptr<State>> g_states;
@@ -419,11 +475,13 @@ void AttachNativeD3D11PresentGuard(IDXGISwapChain* swap_chain,
   device->GetImmediateContext(&state->context);
   state->sampler =
       std::make_unique<Sampler>(device.Get(), state->context.Get());
+  LogExtendedGraphicsEnvironment(state.get());
   g_states.emplace(swap_chain, state);
   Log("native-only D3D11 swapchain attached sc=%p", swap_chain);
 }
 
 bool AllowNativeD3D11Present(IDXGISwapChain* swap_chain) {
+  const DeathtrapDiagnosticScope diagnostic(deathtrap::timing::Part::kGuard);
   std::shared_ptr<State> state;
   {
     std::lock_guard<std::mutex> lock(g_states_mutex);

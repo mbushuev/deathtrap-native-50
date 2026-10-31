@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <cstdarg>
 #include <functional>
 #include <limits>
@@ -42,6 +43,11 @@
 #include "input_command_bindings.h"
 #include "game_text.h"
 #include "mouse_combat_routing.h"
+#include "modern_control_settings.h"
+#include "model_pack.h"
+#include "native50_menu.h"
+#include "player_wounds.h"
+#include "death_recovery.h"
 #include "safe_save.h"
 #include "selector_time_dilation.h"
 #include "timing_diagnostics.h"
@@ -313,6 +319,16 @@ constexpr DungeonDataRva kGameRootPointerRva{
 // Return-to-game path. The root context returned by +0x7EF50 is stored here;
 // context+0x834 is non-zero only when a resumable game exists.
 constexpr DungeonCodeRva kRootMenuInputRva{0x00017B50u};
+constexpr DungeonCodeRva kHardwareMenuRva{0x000179A0u};
+constexpr DungeonCodeRva kHardwareMenuInputRva{0x000191B0u};
+constexpr DungeonCodeRva kHardwareMenuLabelsRva{0x00017410u};
+constexpr DungeonCodeRva kHardwareJoystickLabelsRva{0x000175C0u};
+constexpr DungeonCodeRva kHardwareJoystickFrameRva{0x00017920u};
+constexpr DungeonCodeRva kHardwareKeyDownRva{0x00069860u};
+constexpr uintptr_t kHardwareBackgroundNameOffset = 0x584u;
+constexpr uintptr_t kHardwareAtlasNameOffset = 0x58Cu;
+constexpr DungeonDataRva kHardwareBackgroundSurfaceRva{
+    0x00349B70u, 0x0034A5D0u, 0x0034A040u, 0x0034A220u};
 // Retail keyboard-definition screen. The engine owns exactly eleven visible
 // rows; the patch pages those rows without extending any retail array.
 constexpr DungeonCodeRva kKeyboardBindingMenuRva{0x00016260u};
@@ -886,6 +902,13 @@ std::string g_camera_probe_log_buffer;
 bool g_third_person_orbit_enabled = false;
 bool g_immersive_first_person_enabled = true;
 bool g_keyboard_mouse_camera_relative_movement = false;
+std::atomic<bool> g_keep_bodies_enabled{false};
+std::atomic<bool> g_show_body_wounds{true};
+bool g_corpse_retention_hooks_installed = false;
+unsigned g_corpse_dispatch_depth = 0;
+void MaintainRetainedCorpses();
+void BeginCorpseFadeUpdate();
+void EndCorpseFadeUpdate();
 std::atomic<int32_t> g_keyboard_camera_relative_movement_x{0};
 std::atomic<int32_t> g_keyboard_camera_relative_movement_y{0};
 std::atomic<bool> g_keyboard_camera_relative_intent{false};
@@ -936,6 +959,7 @@ std::atomic<uint64_t> g_last_mode3_source_tick_ms{0};
 // a process-local latch instead. Mode 3 is entered by real gameplay before
 // the player can open the root menu, while the startup menu never calls it.
 std::atomic<bool> g_root_menu_gameplay_seen{false};
+std::atomic<bool> g_death_recovery_dialog_active{false};
 double g_third_person_mouse_horizontal_radians = 0.0;
 double g_third_person_mouse_vertical_radians = 0.0;
 
@@ -1368,6 +1392,33 @@ thread_local int32_t g_centered_ui_context_compensation_x = 0;
 SavePointQueryFn g_original_save_point_query = nullptr;
 KeyboardBindingMenuFn g_original_keyboard_binding_menu = nullptr;
 RootMenuInputFn g_original_root_menu_input = nullptr;
+KeyboardBindingMenuFn g_original_hardware_menu = nullptr;
+KeyboardBindingInputFn g_original_hardware_input = nullptr;
+KeyboardBindingRightPanelFn g_original_hardware_labels = nullptr;
+bool g_hardware_menu_active = false;
+bool g_hardware_mouse_latched = true;
+bool g_hardware_keyboard_latched = true;
+int g_hardware_control_row = -1;
+int g_hardware_save_error_row = -1;
+uint8_t g_hardware_repaint_frames = 0;
+uint16_t g_hardware_mouse_x = UINT16_MAX;
+uint16_t g_hardware_mouse_y = UINT16_MAX;
+struct HardwareMenuApi {
+  KeyboardBindingMouseStateFn mouse_state = nullptr;
+  KeyboardBindingHitTestFn hit_test = nullptr;
+  KeyboardBindingKeyPressedFn key_down = nullptr;
+  KeyboardBindingSetFontFn set_font = nullptr;
+  KeyboardBindingDrawTextFn draw_text = nullptr;
+  KeyboardBindingRestoreBackgroundFn restore = nullptr;
+  int32_t(__cdecl* text_width)(const char*) = nullptr;
+  bool (*change_control)(deathtrap::settings::ControlRow, int) = nullptr;
+  KeyboardBindingBuildPathFn build_path = nullptr;
+  KeyboardBindingLoadImageFn load_image = nullptr;
+  KeyboardBindingRightPanelFn joystick_labels = nullptr;
+  KeyboardBindingRightPanelFn joystick_frame = nullptr;
+};
+HardwareMenuApi g_hardware_menu_api;
+bool g_hardware_menu_hooks_installed = false;
 KeyboardBindingInputFn g_original_keyboard_binding_input = nullptr;
 KeyboardBindingAllDefinedFn g_original_keyboard_binding_all_defined = nullptr;
 KeyboardBindingDrawKeyFn g_original_keyboard_binding_draw_key = nullptr;
@@ -1500,6 +1551,10 @@ bool SafeWrite(void* destination, const void* source, size_t size) {
 
 void InitializeKeyboardBindingStore();
 bool SaveKeyboardBindingStore();
+deathtrap::settings::Controls CurrentModernControlSettings();
+bool ChangeModernControlSetting(deathtrap::settings::ControlRow row,
+                                int requested = -1,
+                                const wchar_t* configuration_path = nullptr);
 
 RetailBindingWindow StableRetailKeyboardBindings() {
   RetailBindingWindow stable{};
@@ -1740,6 +1795,187 @@ bool KeyboardDefaultsButtonActivated() {
   // Preserve the retail argument order observed at Dungeon.dll+0x1A0C0.
   mouse_state(&third, &second, &first);
   return hit_test(520, 332, 638, 414, third, second, first) != 0u;
+}
+
+bool DrawModernControlSettings() {
+  const auto& api = g_hardware_menu_api;
+  if (!g_hardware_menu_active || !g_dungeon_base ||
+      !api.set_font || !api.draw_text || !api.text_width) {
+    return false;
+  }
+  const auto values = CurrentModernControlSettings();
+  for (int index = 0; index < deathtrap::settings::kControlRows; ++index) {
+    const auto row = static_cast<deathtrap::settings::ControlRow>(index);
+    const int y = 174 + index * deathtrap::settings::kControlRowHeight;
+    api.set_font(0x1485u);
+    if (index == g_hardware_control_row) {
+      api.draw_text(98, y, 0, ">");
+    }
+    api.draw_text(110, y, 0, deathtrap::settings::ControlLabel(
+        ActiveGameTextLanguage(), row));
+    const char* value = g_hardware_save_error_row == index
+        ? deathtrap::settings::ControlSaveError(ActiveGameTextLanguage())
+        : deathtrap::settings::ControlValue(ActiveGameTextLanguage(), row, values);
+    const int x = std::max(330, 496 - api.text_width(value));
+    api.draw_text(x, y, 0, value);
+  }
+  api.set_font(0x1485u);
+  return true;
+}
+
+bool RepaintHardwareSettingsScreen() {
+  const auto& api = g_hardware_menu_api;
+  uintptr_t localization = 0, background_name = 0, atlas_name = 0, surface = 0;
+  if (!g_hardware_menu_active || !g_dungeon_base || !api.build_path ||
+      !api.load_image || !api.restore || !api.joystick_labels ||
+      !api.joystick_frame || !g_original_hardware_labels ||
+      !SafeRead(g_dungeon_base + kLocalizationTablePointerRva,
+                &localization, sizeof(localization)) || !localization ||
+      !SafeRead(reinterpret_cast<void*>(localization + kHardwareBackgroundNameOffset),
+                &background_name, sizeof(background_name)) || !background_name ||
+      !SafeRead(reinterpret_cast<void*>(localization + kHardwareAtlasNameOffset),
+                &atlas_name, sizeof(atlas_name)) || !atlas_name ||
+      !SafeRead(g_dungeon_base + kKeyboardBindingAtlasSurfaceRva,
+                &surface, sizeof(surface)) || !surface) {
+    return false;
+  }
+  char* const background_path = api.build_path(
+      reinterpret_cast<const char*>(background_name));
+  if (!background_path) {
+    return false;
+  }
+  bool restored = false;
+  __try {
+    // Same verified two-page transaction as RepaintKeyboardBindingScreen:
+    // decode the genuine background into the registered scratch surface,
+    // restore ONE complete pending page, then put the widget atlas back.
+    // +0x349B70 is a render destination, never a cached background bitmap.
+    api.load_image(background_path, reinterpret_cast<void*>(surface));
+    api.restore(reinterpret_cast<void*>(surface), 640, 480, 0, 0, 0, 0);
+    char* const atlas_path = api.build_path(reinterpret_cast<const char*>(atlas_name));
+    if (atlas_path) {
+      api.load_image(atlas_path, reinterpret_cast<void*>(surface));
+      g_original_hardware_labels();
+      api.joystick_labels();
+      api.joystick_frame();
+      restored = DrawModernControlSettings();
+    }
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    restored = false;
+  }
+  return restored;
+}
+
+void __cdecl HookHardwareMenuLabels() {
+  if (g_original_hardware_labels) {
+    g_original_hardware_labels();
+  }
+  DrawModernControlSettings();
+}
+
+bool PollModernControlSettings() {
+  const auto& api = g_hardware_menu_api;
+  if (!g_hardware_menu_active || !api.mouse_state || !api.hit_test ||
+      !api.key_down || !api.change_control || api.key_down(1u)) {
+    return false;
+  }
+  uint16_t x = 0, y = 0, buttons = 0;
+  const int previous_row = g_hardware_control_row;
+  api.mouse_state(&x, &y, &buttons);
+  const int hovered = deathtrap::settings::ControlRowAt(x, y);
+  if (x != g_hardware_mouse_x || y != g_hardware_mouse_y) {
+    if (hovered >= 0) {
+      g_hardware_control_row = hovered;
+    }
+    g_hardware_mouse_x = x;
+    g_hardware_mouse_y = y;
+  }
+  bool consumed = false;
+  if (buttons && hovered >= 0) {
+    consumed = true;
+    if (!g_hardware_mouse_latched &&
+        api.hit_test(deathtrap::settings::kControlLeft,
+                     deathtrap::settings::kControlTop + hovered * 24,
+                     deathtrap::settings::kControlRight,
+                     deathtrap::settings::kControlTop + hovered * 24 + 23,
+                     x, y, buttons)) {
+      g_hardware_control_row = hovered;
+      api.change_control(
+          static_cast<deathtrap::settings::ControlRow>(hovered), -1);
+    }
+  }
+  // Require a release even if the pointer leaves/re-enters the control while
+  // held. The click that opened Hardware must never toggle a new option.
+  g_hardware_mouse_latched = buttons != 0;
+  // Observe native LEVEL state (+0x69860). Its edge-query sibling belongs to
+  // retail actions and is not suitable for this independent release latch.
+  const bool up = api.key_down(0xC8u) != 0;
+  const bool down = api.key_down(0xD0u) != 0;
+  const bool left = api.key_down(0xCBu) != 0;
+  const bool right = api.key_down(0xCDu) != 0;
+  const bool enter = api.key_down(0x1Cu) || api.key_down(0x9Cu);
+  const bool space = api.key_down(0x39u) != 0;
+  const bool keyboard = up || down || left || right || enter || space;
+  if (keyboard && !g_hardware_keyboard_latched && !buttons) {
+    const int rows = deathtrap::settings::kControlRows;
+    if (up != down) {
+      g_hardware_control_row = g_hardware_control_row < 0
+          ? (down ? 0 : rows - 1)
+          : (g_hardware_control_row + (down ? 1 : rows - 1)) % rows;
+      consumed = true;
+    } else if ((left != right) || enter || space) {
+      if (g_hardware_control_row < 0) {
+        g_hardware_control_row = 0;
+      }
+      api.change_control(
+          static_cast<deathtrap::settings::ControlRow>(g_hardware_control_row),
+          left != right ? (right ? 1 : 0) : -1);
+      consumed = true;
+    }
+  }
+  g_hardware_keyboard_latched = keyboard;
+  if (previous_row != g_hardware_control_row) {
+    g_hardware_repaint_frames = 2u;
+  }
+  return consumed;
+}
+
+uint8_t __cdecl HookHardwareMenuInput() {
+  if (!g_original_hardware_input) {
+    return 0;
+  }
+  if (!g_hardware_menu_active) {
+    return g_original_hardware_input();
+  }
+  if (g_hardware_repaint_frames) {
+    --g_hardware_repaint_frames;
+    if (!RepaintHardwareSettingsScreen()) {
+      AppendDeathtrapSupportLog("support_control_settings repaint_failed");
+    }
+  }
+  const bool consumed = PollModernControlSettings();
+  const uint8_t result = g_original_hardware_input();
+  // Keep native cursor/presentation, original first-person inversion and
+  // Escape/Back ownership. New options never reach native joystick actions.
+  return result == 99u || !consumed ? result : 0u;
+}
+
+void __cdecl HookHardwareMenu() {
+  if (!g_original_hardware_menu) {
+    return;
+  }
+  if (g_hardware_menu_active) {
+    g_original_hardware_menu();
+    return;
+  }
+  g_hardware_menu_active = true;
+  g_hardware_control_row = g_hardware_save_error_row = -1;
+  g_hardware_mouse_latched = g_hardware_keyboard_latched = true;
+  g_hardware_mouse_x = g_hardware_mouse_y = UINT16_MAX;
+  g_hardware_repaint_frames = 2u;
+  g_original_hardware_menu();
+  g_hardware_menu_active = false;
+  g_hardware_repaint_frames = 0u;
 }
 
 uint8_t __cdecl HookKeyboardBindingKeyCapture() {
@@ -2531,6 +2767,101 @@ std::wstring ConfiguredText(const wchar_t* section, const wchar_t* key,
   }
   const size_t last = result.find_last_not_of(L" \t\r\n");
   return result.substr(first, last - first + 1u);
+}
+
+#include "heroine_model_runtime.inl"
+
+deathtrap::settings::Controls CurrentModernControlSettings() {
+  return {g_keyboard_mouse_camera_relative_movement,
+          g_xinput_camera_relative_movement,
+          g_third_person_orbit_invert_x, g_third_person_orbit_invert_y,
+          g_keep_bodies_enabled.load(std::memory_order_relaxed),
+          g_e3_model_requested.load(std::memory_order_relaxed),
+          g_show_body_wounds.load(std::memory_order_relaxed)};
+}
+
+
+using ControlSettingsIniWriter = BOOL(WINAPI*)(LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR);
+
+bool SaveModernControlSettings(
+    const wchar_t* path, deathtrap::settings::ControlRow row,
+    deathtrap::settings::Controls value,
+    ControlSettingsIniWriter write = &WritePrivateProfileStringW) {
+  struct Entry {
+    const wchar_t* section = nullptr;
+    const wchar_t* key = nullptr;
+    bool value = false;
+    std::array<wchar_t, 512> previous{};
+    bool existed = false;
+  };
+  std::array<Entry, 2> entries{};
+  size_t count = 1;
+  switch (row) {
+    case deathtrap::settings::ControlRow::kMovement:
+      entries[0].section = L"KeyboardMouse";
+      entries[1].section = L"XInput";
+      entries[0].key = entries[1].key = L"CameraRelativeMovement";
+      entries[0].value = value.keyboard_modern;
+      entries[1].value = value.controller_modern;
+      count = 2;
+      break;
+    case deathtrap::settings::ControlRow::kInvertX:
+      entries[0].section = L"Camera";
+      entries[0].key = L"InvertX";
+      entries[0].value = value.invert_x;
+      break;
+    case deathtrap::settings::ControlRow::kInvertY:
+      entries[0].section = L"Camera";
+      entries[0].key = L"InvertY";
+      entries[0].value = value.invert_y;
+      break;
+    case deathtrap::settings::ControlRow::kKeepBodies:
+      entries[0].section = L"Gameplay";
+      entries[0].key = L"KeepBodies";
+      entries[0].value = value.keep_bodies;
+      break;
+    case deathtrap::settings::ControlRow::kHeroineModel:
+      entries[0].section = L"Models";
+      entries[0].key = L"E3Heroine";
+      entries[0].value = value.e3_model;
+      break;
+    case deathtrap::settings::ControlRow::kBodyWounds:
+      entries[0].section = L"Gameplay";
+      entries[0].key = L"ShowWounds";
+      entries[0].value = value.body_wounds;
+      break;
+    default: return false;
+  }
+  for (size_t index = 0; index < count; ++index) {
+    Entry& entry = entries[index];
+    const DWORD length = GetPrivateProfileStringW(
+        entry.section, entry.key, L"\x1", entry.previous.data(),
+        static_cast<DWORD>(entry.previous.size()), path);
+    if (length >= entry.previous.size() - 1u) {
+      return false;
+    }
+    entry.existed = std::wcscmp(entry.previous.data(), L"\x1") != 0;
+  }
+  for (size_t index = 0; index < count; ++index) {
+    const Entry& entry = entries[index];
+    if (!write(entry.section, entry.key, entry.value ? L"1" : L"0", path)) {
+      // Do not leave keyboard/controller modes split if the second write
+      // fails. Restore exact previous values (or missing keys), then report
+      // failure without applying any runtime state.
+      bool rolled_back = true;
+      for (size_t remaining = index + 1u; remaining > 0u; --remaining) {
+        const Entry& old = entries[remaining - 1u];
+        rolled_back = write(old.section, old.key,
+                            old.existed ? old.previous.data() : nullptr,
+                            path) != FALSE && rolled_back;
+      }
+      AppendDeathtrapSupportLog(
+          "support_control_settings save_failed row=%u rollback=%u",
+          static_cast<unsigned>(row), rolled_back ? 1u : 0u);
+      return false;
+    }
+  }
+  return true;
 }
 
 bool PatchMessageLifetimeImmediate(uintptr_t rva, uint32_t expected,
@@ -3739,7 +4070,7 @@ bool SweepOwnedCameraAgainstRooms(
 }
 
 bool DeathtrapGameplayReady(bool require_selector_closed) {
-  if (!g_dungeon_base) {
+  if (!g_dungeon_base || g_death_recovery_dialog_active.load(std::memory_order_acquire)) {
     return false;
   }
 
@@ -12098,6 +12429,10 @@ int __cdecl HookDamageHandler(void* target, int32_t requested_damage,
       kHealthFixedScale);
 
   if (player_damaged) {
+    if (g_extended_log_enabled.load(std::memory_order_relaxed)) {
+      AppendDeathtrapSupportLog("support_player_damage hp_before=%u hp_after=%u applied_q14=%d",
+          before_hp,after_hp,applied_damage);
+    }
     const uint32_t percent =
         EventVibrationPercent(applied_damage, 72u, 3u);
     StartEventVibration(&g_damage_vibration_until_ms,
@@ -12184,7 +12519,7 @@ void ReleaseInjectedControllerInput() {
   InjectMouseLeft(false);
   InjectMouseRight(false);
   SubmitDeathtrapXInputMouseState(0, 0, false, false);
-  SubmitDeathtrapXInputCombatState(false, false, false, false, false);
+  ClearDeathtrapXInputCombatState();
   SubmitDeathtrapXInputGameplayCommands(0);
   g_xinput_first_person_toggled = false;
   g_xinput_run_active = false;
@@ -12575,6 +12910,8 @@ void CloseControllerSelector() {
   g_controller_selector = {};
 }
 
+void PublishControllerCombatInput(const XINPUT_GAMEPAD& pad);
+
 void UpdateControllerSelector(const XINPUT_GAMEPAD& pad, bool gameplay) {
   const uint32_t category = gameplay ? DpadCategory(pad.wButtons) : 0u;
   // Capture B before closing/resetting a row, including simultaneous D-pad
@@ -12679,6 +13016,10 @@ void PollOpenControllerSelectorForPresentation() {
   if (!g_controller_selector.row_open || !g_xinput_get_state) {
     return;
   }
+  if (!DeathtrapGameplayAcceptsControllerCombat()) {
+    ClearDeathtrapXInputCombatState();
+    return;
+  }
   XINPUT_STATE state{};
   if (g_xinput_get_state(g_xinput_controller_index, &state) ==
       ERROR_SUCCESS) {
@@ -12687,8 +13028,13 @@ void PollOpenControllerSelectorForPresentation() {
     // wheel stays responsive while the world scheduler is slowed.
     const bool previous_poll = g_selector_presentation_input_poll;
     g_selector_presentation_input_poll = true;
+    // This only publishes input. The next real DirectInput keyboard poll
+    // dispatches combat; synthetic render passes never execute attacks.
+    PublishControllerCombatInput(state.Gamepad);
     UpdateControllerSelector(state.Gamepad, true);
     g_selector_presentation_input_poll = previous_poll;
+  } else {
+    ClearDeathtrapXInputCombatState();
   }
 }
 
@@ -12820,6 +13166,14 @@ NormalizedStick2 NormalizeCircularStick(SHORT raw_x, SHORT raw_y,
       0.0, 1.0);
   return {x / raw_magnitude * magnitude,
           y / raw_magnitude * magnitude, magnitude};
+}
+
+void PublishControllerCombatInput(const XINPUT_GAMEPAD& pad) {
+  const auto stick = NormalizeCircularStick(pad.sThumbLX, pad.sThumbLY, g_xinput_left_deadzone);
+  const auto direction = deathtrap::input::ResolveControllerCombatDirection(
+      stick.x, stick.y, g_xinput_action_threshold);
+  SubmitDeathtrapXInputCombatState(pad.bRightTrigger >= g_xinput_trigger_threshold,
+      direction.forward, direction.backward, direction.left, direction.right);
 }
 
 int32_t NormalizePlayerHeading(int32_t heading) {
@@ -12968,7 +13322,7 @@ bool CameraRelativeDesiredHeading(const NormalizedStick2& stick,
   return true;
 }
 
-bool KeyboardCameraRelativeRuntimeAvailable() {
+bool KeyboardCameraRelativeRuntimeAvailable(bool mouse_attack = false) {
   return g_keyboard_mouse_camera_relative_movement &&
       g_third_person_orbit_enabled && IsGameForeground() &&
       CurrentCustomCameraViewMode() ==
@@ -12980,7 +13334,13 @@ bool KeyboardCameraRelativeRuntimeAvailable() {
       LivePlayerUsesGroundStateDispatcher() &&
       g_third_person_heading_reference_valid.load(
           std::memory_order_acquire) &&
-      DeathtrapGameplayReady(true) && DeathtrapModernCameraConsumesMouse();
+      // Keyboard selectors are gameplay overlays. Attacks may keep their
+      // normal camera-facing alignment while locomotion retains its existing
+      // selector ownership rules. Frontend and controller-radial input are
+      // still excluded by the combat gate.
+      (mouse_attack ? DeathtrapGameplayAcceptsMouseCombat()
+                    : DeathtrapGameplayReady(true)) &&
+      DeathtrapModernCameraConsumesMouse();
 }
 
 bool KeyboardCameraRelativeDesiredHeading(int32_t* heading,
@@ -13017,7 +13377,7 @@ bool KeyboardCameraRelativeDesiredHeading(int32_t* heading,
 }
 
 bool ResolveMouseAttackCameraFacingHeading(int32_t* heading) {
-  if (!heading || !KeyboardCameraRelativeRuntimeAvailable()) {
+  if (!heading || !KeyboardCameraRelativeRuntimeAvailable(true)) {
     return false;
   }
   const double camera_yaw =
@@ -13203,6 +13563,66 @@ void CancelMouseAttackCameraFacing(const char* reason) {
   }
 }
 
+bool ChangeModernControlSetting(deathtrap::settings::ControlRow row,
+                                int requested,
+                                const wchar_t* configuration_path) {
+  if (row >= deathtrap::settings::ControlRow::kCount) {
+    return false;
+  }
+  const auto previous = CurrentModernControlSettings();
+  const auto next = requested < 0
+      ? deathtrap::settings::ToggleControl(previous, row)
+      : deathtrap::settings::SetControl(previous, row, requested != 0);
+  const std::wstring path = configuration_path ? configuration_path
+                                              : ConfigurationPath();
+  if (row == deathtrap::settings::ControlRow::kHeroineModel && next.e3_model &&
+      !g_e3_model_available.load()) {
+    g_hardware_save_error_row = static_cast<int>(row);
+    return false;
+  }
+  if (!SaveModernControlSettings(path.c_str(), row, next)) {
+    g_hardware_save_error_row = static_cast<int>(row);
+    g_hardware_repaint_frames = 2u;
+    return false;
+  }
+  // Save before publishing. A read-only configuration must never appear to
+  // have accepted a persistent setting while runtime and disk disagree.
+  g_keyboard_mouse_camera_relative_movement = next.keyboard_modern;
+  g_xinput_camera_relative_movement = next.controller_modern;
+  g_third_person_orbit_invert_x = next.invert_x;
+  g_third_person_orbit_invert_y = next.invert_y;
+  g_keep_bodies_enabled.store(next.keep_bodies,std::memory_order_relaxed);
+  g_e3_model_requested.store(next.e3_model,std::memory_order_relaxed);
+  g_show_body_wounds.store(next.body_wounds,std::memory_order_relaxed);
+  if (row==deathtrap::settings::ControlRow::kHeroineModel)
+    AppendDeathtrapSupportLog("support_heroine_model requested=%s apply=%s",
+        next.e3_model?"e3":"original",HeroineLiveSwitchEnabled()?"immediate":"restart");
+  if (row == deathtrap::settings::ControlRow::kMovement) {
+    SubmitDeathtrapThirdPersonKeyboardMovement(0, 0);
+    PublishCameraRelativeMovementIntent(false, 0, 0.0);
+    PublishNativeJoystickMovement(false, 0.0, 0.0);
+    g_xinput_filtered_movement_magnitude = 0.0;
+    g_xinput_movement_sample_ms = 0;
+    g_xinput_walk_active = g_xinput_run_active = false;
+    g_xinput_direct_heading_steering_was_active = false;
+    const auto attack = GetDeathtrapThirdPersonMouseAttackFacingPhase();
+    if (attack != DeathtrapMouseAttackFacingPhase::kIdle &&
+        attack != DeathtrapMouseAttackFacingPhase::kCanceled) {
+      CancelMouseAttackCameraFacing("control_mode_changed");
+    }
+  }
+  g_hardware_save_error_row = -1;
+  g_hardware_repaint_frames = 2u;
+  AppendDeathtrapSupportLog(
+      "support_control_settings saved=1 row=%u keyboard_modern=%u "
+      "controller_modern=%u invert_x=%u invert_y=%u keep_bodies=%u e3_model=%u show_wounds=%u",
+      static_cast<unsigned>(row), next.keyboard_modern ? 1u : 0u,
+      next.controller_modern ? 1u : 0u, next.invert_x ? 1u : 0u,
+      next.invert_y ? 1u : 0u, next.keep_bodies ? 1u : 0u, next.e3_model ? 1u : 0u,
+      next.body_wounds ? 1u : 0u);
+  return true;
+}
+
 void UpdateMouseAttackCameraFacing(void* outer_player) {
   const DeathtrapMouseAttackFacingPhase phase =
       g_third_person_mouse_attack_facing_phase.load(
@@ -13221,7 +13641,7 @@ void UpdateMouseAttackCameraFacing(void* outer_player) {
     CancelMouseAttackCameraFacing("timeout");
     return;
   }
-  if (!KeyboardCameraRelativeRuntimeAvailable()) {
+  if (!KeyboardCameraRelativeRuntimeAvailable(true)) {
     CancelMouseAttackCameraFacing("camera_context");
     return;
   }
@@ -13472,10 +13892,15 @@ uintptr_t __cdecl HookImmersivePlayerMovementStage() {
     return 0;
   }
 
+  MaintainRetainedCorpses();
+  BeginCorpseFadeUpdate();
+  ++g_corpse_dispatch_depth;
   const ImmersiveLocomotionTransaction transaction =
       BeginImmersiveLocomotionTransaction();
   const uintptr_t result = g_original_player_movement_stage();
   EndImmersiveLocomotionTransaction(transaction);
+  EndCorpseFadeUpdate();
+  --g_corpse_dispatch_depth;
 
   if (transaction.active && g_debug_log &&
       (g_source_ticks.load(std::memory_order_relaxed) % 60u) == 1u) {
@@ -13872,12 +14297,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         g_xinput_first_person_toggled.load(std::memory_order_acquire) ||
         RetailFirstPersonActive() || custom_head_movement;
     const bool controller_attack =
-        !selector_captures_controls &&
         pad.bRightTrigger >= g_xinput_trigger_threshold;
-    const auto observed_attack_direction =
-        deathtrap::input::ResolveControllerCombatDirection(
-            movement_stick.x, movement_stick.y,
-            g_xinput_action_threshold);
     const auto mouse_facing = GetDeathtrapThirdPersonMouseAttackFacingPhase();
     const bool controller_combat_owns_stick = controller_attack ||
         (cautious_strafe_modifier &&
@@ -14077,12 +14497,9 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
                          (buttons & XINPUT_GAMEPAD_START) != 0);
     InjectVirtualKey(InjectedKey::kTab, false);
     SubmitDeathtrapXInputGameplayCommands(gameplay_commands);
-    SubmitDeathtrapXInputCombatState(
-        controller_attack,
-        observed_attack_direction.forward,
-        observed_attack_direction.backward,
-        observed_attack_direction.left,
-        observed_attack_direction.right);
+    // RT and the left-stick combat direction remain available while the
+    // radial owns right-stick selection and A/B confirmation/cancellation.
+    PublishControllerCombatInput(pad);
     // RT now publishes a virtual combat command instead of masquerading as a
     // physical mouse click. Mouse and controller still converge in the same
     // DirectInput F+direction translator.
@@ -14140,7 +14557,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     InjectVirtualKey(InjectedKey::kQ, false);
     InjectVirtualKey(InjectedKey::kC, false);
     InjectVirtualKey(InjectedKey::kTab, false);
-    SubmitDeathtrapXInputCombatState(false, false, false, false, false);
+    ClearDeathtrapXInputCombatState();
     InjectMouseLeft(false);
     InjectMouseRight(false);
     set_gameplay_command(
@@ -14216,7 +14633,8 @@ void ReconcileXInputFrontendOwnership(bool native_gameplay) {
   // Start edge is required to return the right stick to cursor duty.
   const bool gameplay_camera_active =
       RecentMode3CameraCallback() || RetailFirstPersonActive();
-  const bool menu_mode = !native_gameplay || !gameplay_camera_active;
+  const bool menu_mode = g_death_recovery_dialog_active.load(std::memory_order_acquire) ||
+      !native_gameplay || !gameplay_camera_active;
   const bool previous =
       g_xinput_menu_mode.exchange(menu_mode, std::memory_order_acq_rel);
   if (previous != menu_mode && g_debug_log) {
@@ -14307,7 +14725,7 @@ void PollFrontendXInputInternal() {
   LogSupportControllerPresence(connected);
   if (!connected || !IsGameForeground()) {
     SubmitDeathtrapXInputMouseState(0, 0, false, false);
-    SubmitDeathtrapXInputCombatState(false, false, false, false, false);
+    ClearDeathtrapXInputCombatState();
     return;
   }
 
@@ -15295,8 +15713,9 @@ bool InstallImmersiveRootMotionHooks() {
       SafeRead(writer_target, writer_prologue.data(),
                writer_prologue.size()) &&
       writer_prologue == kExpectedWriterPrologue &&
-      SafeRead(stage_target, stage_prologue.data(), stage_prologue.size()) &&
-      stage_prologue == kExpectedStagePrologue;
+      (g_corpse_retention_hooks_installed ||
+       (SafeRead(stage_target, stage_prologue.data(), stage_prologue.size()) &&
+        stage_prologue == kExpectedStagePrologue));
   if (!signatures_match) {
     AppendNativeLog(
         "immersive root_motion signature_mismatch writer=%08llX "
@@ -15310,7 +15729,7 @@ bool InstallImmersiveRootMotionHooks() {
       writer_target,
       reinterpret_cast<void*>(&RouteImmersivePlayerRootMotion),
       reinterpret_cast<void**>(&g_player_root_motion_transform));
-  const MH_STATUS create_stage = MH_CreateHook(
+  const MH_STATUS create_stage = g_corpse_retention_hooks_installed ? MH_OK : MH_CreateHook(
       stage_target,
       reinterpret_cast<void*>(&HookImmersivePlayerMovementStage),
       reinterpret_cast<void**>(&g_original_player_movement_stage));
@@ -15336,7 +15755,7 @@ bool InstallImmersiveRootMotionHooks() {
     if (writer_enabled) {
       MH_DisableHook(writer_target);
     }
-    if (stage_enabled) {
+    if (stage_enabled && !g_corpse_retention_hooks_installed) {
       MH_DisableHook(stage_target);
     }
     AppendNativeLog(
@@ -15916,21 +16335,26 @@ void RecordPlayerAxisTelemetry(const SceneSnapshot& older,
   }
 }
 
-uintptr_t ResolvePlayerRenderNode(const SceneSnapshot& scene) {
+uintptr_t ResolveLivePlayerRenderRoot() {
   uintptr_t player = 0;
   uintptr_t render_link = 0;
   uintptr_t render_node = 0;
-  if (!SafeReadValue(g_dungeon_base + kUiOwnerPointerRva, &player) ||
+  if (!g_dungeon_base || !SafeReadValue(g_dungeon_base + kUiOwnerPointerRva, &player) ||
       !player ||
       !SafeReadValue(reinterpret_cast<const void*>(player + 0x10u),
                      &render_link) ||
       !render_link ||
       !SafeReadValue(reinterpret_cast<const void*>(render_link),
                      &render_node) ||
-      !render_node || scene.nodes.find(render_node) == scene.nodes.end()) {
+      !render_node) {
     return 0;
   }
   return render_node;
+}
+
+uintptr_t ResolvePlayerRenderNode(const SceneSnapshot& scene) {
+  const auto render_node=ResolveLivePlayerRenderRoot();
+  return render_node && scene.nodes.find(render_node)!=scene.nodes.end() ? render_node : 0;
 }
 
 bool ReadPlayerObject(uintptr_t* player) {
@@ -16504,6 +16928,8 @@ bool BuildLocalFromWorld(const Matrix3x4& world,
   *local = rebuilt;
   return true;
 }
+
+#include "heroine_waist_runtime.inl"
 
 void CaptureNode(uintptr_t node, SceneSnapshot* snapshot,
                  std::unordered_set<uintptr_t>* visited) {
@@ -18802,11 +19228,16 @@ bool RenderOriginalWithStationaryOrbitBasis(
   return applied;
 }
 
+void LogRenderQueueUsage();
+void LogTexturePoolUsage();
+
 void __cdecl HookRenderer(void* context) {
   ActivePresentationTrace& trace = g_active_presentation_trace;
   if (!g_original_renderer) {
     return;
   }
+  const DeathtrapDiagnosticScope diagnostic(deathtrap::timing::Part::kRenderer);
+  struct QueueUsageProbe { ~QueueUsageProbe() { LogRenderQueueUsage();LogTexturePoolUsage(); } } queue_usage;
 
   if (trace.stage == DeathtrapNativePresentationStage::kMidpoint) {
     ++trace.midpoint_calls;
@@ -19032,6 +19463,19 @@ double TimingMilliseconds(int64_t ticks) {
       static_cast<double>(g_qpc_frequency.QuadPart);
 }
 
+bool ReadTimingThreadCpu(uint64_t* cpu_100ns) {
+  FILETIME creation{}, exit{}, kernel{}, user{};
+  if (!GetThreadTimes(GetCurrentThread(), &creation, &exit, &kernel, &user)) {
+    return false;
+  }
+  const auto value = [](const FILETIME& time) {
+    return (static_cast<uint64_t>(time.dwHighDateTime) << 32u) |
+        static_cast<uint64_t>(time.dwLowDateTime);
+  };
+  *cpu_100ns = value(kernel) + value(user);
+  return true;
+}
+
 void LogTimingSummary(const deathtrap::timing::Summary& sample) {
   const auto& mode = sample.mode;
   const uint32_t target_ms = mode.scheduler_rate > 0
@@ -19081,6 +19525,21 @@ void LogTimingSummary(const deathtrap::timing::Summary& sample) {
       static_cast<unsigned long long>(sample.present_non_display),
       static_cast<uint32_t>(sample.last_present_result),
       static_cast<unsigned long long>(sample.restore_suppressed));
+  for (size_t index = 0; index < sample.parts.size(); ++index) {
+    const auto& part = sample.parts[index];
+    if (!part.wall.count) {
+      continue;
+    }
+    AppendDeathtrapSupportLog(
+        "support_timing_part schema=1 t_ms=%.1f name=%s calls=%llu "
+        "wall_avg_ms=%.3f wall_max_ms=%.3f cpu_samples=%llu "
+        "cpu_avg_ms=%.3f cpu_max_ms=%.3f inclusive=1",
+        sample.begin_ms,
+        deathtrap::timing::PartName(static_cast<deathtrap::timing::Part>(index)),
+        static_cast<unsigned long long>(part.wall.count), part.wall.Average(),
+        part.wall.maximum, static_cast<unsigned long long>(part.cpu.count),
+        part.cpu.Average(), part.cpu.maximum);
+  }
 }
 
 class NativeTimingTick {
@@ -19099,6 +19558,7 @@ class NativeTimingTick {
     interpolated_before_ = g_interpolated_frames.load(std::memory_order_relaxed);
     suppressed_before_ = GetDeathtrapNativeSuppressedPresentCount();
     g_active_timing_frame = &frame_;
+    diagnostic_ = BeginDeathtrapDiagnosticTiming();
     active_ = true;
   }
   bool Active() const { return active_; }
@@ -19107,6 +19567,8 @@ class NativeTimingTick {
     if (!active_) {
       return;
     }
+    EndDeathtrapDiagnosticTiming(deathtrap::timing::Part::kSourceHook,
+                                 diagnostic_);
     LARGE_INTEGER now{};
     QueryPerformanceCounter(&now);
     frame_.end_ms = TimingMilliseconds(now.QuadPart - g_timing_clock_origin);
@@ -19128,6 +19590,7 @@ class NativeTimingTick {
   deathtrap::timing::Mode mode_;
   uint64_t interpolated_before_ = 0;
   uint64_t suppressed_before_ = 0;
+  deathtrap::timing::Stamp diagnostic_;
 };
 
 enum class NativeTimingSpanKind { kSynthetic, kRetail, kPacing };
@@ -19236,6 +19699,11 @@ bool RefreshCurrentRenderCaches(void* context) {
   return true;
 }
 
+void CallDiagnosticBackendFlip(BackendFlipFn flip, deathtrap::timing::Part part) {
+  const DeathtrapDiagnosticScope diagnostic(part);
+  flip();
+}
+
 bool RenderMidpointWithoutAdvancingEngineClock(void* context) {
   const uintptr_t context_address = reinterpret_cast<uintptr_t>(context);
   uintptr_t backend_flip_address = 0;
@@ -19259,7 +19727,9 @@ bool RenderMidpointWithoutAdvancingEngineClock(void* context) {
   __try {
     if (prepared) {
       g_renderer(context);
-      reinterpret_cast<BackendFlipFn>(backend_flip_address)();
+      CallDiagnosticBackendFlip(
+          reinterpret_cast<BackendFlipFn>(backend_flip_address),
+          deathtrap::timing::Part::kVisibleFlip);
 
       // A legacy DirectDraw Flip rotates the game's front/back surface chain.
       // Leaving the midpoint page at the front makes the exact renderer use a
@@ -19272,7 +19742,9 @@ bool RenderMidpointWithoutAdvancingEngineClock(void* context) {
       // renders that endpoint into the same page it would have used natively.
       SetDeathtrapNativePageRestorePresentSuppressed(true);
       __try {
-        reinterpret_cast<BackendFlipFn>(backend_flip_address)();
+        CallDiagnosticBackendFlip(
+            reinterpret_cast<BackendFlipFn>(backend_flip_address),
+            deathtrap::timing::Part::kRestoreFlip);
         ++g_page_restore_flips;
       } __finally {
         SetDeathtrapNativePageRestorePresentSuppressed(false);
@@ -19906,6 +20378,10 @@ void __cdecl HookRenderPresentWait(void* context, int wait) {
 }
 
 void InitializePatchState() {
+  g_show_body_wounds.store(ConfiguredInteger(L"Gameplay",L"ShowWounds",1)!=0,
+                           std::memory_order_relaxed);
+  g_keep_bodies_enabled.store(ConfiguredInteger(L"Gameplay",L"KeepBodies",0)!=0,
+                               std::memory_order_relaxed);
   g_debug_log = ConfiguredDebugLog();
   g_extended_log_enabled.store(
       ConfiguredInteger(L"Diagnostics", L"ExtendedLogs", 0) != 0,
@@ -20162,6 +20638,12 @@ void InitializePatchState() {
       "support_extended_config schema=1 enabled=%u interval_ms=2000 debug=%u",
       g_extended_log_enabled.load(std::memory_order_relaxed) ? 1u : 0u,
       g_debug_log ? 1u : 0u);
+  if (DeathtrapExtendedLogsEnabled()) {
+    AppendDeathtrapSupportLog(
+        "support_extended_build kind=present_breakdown_20261015 "
+        "part_units=per_call parts_inclusive=1 cpu_clock=GetThreadTimes "
+        "visible_flip_scope=synthetic_only");
+  }
 
   HMODULE dungeon = GetModuleHandleW(L"Dungeon.dll");
   if (!dungeon) {
@@ -20365,6 +20847,14 @@ bool PatchDungeonCode(uintptr_t rva,
   return written;
 }
 
+#include "render_queue_runtime.inl"
+#include "texture_pool_runtime.inl"
+
+bool HeroineLiveDrawReady() {
+  return g_texture_pool_expanded && g_heroine_waist_hook_installed &&
+      g_dual_heroine_node_installed && g_dual_heroine_load;
+}
+
 constexpr DungeonCodeRva kFontAtlasSetupRva{0x00059A80u};
 constexpr DungeonCodeRva kFontAtlasLoopCompareRva{0x00059B77u};
 constexpr DungeonCodeRva kFontHeightBranchRva{0x0003A166u};
@@ -20501,6 +20991,10 @@ bool InstallGameTextFix() {
   return true;
 }
 
+#include "corpse_retention_runtime.inl"
+#include "native50_menu_runtime.inl"
+#include "death_recovery_runtime.inl"
+
 bool InstallRootMenuEscapeHook() {
   if (!g_dungeon_base) {
     return false;
@@ -20532,6 +21026,120 @@ bool InstallRootMenuEscapeHook() {
     return false;
   }
   AppendDeathtrapSupportLog("support_root_menu_escape state=active");
+  return true;
+}
+
+bool InstallModernControlMenuHooks() {
+  if (g_hardware_menu_hooks_installed) {
+    return true;
+  }
+  constexpr std::array<uint8_t, 4> kMenuPrologue = {0x83, 0xEC, 0x04, 0xA1};
+  constexpr std::array<uint8_t, 7> kInputPrologue = {
+      0x83, 0xEC, 0x08, 0x8D, 0x44, 0x24, 0x02};
+  constexpr DungeonCodeRva kLabelsInstructionRva{0x00017415u};
+  constexpr std::array<uint8_t, 6> kLabelsInstruction = {
+      0x8B, 0x88, 0x04, 0x05, 0, 0};
+  uintptr_t background_operand = 0;
+  uintptr_t localization_operand = 0;
+  if (!g_dungeon_base ||
+      !MatchesDungeonCode(kHardwareMenuRva, kMenuPrologue) ||
+      !MatchesDungeonCode(kHardwareMenuInputRva, kInputPrologue) ||
+      !MatchesDungeonCode(kLabelsInstructionRva, kLabelsInstruction) ||
+      !SafeRead(g_dungeon_base + kHardwareMenuRva + 4u,
+                &background_operand, sizeof(background_operand)) ||
+      background_operand != reinterpret_cast<uintptr_t>(
+          g_dungeon_base + kHardwareBackgroundSurfaceRva) ||
+      !SafeRead(g_dungeon_base + kHardwareMenuLabelsRva + 1u,
+                &localization_operand, sizeof(localization_operand)) ||
+      localization_operand != reinterpret_cast<uintptr_t>(
+          g_dungeon_base + kLocalizationTablePointerRva)) {
+    AppendDeathtrapSupportLog(
+        "support_control_settings state=signature_mismatch fallback=native");
+    return false;
+  }
+  struct Hook {
+    void* target;
+    void* detour;
+    void** original;
+    bool created = false;
+    bool enabled = false;
+  };
+  std::array<Hook, 3> hooks = {{
+      {g_dungeon_base + kHardwareMenuRva,
+       reinterpret_cast<void*>(&HookHardwareMenu),
+       reinterpret_cast<void**>(&g_original_hardware_menu)},
+      {g_dungeon_base + kHardwareMenuInputRva,
+       reinterpret_cast<void*>(&HookHardwareMenuInput),
+       reinterpret_cast<void**>(&g_original_hardware_input)},
+      {g_dungeon_base + kHardwareMenuLabelsRva,
+       reinterpret_cast<void*>(&HookHardwareMenuLabels),
+       reinterpret_cast<void**>(&g_original_hardware_labels)},
+  }};
+  const auto rollback = [&]() {
+    for (auto& hook : hooks) {
+      if (hook.enabled) {
+        MH_DisableHook(hook.target);
+      }
+      if (hook.created) {
+        MH_RemoveHook(hook.target);
+        *hook.original = nullptr;
+      }
+    }
+  };
+  for (auto& hook : hooks) {
+    const auto status = MH_CreateHook(hook.target, hook.detour, hook.original);
+    if (status != MH_OK) {
+      rollback();
+      AppendDeathtrapSupportLog(
+          "support_control_settings state=create_failed status=%d",
+          static_cast<int>(status));
+      return false;
+    }
+    hook.created = true;
+  }
+  g_hardware_menu_api = {
+      reinterpret_cast<KeyboardBindingMouseStateFn>(
+          g_dungeon_base + kKeyboardBindingMouseStateRva),
+      reinterpret_cast<KeyboardBindingHitTestFn>(
+          g_dungeon_base + kKeyboardBindingHitTestRva),
+      reinterpret_cast<KeyboardBindingKeyPressedFn>(
+          g_dungeon_base + kHardwareKeyDownRva),
+      reinterpret_cast<KeyboardBindingSetFontFn>(
+          g_dungeon_base + kKeyboardBindingSetFontRva),
+      reinterpret_cast<KeyboardBindingDrawTextFn>(
+          g_dungeon_base + kKeyboardBindingDrawTextRva),
+      reinterpret_cast<KeyboardBindingRestoreBackgroundFn>(
+          g_dungeon_base + kKeyboardBindingRestoreBackgroundRva),
+      reinterpret_cast<int32_t(__cdecl*)(const char*)>(
+          g_dungeon_base + kGameTextWidthRva),
+      +[](deathtrap::settings::ControlRow row, int requested) {
+        return ChangeModernControlSetting(row, requested);
+      },
+      reinterpret_cast<KeyboardBindingBuildPathFn>(
+          g_dungeon_base + kKeyboardBindingBuildPathRva),
+      reinterpret_cast<KeyboardBindingLoadImageFn>(
+          g_dungeon_base + kKeyboardBindingLoadImageRva),
+      reinterpret_cast<KeyboardBindingRightPanelFn>(
+          g_dungeon_base + kHardwareJoystickLabelsRva),
+      reinterpret_cast<KeyboardBindingRightPanelFn>(
+          g_dungeon_base + kHardwareJoystickFrameRva),
+  };
+  for (auto& hook : hooks) {
+    const auto status = MH_EnableHook(hook.target);
+    if (status != MH_OK) {
+      rollback();
+      g_hardware_menu_api = {};
+      AppendDeathtrapSupportLog(
+          "support_control_settings state=enable_failed status=%d",
+          static_cast<int>(status));
+      return false;
+    }
+    hook.enabled = true;
+  }
+  g_hardware_menu_hooks_installed = true;
+  AppendDeathtrapSupportLog(
+      "support_control_settings state=active menu=hardware "
+      "movement=keyboard_and_controller invert=modern_camera_xy save=immediate");
   return true;
 }
 
@@ -20736,6 +21344,40 @@ void AppendDeathtrapSupportLog(const char* format, ...) {
   va_end(args);
 }
 
+bool DeathtrapExtendedLogsEnabled() {
+  return g_extended_log_enabled.load(std::memory_order_relaxed);
+}
+
+deathtrap::timing::Stamp BeginDeathtrapDiagnosticTiming() {
+  deathtrap::timing::Stamp stamp;
+  if (!g_active_timing_frame || g_qpc_frequency.QuadPart <= 0) {
+    return stamp;
+  }
+  LARGE_INTEGER now{};
+  QueryPerformanceCounter(&now);
+  stamp.wall_ticks = static_cast<uint64_t>(now.QuadPart);
+  stamp.cpu_valid = ReadTimingThreadCpu(&stamp.thread_cpu_100ns);
+  return stamp;
+}
+
+void EndDeathtrapDiagnosticTiming(deathtrap::timing::Part part,
+                                  deathtrap::timing::Stamp stamp) {
+  if (!stamp.wall_ticks || !g_active_timing_frame ||
+      g_qpc_frequency.QuadPart <= 0) {
+    return;
+  }
+  LARGE_INTEGER now{};
+  QueryPerformanceCounter(&now);
+  uint64_t cpu_end = 0;
+  const bool cpu_valid = stamp.cpu_valid && ReadTimingThreadCpu(&cpu_end) &&
+      cpu_end >= stamp.thread_cpu_100ns;
+  deathtrap::timing::RecordPart(
+      g_active_timing_frame, part,
+      TimingMilliseconds(now.QuadPart - static_cast<int64_t>(stamp.wall_ticks)),
+      cpu_valid ? static_cast<double>(cpu_end - stamp.thread_cpu_100ns) / 10000.0
+                : -1.0);
+}
+
 uint64_t BeginDeathtrapPresentTiming() {
   if (!g_active_timing_frame) {
     return 0;
@@ -20802,6 +21444,10 @@ bool DeathtrapThirdPersonKeyboardCameraRelativeAvailable() {
   return KeyboardCameraRelativeRuntimeAvailable();
 }
 
+bool DeathtrapThirdPersonMouseAttackCameraRelativeAvailable() {
+  return KeyboardCameraRelativeRuntimeAvailable(true);
+}
+
 void SubmitDeathtrapThirdPersonKeyboardMovement(int32_t lateral,
                                                 int32_t longitudinal) {
   const int32_t clamped_lateral = std::clamp(lateral, -1, 1);
@@ -20816,7 +21462,7 @@ void SubmitDeathtrapThirdPersonKeyboardMovement(int32_t lateral,
 }
 
 void RequestDeathtrapThirdPersonMouseAttackFacing() {
-  if (KeyboardCameraRelativeRuntimeAvailable()) {
+  if (KeyboardCameraRelativeRuntimeAvailable(true)) {
     g_third_person_mouse_attack_facing_started_ms.store(
         GetTickCount64(), std::memory_order_release);
     g_third_person_mouse_attack_facing_phase.store(
@@ -20962,11 +21608,13 @@ bool DeathtrapModernCameraConsumesMouse() {
          !g_xinput_menu_mode.load(std::memory_order_acquire);
 }
 
-bool DeathtrapGameplayAcceptsMouseCombat() {
+static bool GameplayAcceptsCombat(bool controller) {
+  uint8_t selector_mode = 0;
   if (!IsGameForeground() ||
-      (g_controller_selector_overlay.load(std::memory_order_acquire) & 1u) !=
-          0u ||
-      !DeathtrapGameplayReady(true)) {
+      (!controller && (g_controller_selector_overlay.load(std::memory_order_acquire) & 1u) != 0u) ||
+      !DeathtrapGameplayReady(false) ||
+      !SafeReadValue(g_dungeon_base + kUiSelectorModeRva, &selector_mode) ||
+      selector_mode > 4u) {
     return false;
   }
   CURSORINFO cursor = {};
@@ -20977,6 +21625,14 @@ bool DeathtrapGameplayAcceptsMouseCombat() {
   }
   return !g_xinput_controller_present.load(std::memory_order_acquire) ||
          !g_xinput_menu_mode.load(std::memory_order_acquire);
+}
+
+bool DeathtrapGameplayAcceptsMouseCombat() {
+  return GameplayAcceptsCombat(false);
+}
+
+bool DeathtrapGameplayAcceptsControllerCombat() {
+  return g_xinput_controller_present.load(std::memory_order_acquire) && GameplayAcceptsCombat(true);
 }
 
 bool DeathtrapRangedWeaponSelected() {
@@ -21104,7 +21760,13 @@ bool InstallDeathtrapNativeRenderHooks() {
 
   // Optional and fail-closed: only the exact 25 KiB Steam MP3 wrapper is
   // accepted. Music failure must never disable rendering, input or camera.
+  InstallRenderQueueExpansion();
+  InstallTexturePoolExpansion();
   InstallDeathtrapMusicTrackFix();
+  g_e3_model_requested.store(ConfiguredInteger(L"Models",L"E3Heroine",0)!=0);
+  InstallHeroineWaistHook();
+  InstallDualHeroineNodeHook();
+  InstallHeroineModelHooks();
 
   // Keyboard bindings are patch-owned. Load them before either gameplay or
   // the paged retail editor can poll input.
@@ -21122,6 +21784,12 @@ bool InstallDeathtrapNativeRenderHooks() {
   // Page the retail keyboard screen without changing its fixed 11-row
   // storage. Failure leaves the original screen completely untouched.
   InstallKeyboardBindingPageHooks();
+
+  // An independently owned page entered through a book on the Setup table.
+  // Retail option arrays, files and the Hardware page remain untouched.
+  InstallCorpseRetentionHooks();
+  InstallNative50MenuHooks();
+  InstallDeathRecoveryHooks();
 
   // Preserve the retail serializer, slots, screenshots and loader. The hook
   // replaces only the Savetrig eligibility leaf and only after the exact
@@ -21322,10 +21990,9 @@ bool InstallDeathtrapNativeRenderHooks() {
   // immersive keyboard vector boundary, so installation must not depend on a
   // connected or enabled XInput device. The canonical 0x44DD0 writer keeps
   // render and collision headings in one transaction.
-  if (g_third_person_orbit_enabled &&
-      (g_xinput_camera_relative_movement ||
-       g_keyboard_mouse_camera_relative_movement ||
-       g_immersive_first_person_enabled)) {
+  // Keep the heading route ready even when this launch starts in tank mode:
+  // Hardware can enable modern movement immediately without restarting.
+  if (g_third_person_orbit_enabled) {
     if (g_immersive_first_person_enabled) {
       InstallImmersiveRootMotionHooks();
     }

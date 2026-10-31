@@ -1,7 +1,9 @@
 param(
     [ValidateSet('Debug', 'Release', 'RelWithDebInfo', 'MinSizeRel')]
     [string]$Configuration = 'Release',
-    [string]$BuildDirectory = 'build'
+    [string]$BuildDirectory = 'build',
+    [ValidateRange(1, 16)]
+    [int]$ParallelJobs = 4
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,7 +66,7 @@ $buildExitCode = Invoke-NormalizedProcess -Executable $msbuild -Arguments @(
     $solution,
     "/p:Configuration=$Configuration",
     '/p:Platform=Win32',
-    '/m'
+    "/m:$ParallelJobs"
 )
 if ($buildExitCode -ne 0) { throw 'Build failed.' }
 
@@ -144,6 +146,15 @@ if ($LASTEXITCODE -ne 0) { throw 'Localized game text/font bounds test failed.' 
 & (Join-Path $buildPath "$Configuration\controller_ui_test.exe")
 if ($LASTEXITCODE -ne 0) { throw 'Radial names/camera recenter ownership test failed.' }
 
+& (Join-Path $buildPath "$Configuration\modern_control_menu_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'Hardware modern-control settings test failed.' }
+
+& (Join-Path $buildPath "$Configuration\native50_menu_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'Native 50 book/settings page test failed.' }
+
+& (Join-Path $buildPath "$Configuration\corpse_retention_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'Corpse retention safety test failed.' }
+
 & $safeSave
 if ($LASTEXITCODE -ne 0) { throw 'Safe save eligibility test failed.' }
 
@@ -158,6 +169,18 @@ if ($LASTEXITCODE -ne 0) { throw 'Timing diagnostics runtime/toggle test failed.
 
 & $selectorGameplay
 if ($LASTEXITCODE -ne 0) { throw 'Selector gameplay command test failed.' }
+
+& (Join-Path $buildPath "$Configuration\selector_combat_runtime_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'Keyboard selector combat/runtime ownership test failed.' }
+
+& (Join-Path $buildPath "$Configuration\death_recovery_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'Death recovery save/load and dialog test failed.' }
+
+& (Join-Path $buildPath "$Configuration\player_wounds_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'Player wounds visibility and render isolation test failed.' }
+
+& (Join-Path $buildPath "$Configuration\model_pack_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'Bundled model delta reconstruction/isolation test failed.' }
 
 & $selectorCameraHandoff
 if ($LASTEXITCODE -ne 0) { throw 'Selector camera handoff test failed.' }

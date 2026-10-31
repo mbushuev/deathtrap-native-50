@@ -28,6 +28,9 @@ try {
         "[General]`r`nOutputAPI = d3d11_fl11_0`r`n")
 
     $oldDll = Join-Path $game 'DINPUT.dll'
+    $oldModelDelta = Join-Path $game 'native50-e3-model.n50p'
+    [System.IO.File]::WriteAllText($oldModelDelta, 'previous model delta')
+    $oldModelHash = Get-TestHash $oldModelDelta
     $oldIni = Join-Path $game 'deathtrap_native.ini'
     [System.IO.File]::WriteAllText($oldDll, 'previous installed DLL')
     [System.IO.File]::WriteAllText($oldIni, 'previous installed configuration')
@@ -94,6 +97,8 @@ try {
         -Destination (Join-Path $game 'install.ps1')
     Copy-Item -LiteralPath (Join-Path $repoRoot 'dist\DINPUT.dll') `
         -Destination (Join-Path $payload 'DINPUT.dll')
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'assets\models\e3-model.n50p') `
+        -Destination (Join-Path $payload 'native50-e3-model.n50p')
     Copy-Item -LiteralPath (Join-Path $repoRoot 'config\deathtrap_native.ini') `
         -Destination (Join-Path $payload 'deathtrap_native.ini')
     Copy-Item -LiteralPath (Join-Path $repoRoot 'config\keys.cfg') `
@@ -127,6 +132,15 @@ try {
         throw 'Installer did not replace the old DLL with the payload DLL.'
     }
     $installedIni = [System.IO.File]::ReadAllText($oldIni)
+    if ((Get-TestHash $oldModelDelta) -ne
+            (Get-TestHash (Join-Path $payload 'native50-e3-model.n50p'))) {
+        throw 'Installer did not install the bundled model delta.'
+    }
+    foreach ($setting in @('E3Heroine=0', 'ShowWounds=1', 'KeepBodies=0', 'ExtendedLogs=0')) {
+        if ($installedIni -notmatch ('(?m)^' + [regex]::Escape($setting) + '\s*$')) {
+            throw "Incorrect installed default: $setting"
+        }
+    }
     if ($installedIni -eq 'previous installed configuration' -or
             $installedIni -notmatch '(?m)^Mode=borderless\s*$' -or
             $installedIni -notmatch '(?m)^WindowWidth=([1-9][0-9]{2,})\s*$' -or
@@ -160,6 +174,9 @@ try {
         throw "Expected one rollback directory; found $($backups.Count)."
     }
     $backup = $backups[0]
+    if ((Get-TestHash (Join-Path $backup.FullName 'native50-e3-model.n50p')) -ne $oldModelHash) {
+        throw 'Rollback directory does not contain the previous model delta.'
+    }
     if ((Get-TestHash (Join-Path $backup.FullName 'DINPUT.dll')) -ne $oldDllHash) {
         throw 'Rollback directory does not contain the previous DLL.'
     }

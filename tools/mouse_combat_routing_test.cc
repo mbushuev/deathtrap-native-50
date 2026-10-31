@@ -22,6 +22,23 @@ int main() {
   using deathtrap::input::ResolveMouseCombatKeyboardPlan;
   using deathtrap::input::ShouldQueueMouseAttackCameraFacing;
 
+  deathtrap::input::ControllerCombatInput controller_input;
+  Require(controller_input.Consume() == 0, "new controller input must be neutral");
+  controller_input.Publish(0x09u); // RT + left between slow source ticks.
+  controller_input.Publish(0u);
+  Require(controller_input.Consume() == 0x09u && controller_input.Consume() == 0u,
+          "a released short RT press must retain its direction exactly once");
+  controller_input.Publish(0x03u);
+  Require(controller_input.Consume() == 0x03u && controller_input.Consume() == 0x03u,
+          "held RT must retain the native repeated-attack input");
+  controller_input.Publish(0x11u);
+  Require(controller_input.Consume() == 0x11u, "held RT must follow the current stick direction");
+  controller_input.Publish(0u);
+  Require(controller_input.Consume() == 0u, "release after consumption must not add another attack");
+  controller_input.Publish(0x05u);
+  controller_input.Clear();
+  Require(controller_input.Consume() == 0u, "frontend/disconnect must discard held and pending RT");
+
   const auto centered =
       ResolveControllerCombatDirection(0.1, -0.1, 0.25);
   Require(!centered.forward && !centered.backward && !centered.left &&

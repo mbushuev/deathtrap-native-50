@@ -12,9 +12,16 @@ REQUIRED_FILES = {
     "INSTALL-DECK.sh", "INSTALL.cmd", "install.ps1", "README.txt",
     "CHANGELOG.txt", "LICENSE.txt", "THIRD_PARTY_NOTICES.txt", "SHA256SUMS.txt",
     "payload/DINPUT.dll", "payload/deathtrap_native.ini", "payload/keys.cfg",
+    "payload/native50-e3-model.n50p",
     "payload/dxwrapper.ini", "payload/dgVoodoo.conf",
     "payload/dxwrapper/DDraw.dll", "payload/dxwrapper/dxwrapper.dll",
     "payload/dgVoodoo/D3D9.dll", "payload/dgVoodoo/D3DImm.dll",
+}
+EXPECTED_FILES = REQUIRED_FILES | {
+    "optional/dgVoodoo-General.png", "optional/dgVoodoo-DirectX.png",
+    "licenses/dxwrapper.txt", "source/dxwrapper/README.md",
+    "source/dxwrapper/deathtrap-dxwrapper.patch",
+    "source/dxwrapper/deathtrap-page-restore-present.patch",
 }
 
 
@@ -34,6 +41,10 @@ def verify_archive(path):
         missing = REQUIRED_FILES - set(names)
         if missing:
             raise ValueError(f"required ZIP files missing: {sorted(missing)}")
+        if set(names) != EXPECTED_FILES:
+            raise ValueError("unexpected ZIP contents: "
+                             f"extra={sorted(set(names) - EXPECTED_FILES)}, "
+                             f"missing={sorted(EXPECTED_FILES - set(names))}")
 
         manifest = {}
         for line in archive.read("SHA256SUMS.txt").decode("utf-8").splitlines():
@@ -57,6 +68,10 @@ def verify_archive(path):
         for name in ("DebugLog", "ExtendedLogs"):
             if settings.get("Diagnostics", name, fallback=None) != "0":
                 raise ValueError(f"Diagnostics/{name} must be disabled in the ZIP")
+        if settings.get("Models", "E3Heroine", fallback=None) != "0":
+            raise ValueError("Models/E3Heroine must select Original (0) in the ZIP")
+        if settings.get("Gameplay", "ShowWounds", fallback=None) != "1":
+            raise ValueError("Gameplay/ShowWounds must be enabled (1) in the ZIP")
     print("Release ZIP paths, required files and checksums passed.")
 
 

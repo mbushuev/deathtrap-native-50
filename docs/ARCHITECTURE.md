@@ -131,8 +131,16 @@ During active gameplay, the DirectInput proxy translates left mouse combat at
 the keyboard-state boundary into the verified retail `F+direction` grammar.
 A directionless click and `LMB+W` emit `F+W` for the normal attack, `LMB+A/D`
 emit the two side attacks, and `LMB+S` emits `F+A+D` for the original turning
-attack. The translator is gated out of menus and selectors and never mutates
-the live action table. With opt-in camera-relative keyboard movement active, a
+attack. The translator is gated out of frontend menus. Mouse attacks remain
+active with keyboard F1-F4 rows open, while controller RT also works with a
+radial open. The radial retains right-stick selection and A/B confirmation;
+the left stick chooses attack direction and does not move the character.
+Presentation polls retain a short RT press until a real input tick consumes it,
+including the press-time direction. No combat action runs in a synthetic frame.
+Mouse clicks remain excluded while the controller radial owns navigation.
+The translator never mutates the live
+action table or closes a selector to dispatch an attack. Selector time dilation
+continues to apply to gameplay. With camera-relative keyboard movement active, a
 physical left-button press also latches the resolved retail attack chord and
 queues a camera-facing turn. While it is pending, the keyboard boundary holds
 the attack and suppresses competing W/S/A/D input. The common player-state
@@ -472,3 +480,96 @@ re-author an already engaged orbit.
 
 The full design and test stages are in
 `docs/CLOSE-CAMERA-COLLISION-RESEARCH-2026-08-29.md`.
+
+### Death recovery
+
+The deferred single-player death transition offers the last successfully saved
+or loaded slot from the current level run. Starting from a save establishes the
+baseline; a later successful save replaces it. Failed serializers cannot advance
+the checkpoint. Fresh level starts, level changes and context destruction clear
+it; native death retries preserve it. Unrelated old disk slots are never chosen.
+The recorded file size/time and refreshed native slot metadata must still match.
+
+The dialog first calls the same native gameplay-to-frontend video transition
+as ordinary pause, selecting the 640x480 indexed menu raster before resources
+are drawn. Pause alone does not change the gameplay pitch or color depth.
+The dialog then runs inside Dungeon's original pause/frontend transaction, using the
+same parchment, retail fonts, palette and input pump as the custom settings page.
+It owns keyboard, mouse and controller input while open and requires a fresh
+confirmation press. Its result only sets the engine's pending save-slot byte;
+native cleanup, level initialization and deserialization perform the recovery.
+Without an eligible checkpoint (or if menu resources are unavailable) the native
+level restart proceeds immediately. Multiplayer respawn is unchanged.
+
+Save/load, active-play, preparation, context-destruction and root-menu hooks are
+signature guarded for all four supported binary layouts. The death recovery test
+covers checkpoint transitions, invalid files/metadata, modal input and the real
+localized death/preparation/load state callbacks with world callbacks isolated.
+The menu test's --death-preview mode checks the production dialog against the
+installed game's real fonts and parchment, without distributing retail assets.
+
+### Native 50 settings and persistent bodies
+
+The settings book and caption are embedded resources. The table, parchment,
+fonts and localized glyph metrics are read from the installed game. The menu
+owns input while active, repaints both native pages when returning, and saves
+settings before publishing runtime changes. Read-only configuration errors
+cannot produce a saved-looking value that differs from the running state.
+
+Persistent bodies transfer only the final scene model out of the original
+death cleanup. Native actors, collisions, AI, item drops and spawn signals are
+still released at their normal time. Bounded retained models can receive native
+melee contacts and fragments without retaining an active enemy actor. Level
+resets release retained models. The option defaults to disabled.
+
+The native render command arena and all six sorting arrays expand together
+to 65,536 entries. The texture pool expands from 45 to 120 pages, including
+free/age arrays, cache lookup, flushing, individual release and shutdown loops.
+Both changes verify original instructions before installation, preserve their
+native ownership rules and retain bounds checks. Tests execute the original
+sorter and resource lifecycle routines for each supported binary profile.
+
+### Player wound visibility
+
+Gameplay/ShowWounds defaults to 1, including when the key is absent in an older
+configuration. Setup / Native 50 exposes the persistent localized toggle.
+Disabling it selects the matching healthy part only at the PRT draw boundary.
+Native injury handles, health, damage, animation, actor cleanup and saved state
+are not rewritten. Enabling it again immediately draws the actual injury state.
+
+The lookup keeps the native bone and team for both playable characters. It is
+restricted to descendants of the player's render root, resolved through the
+gameplay actor's +0x10 render-link pointer and that link's root pointer. The actor
+and its +0x2C health/controller data are not scene ancestors. The same resolver
+serves camera/fade ownership. Enemies and detached parts keep
+their native appearance. Missing healthy resources load at scene-node entry,
+before native render-state preparation, never inside the leaf draw. Original/E3
+selection and the E3 waist transaction then apply to the chosen visible part.
+Tests cover ownership, failed/missing resources, persistence/defaults, localized
+menu layout and all 1,200 heroine part/state variants in both resident models.
+
+### Separate model resource overlay
+
+The original BOX remains the native archive. After guarded native initialization
+at 39410, the model router extends the per-resource table with its verified map.
+Unchanged entries and Original aliases retain offsets into the retail BOX.
+Only changed/new entries open model-data.bin through the game's CRT at 39C20;
+native allocation, conversion and stream cleanup stay in the original loader.
+The table/open/register/CRT signatures and metadata addresses are checked for
+all four supported DLL layouts. No complete BOX copy or global ReadFile hook is
+needed. Read-only opens fail closed if overlay data is unavailable.
+
+Preload-list routing replaces only CreateFileA/W import slots owned by
+Dungeon.dll and the DD_CD.EXE main image. It does not inline-hook system file
+APIs: Proton/Steam can expose a short CreateFileA thunk that MinHook cannot
+relocate. Import writes are atomic, protection-restored and rolled back if
+native resource hooks cannot be installed. Unrelated modules and write-capable
+opens retain their ordinary file routing. Startup failures report their stage.
+
+Torso and pelvis metalwork are two shared PRT resources. They warm once before
+native scene-node preparation, then draw with the current bone transform after
+the selected E3 part. All teams/injury stages reuse them; Original never does.
+Identical position/normal vertices share indices while UVs remain per corner.
+Only fields recomputed by native PRT initialization are canonicalized; drawable
+positions, normals, materials and wound surfaces remain unchanged. The leaf
+renderer performs no resource loading or ownership changes.

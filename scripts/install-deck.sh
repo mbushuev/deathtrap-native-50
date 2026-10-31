@@ -105,6 +105,7 @@ fi
 if [[ -d "$script_dir/payload" ]]; then
     payload_root="$script_dir/payload"
     native_dll="$payload_root/DINPUT.dll"
+    model_delta="$payload_root/native50-e3-model.n50p"
     native_ini="$payload_root/deathtrap_native.ini"
     keys_source="$payload_root/keys.cfg"
     dxwrapper_dir="$payload_root/dxwrapper"
@@ -113,6 +114,7 @@ elif [[ "${script_dir##*/}" == scripts &&
         -f "$script_dir/../CMakeLists.txt" ]]; then
     repo_root="$(cd -- "$script_dir/.." && pwd -P)"
     native_dll="$repo_root/dist/DINPUT.dll"
+    model_delta="$repo_root/assets/models/e3-model.n50p"
     native_ini="$repo_root/config/deathtrap_native.ini"
     keys_source="$repo_root/config/keys.cfg"
     dxwrapper_dir="$repo_root/third_party/deathtrap-dxwrapper-release225/x86"
@@ -128,6 +130,9 @@ declare -A source_files=(
     [dxwrapper.dll]="$dxwrapper_dir/dxwrapper.dll"
     [dxwrapper.ini]="$dxwrapper_ini"
 )
+if [[ -f "$model_delta" ]]; then
+    source_files[native50-e3-model.n50p]="$model_delta"
+fi
 for destination in "${!source_files[@]}"; do
     [[ -f "${source_files[$destination]}" ]] ||
         die "Installer payload is missing: ${source_files[$destination]}. Extract the complete release ZIP and try again."
@@ -348,7 +353,7 @@ backup_if_present() {
 }
 
 for existing in \
-    DINPUT.dll deathtrap_native.ini DDraw.dll dxwrapper.dll dxwrapper.ini \
+    DINPUT.dll native50-e3-model.n50p deathtrap_native.ini DDraw.dll dxwrapper.dll dxwrapper.ini \
     D3D9.dll D3DImm.dll dgVoodoo.conf deathtrap-native50-deck-launch.sh; do
     backup_if_present "$existing"
 done

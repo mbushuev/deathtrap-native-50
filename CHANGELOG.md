@@ -8,6 +8,66 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.235 — Halloween release: E3 heroine and in-game settings
+
+Changes since the last published release, 0.0.234.
+
+- Retains the Windows and Steam Deck improvements from 0.0.234, including
+  approximately 50 FPS presentation, widescreen, modern camera and controls,
+  controller menus, radial selectors and Deck-tuned vibration.
+- Adds a dedicated **Native 50** settings page, opened through an animated
+  book on the original Setup table. It uses the game's parchment and fonts,
+  supports keyboard, mouse and controller navigation, and follows the game's
+  English, French, German or Italian language.
+- Adds a saved, immediately applied switch between modern camera-relative
+  movement and original tank movement for keyboard and controller. Modern
+  movement remains the installation default. Camera X and Y inversion can be
+  changed and saved independently on the same page.
+- Adds optional persistent enemy bodies. Item drops, encounter progression
+  and enemy cleanup still occur at their original times, and retained bodies
+  can still be dismembered. Retention is off by default; older bodies may be
+  reclaimed to keep graphics memory bounded.
+- Adds **Show wounds**, enabled by default. Disabling it immediately hides
+  existing and subsequent damage marks on either playable character;
+  enabling it again restores the current injury appearance. Health, damage
+  and save data are unaffected.
+- Includes an optional **E3 1997** heroine reconstruction, selectable in
+  Setup → Native 50. Both models are resident, so switching applies immediately
+  without restarting the level. Original remains the installation default.
+  The reconstruction includes injury variants, modeled chains and a corrected
+  torso/pelvis attachment during animation. It is a reconstruction from
+  references, rather than a recovered original E3 model file.
+- Refines the E3 silhouette and rounded torso surfaces, shoulder attachments
+  and hip/leg transitions. Reworks fitted metal caps, their short connectors
+  and separate neck/front chains, with seven links across the front.
+- Repaints E3 skin details for the final geometry: chest and under-bust
+  shading, abdomen and navel, shoulder blades, arms, hands and visible legs.
+  Coordinates skin colors and texture placement across body parts; refines
+  leather panels, side fastenings, bracers and armor highlights. Preserves
+  the model's team and injury variants, including damaged hands.
+- Installs E3 as a compact resource delta. Original resources are read directly
+  from the installed game; a separate verified cache stores only model changes.
+  No complete game archive is copied. Metal chains are shared across injury
+  and team variants, with identical vertices reused without changing the model's
+  appearance. Original archives are not replaced or included in the download.
+- Loads and switches the bundled E3 model under Steam Deck's Proton/Steam
+  integration without relying on global Windows file-function detours. Avoids
+  a false "E3 model is missing" status when the model and cache are present.
+- After death, offers **Load last save** or **Restart level** when a successful
+  save or load was recorded in the current level run. Loading a save establishes
+  the initial checkpoint; later successful saves replace it. Without an eligible
+  checkpoint, the level restarts automatically. The dialog uses the original
+  menu presentation and accepts keyboard, mouse and controller input.
+- Restores ordinary attacks while the F1–F4 item selectors or controller radial
+  selectors are open. Short controller attack presses are retained until the
+  next gameplay input tick; selector navigation and slow motion remain active.
+- Expands the native render queue and texture-page pool together with their
+  allocation, lookup and cleanup boundaries, avoiding the original small limits
+  when additional model geometry and injury variants are displayed.
+- Extends opt-in diagnostic logs with the graphics adapter, rendering settings,
+  and wall-time/CPU-time breakdowns around rendering, presentation and GPU
+  readback waits. **ExtendedLogs remains disabled by default.**
+
 ## 0.0.234 — Steam Deck, controller camera and localized interface improvements
 
 - Retains the complete Windows and Steam Deck experience from 0.0.233,

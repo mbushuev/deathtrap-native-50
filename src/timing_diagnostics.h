@@ -1,8 +1,12 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+
+#include "diagnostic_scopes.h"
 
 namespace deathtrap::timing {
 
@@ -45,7 +49,15 @@ struct Values {
   double Hertz() const { return total > 0.0 ? count * 1000.0 / total : 0.0; }
 };
 
+struct Component {
+  Values wall;
+  Values cpu;
+};
+
+using Components = std::array<Component, static_cast<size_t>(Part::kCount)>;
+
 struct Frame {
+  Components parts{};
   double begin_ms = 0.0;
   double end_ms = 0.0;
   double synthetic_ms = 0.0;
@@ -70,6 +82,7 @@ struct Frame {
 };
 
 struct Summary {
+  Components parts{};
   Mode mode;
   double begin_ms = 0.0;
   double end_ms = 0.0;
@@ -151,6 +164,16 @@ class Window {
     current_.synthetic.Add(frame.synthetic_ms);
     current_.retail.Add(frame.retail_ms);
     current_.pacing.Add(frame.pacing_ms);
+    for (size_t index = 0; index < frame.parts.size(); ++index) {
+      const Component& source = frame.parts[index];
+      Component& target = current_.parts[index];
+      target.wall.count += source.wall.count;
+      target.wall.total += source.wall.total;
+      target.wall.maximum = std::max(target.wall.maximum, source.wall.maximum);
+      target.cpu.count += source.cpu.count;
+      target.cpu.total += source.cpu.total;
+      target.cpu.maximum = std::max(target.cpu.maximum, source.cpu.maximum);
+    }
     if (frame.present_calls) {
       current_.presents.count += frame.present_calls;
       current_.presents.total += frame.present_ms;
@@ -194,6 +217,19 @@ class Window {
   double previous_begin_ms_ = 0.0;
   double previous_end_ms_ = 0.0;
 };
+
+// Values are per completed invocation, not totals divided by source ticks.
+// Missing CPU readings remain missing rather than inventing a zero sample.
+inline void RecordPart(Frame* frame, Part part, double wall_ms,
+                       double cpu_ms = -1.0) {
+  const size_t index = static_cast<size_t>(part);
+  if (!frame || index >= frame->parts.size() ||
+      !std::isfinite(wall_ms) || wall_ms < 0.0) {
+    return;
+  }
+  frame->parts[index].wall.Add(wall_ms);
+  frame->parts[index].cpu.Add(cpu_ms);
+}
 
 // Count completed DXGI submissions, not attempted/suppressed page flips. TEST
 // calls and nonzero success statuses (e.g. OCCLUDED) are not visible presents.

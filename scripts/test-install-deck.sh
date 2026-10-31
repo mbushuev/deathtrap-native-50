@@ -59,7 +59,7 @@ assert_text_line() {
 verify_install() {
     local game="$1" width="$2" height="$3" expect_launcher="$4" file
     for file in DINPUT.dll deathtrap_native.ini DDraw.dll dxwrapper.dll \
-        dxwrapper.ini; do
+        dxwrapper.ini native50-e3-model.n50p; do
         [[ -f "$game/$file" ]] || fail "missing installed file: $file"
     done
     for file in D3D9.dll D3DImm.dll dgVoodoo.conf; do
@@ -77,6 +77,11 @@ verify_install() {
     assert_text_line "$game/deathtrap_native.ini" 'RunThresholdPercent=90'
     assert_text_line "$game/deathtrap_native.ini" 'ExtendedLogs=0'
     assert_text_line "$game/deathtrap_native.ini" 'DebugLog=0'
+    assert_text_line "$game/deathtrap_native.ini" 'E3Heroine=0'
+    assert_text_line "$game/deathtrap_native.ini" 'ShowWounds=1'
+    assert_text_line "$game/deathtrap_native.ini" 'KeepBodies=0'
+    cmp "$repo_root/assets/models/e3-model.n50p" "$game/native50-e3-model.n50p" ||
+        fail 'installed model delta differs from the release source'
     assert_text_line "$game/dxwrapper.ini" 'DdrawClearFlipBackBuffer = 1'
     assert_text_line "$game/dxwrapper.ini" 'DdrawUseExternalD3D9 = 1'
     if ((expect_launcher)); then
@@ -159,6 +164,7 @@ else
     mkdir -p -- "$release_root/payload/dxwrapper" "$release_root/payload/dgVoodoo"
     cp -- "$installer" "$release_root/INSTALL-DECK.sh"
     cp -- "$repo_root/dist/DINPUT.dll" "$release_root/payload/DINPUT.dll"
+    cp -- "$repo_root/assets/models/e3-model.n50p" "$release_root/payload/native50-e3-model.n50p"
     cp -- "$repo_root/config/deathtrap_native.ini" "$release_root/payload/deathtrap_native.ini"
     cp -- "$repo_root/config/keys.cfg" "$release_root/payload/keys.cfg"
     cp -- "$repo_root/config/dxwrapper-dgvoodoo.ini" "$release_root/payload/dxwrapper.ini"

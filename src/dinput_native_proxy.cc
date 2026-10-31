@@ -86,7 +86,7 @@ std::atomic<uint64_t> g_suppressed_page_restores{0};
 std::atomic<int32_t> g_xinput_mouse_delta_x{0};
 std::atomic<int32_t> g_xinput_mouse_delta_y{0};
 std::atomic<uint8_t> g_xinput_mouse_buttons{0};
-std::atomic<uint8_t> g_xinput_combat_state{0};
+deathtrap::input::ControllerCombatInput g_xinput_combat_state;
 std::atomic<uint32_t> g_xinput_gameplay_commands{0};
 std::array<std::atomic<uint16_t>, deathtrap::input::kKeyboardActionCount>
     g_keyboard_bindings{};
@@ -349,7 +349,7 @@ void PublishPhysicalLeftButtonState(bool down) {
                                                   std::memory_order_release);
       if (deathtrap::input::ShouldQueueMouseAttackCameraFacing(
               true, DeathtrapGameplayAcceptsMouseCombat(),
-              DeathtrapThirdPersonKeyboardCameraRelativeAvailable())) {
+              DeathtrapThirdPersonMouseAttackCameraRelativeAvailable())) {
         RequestDeathtrapThirdPersonMouseAttackFacing();
       }
     }
@@ -898,17 +898,20 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     const bool physical_left_button =
         physical_left_button_down || physical_left_button_pressed;
     const uint8_t controller_combat =
-        g_xinput_combat_state.load(std::memory_order_acquire);
+        g_xinput_combat_state.Consume();
     const bool controller_attack = (controller_combat & 0x01u) != 0u;
-    if (!physical_left_button && controller_attack) {
+    const bool mouse_accepts_combat = DeathtrapGameplayAcceptsMouseCombat();
+    const bool physical_attack = physical_left_button && mouse_accepts_combat;
+    if (!physical_attack && controller_attack) {
       forward = (controller_combat & 0x02u) != 0u;
       backward = (controller_combat & 0x04u) != 0u;
       left = (controller_combat & 0x08u) != 0u;
       right = (controller_combat & 0x10u) != 0u;
     }
-    const bool attack_button = physical_left_button || controller_attack;
+    const bool attack_button = physical_attack || controller_attack;
     const bool gameplay_accepts_combat =
-        DeathtrapGameplayAcceptsMouseCombat();
+        physical_attack || (controller_attack
+            ? DeathtrapGameplayAcceptsControllerCombat() : mouse_accepts_combat);
     const bool ranged_weapon_selected =
         gameplay_accepts_combat && DeathtrapRangedWeaponSelected();
     auto combat_plan =
@@ -921,7 +924,7 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
         mouse_attack_facing_phase != DeathtrapMouseAttackFacingPhase::kIdle &&
         mouse_attack_facing_phase !=
             DeathtrapMouseAttackFacingPhase::kCanceled;
-    if (physical_left_button_pressed && mouse_attack_facing_active &&
+    if (physical_attack && physical_left_button_pressed && mouse_attack_facing_active &&
         combat_plan.modifier_down) {
       // Preserve the exact melee side/back or ranged choice made on the click
       // edge. A quick click may be released before the native turn completes.
@@ -1067,7 +1070,7 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
       AppendDeathtrapSupportLog(
           "mouse_combat route=%d source=%u input=%u%u%u%u immersive=%u "
           "gameplay=%u",
-          route, physical_left_button ? 1u : (controller_attack ? 2u : 0u),
+          route, physical_attack ? 1u : (controller_attack ? 2u : 0u),
           forward ? 1u : 0u, backward ? 1u : 0u, left ? 1u : 0u,
           right ? 1u : 0u, immersive_vector ? 1u : 0u,
           gameplay_accepts_combat ? 1u : 0u);
@@ -1600,6 +1603,9 @@ SwapChainPresent1Fn OriginalPresent1(IDXGISwapChain1* swap_chain) {
 
 HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* swap_chain,
                                       UINT sync_interval, UINT flags) {
+  const DeathtrapDiagnosticScope diagnostic(
+      deathtrap::timing::Part::kPresentHook,
+      !g_inside_present && !g_suppress_page_restore);
   if (g_support_foreground_activation_pending.load(
           std::memory_order_acquire)) {
     TryActivateSupportWindow();
@@ -1635,6 +1641,9 @@ HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* swap_chain,
 HRESULT STDMETHODCALLTYPE HookPresent1(
     IDXGISwapChain1* swap_chain, UINT sync_interval, UINT flags,
     const DXGI_PRESENT_PARAMETERS* parameters) {
+  const DeathtrapDiagnosticScope diagnostic(
+      deathtrap::timing::Part::kPresentHook,
+      !g_inside_present && !g_suppress_page_restore);
   if (g_support_foreground_activation_pending.load(
           std::memory_order_acquire)) {
     TryActivateSupportWindow();
@@ -2035,13 +2044,17 @@ void SubmitDeathtrapXInputCombatState(bool attack, bool forward, bool backward,
                    (right ? 0x10u : 0u)
              : 0u);
   const uint8_t previous =
-      g_xinput_combat_state.exchange(state, std::memory_order_acq_rel);
+      g_xinput_combat_state.Publish(state);
   if (state != previous) {
     AppendDeathtrapSupportLog(
         "xinput_combat attack=%u input=%u%u%u%u",
         attack ? 1u : 0u, forward ? 1u : 0u, backward ? 1u : 0u,
         left ? 1u : 0u, right ? 1u : 0u);
   }
+}
+
+void ClearDeathtrapXInputCombatState() {
+  g_xinput_combat_state.Clear();
 }
 
 void SubmitDeathtrapXInputGameplayCommands(uint32_t commands) {

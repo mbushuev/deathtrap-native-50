@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current version: **0.0.234**
+Current version: **0.0.235**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -9,7 +9,7 @@ Current version: **0.0.234**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.234.png" alt="Deathtrap Native 50 v0.0.234 — Steam Deck, controller camera and localized interface improvements" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.235.png" alt="Deathtrap Native 50 v0.0.235 — Halloween release" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -33,9 +33,10 @@ Launch Options. There is no separate graphics wrapper to download or configure.
 
 This project is not affiliated with or endorsed by Square Enix, Eidos
 Interactive, Asylum Studios, Ian Livingstone or the developers of dgVoodoo.
-It contains no game assets, game executables or soundtrack files. The release
-redistributes only the required wrapper runtime files under their published
-redistribution terms.
+It includes new menu artwork and the optional E3 heroine reconstruction as a
+resource delta. It does not include original game archives, game executables
+or soundtrack files. The original resources are read from your own installation.
+Required wrapper runtime files are redistributed under their published terms.
 
 ## Highlights
 
@@ -79,10 +80,37 @@ redistribution terms.
   accented font glyphs preserved in rendered menus and gameplay messages.
 - Localized selected-item names in controller radial selectors, and a smooth
   third-person camera return behind the character with `Y`.
+- A dedicated Native 50 settings book in Setup, with saved modern/tank movement,
+  independent camera X/Y inversion, persistent-body and wound-visibility options.
+- Optional persistent enemy bodies that retain dismemberment without delaying
+  item drops or encounter progression.
+- A choice to load the latest save from the current level run or restart after
+  death; levels without an eligible checkpoint restart automatically.
+- Ordinary attacks while keyboard or controller item selectors are open.
+- An optional E3 1997 heroine reconstruction with immediate model switching;
+  Original is selected by default and original game archives stay untouched.
+- Reworked E3 anatomy, fitted chain attachments and painted skin, leather and
+  armor textures, including injury and team variants.
 - Longer gameplay prompts and safe automatic per-launch support logs.
 
 See the [user-facing changelog](CHANGELOG.md) for the complete consolidated
 list of changes from the original Steam release.
+
+## Enable the E3 heroine
+
+Install the complete release ZIP, then open **Setup → Native 50** and set
+**Heroine model → E3 1997**. The change is saved and applies immediately,
+including during a level. Choose Red Lotus to play as the heroine.
+**Original remains selected by default.** To switch back, select Original
+on the same page. This is a reconstruction from surviving references,
+rather than a recovered original E3 model file.
+
+The installer supplies `native50-e3-model.n50p` beside `DD_CD.EXE`. The first
+launch creates a small local cache using your installed game; no separate
+model download or replacement of `ASYLUM/DUNGEON.BOX` is needed. If you prefer
+editing settings with the game closed, set `E3Heroine=1` under `[Models]` in
+`deathtrap_native.ini`; `0` restores Original. This works on Windows and
+Steam Deck.
 
 ## Support the project
 
@@ -153,6 +181,7 @@ THIRD_PARTY_NOTICES.txt
 LICENSE.txt
 payload/
   DINPUT.dll
+  native50-e3-model.n50p      reconstructed model delta
   deathtrap_native.ini
   keys.cfg
   dxwrapper.ini

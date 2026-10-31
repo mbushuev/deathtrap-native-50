@@ -275,6 +275,42 @@ input, while release/deceleration is immediate. Separate walk/run entry and
 release thresholds prevent chatter; native animations are not retimed/blended.
 Small first-person deflections do not turn the view with the left stick.
 
+NATIVE 50 SETTINGS
+
+Open Setup and select the animated Native 50 book. Settings are saved to
+deathtrap_native.ini and apply immediately:
+
+- Movement: Modern (the default) or original Tank movement.
+- Invert camera X / Y: independent inversion of the modern camera axes.
+- Keep bodies: optional persistent enemy bodies, off by default. Drops and
+  encounter progression keep their original timing; dismemberment still works.
+  Older retained bodies may be reclaimed to keep memory use bounded.
+- Show wounds: enabled by default. Switching it off hides current and future
+  player damage marks without changing health, damage or saves.
+
+- Heroine model: Original (the default) or the bundled E3 1997 reconstruction.
+  Switching applies immediately without restarting the level. This is a
+  reconstruction from references, not a recovered original E3 model file.
+
+To enable it: open Setup -> Native 50 -> Heroine model -> E3 1997.
+Choose Red Lotus to play as the heroine. Select Original on the same page
+to switch back. Alternatively, close the game and set E3Heroine=1 under
+[Models] in deathtrap_native.ini; 0 selects Original.
+
+At the first launch the patch builds a local E3 resource overlay from
+native50-e3-model.n50p. This can briefly extend startup and uses about 18 MB of
+additional disk space. Original resources are read directly from your installed
+game; no complete archive is copied. Later launches validate and reuse the cache.
+The original ASYLUM/DUNGEON.BOX is never replaced. No separate model installation
+or manual file copying is needed on Windows or Steam Deck.
+
+AFTER DEATH
+
+If you successfully saved or loaded during the current level run, you can
+choose Load last save or Restart level. Loading a level from a save establishes
+the first checkpoint; a later successful save replaces it. Old unrelated slots
+are not chosen automatically. Without an eligible checkpoint the level restarts.
+
 PROJECTS AND REPOSITORIES USED
 
 MinHook 1.3.4 - statically linked API-hooking dependency:
@@ -336,8 +372,10 @@ monitor scanouts, and present_observed=0 means the DXGI measurement is not
 available, not that the game runs at zero FPS. Present durations are already
 included in render durations. The timing switch is independent of DebugLog.
 
-This patch contains no game assets. THIRD_PARTY_NOTICES must remain with
-redistributed copies of the patch.
+This patch includes new menu artwork and a reconstruction delta, and requires
+the original assets from your own game installation. It does not distribute
+original game archives, executables or soundtrack files. THIRD_PARTY_NOTICES
+must remain with redistributed copies of the patch.
 
 Deathtrap Native 50 is licensed under the MIT License. See LICENSE.txt.
 

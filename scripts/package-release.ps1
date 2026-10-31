@@ -31,6 +31,21 @@ if ($config -notmatch '(?m)^DebugLog=0\s*$') {
 if ($config -notmatch '(?m)^ExtendedLogs=0\s*$') {
     throw 'Release configuration must set Diagnostics/ExtendedLogs=0.'
 }
+if ($config -notmatch '(?m)^KeepBodies=0\s*$') {
+    throw 'Release configuration must leave optional body retention disabled.'
+}
+$modelSection = [regex]::Match($config, '(?ms)^\[Models\][ \t]*\r?$([^\[]*)')
+$gameplaySection = [regex]::Match($config, '(?ms)^\[Gameplay\][ \t]*\r?$([^\[]*)')
+if (-not $gameplaySection.Success -or
+        [regex]::Matches($gameplaySection.Groups[1].Value, '(?m)^ShowWounds=').Count -ne 1 -or
+        $gameplaySection.Groups[1].Value -notmatch '(?m)^ShowWounds=1\s*$') {
+    throw 'Release configuration must enable body wounds: Gameplay/ShowWounds=1.'
+}
+if (-not $modelSection.Success -or
+        [regex]::Matches($modelSection.Groups[1].Value, '(?m)^E3Heroine=').Count -ne 1 -or
+        $modelSection.Groups[1].Value -notmatch '(?m)^E3Heroine=0\s*$') {
+    throw 'Release configuration must select the original heroine: Models/E3Heroine=0.'
+}
 $dgVoodooConfigPath = Join-Path $repoRoot 'config\dgVoodoo-recommended.conf'
 $dgVoodooConfig = Get-Content -LiteralPath $dgVoodooConfigPath -Raw
 if ($dgVoodooConfig -notmatch `
@@ -137,6 +152,7 @@ New-Item -ItemType Directory -Path $stageRoot | Out-Null
 
 $releaseFiles = @(
     @{ Source = 'dist\DINPUT.dll'; Destination = 'payload\DINPUT.dll' },
+    @{ Source = 'assets\models\e3-model.n50p'; Destination = 'payload\native50-e3-model.n50p' },
     @{ Source = 'config\deathtrap_native.ini'; Destination = 'payload\deathtrap_native.ini' },
     @{ Source = 'config\keys.cfg'; Destination = 'payload\keys.cfg' },
     @{ Source = 'third_party\dgVoodoo2-2.86.2\x86\D3DImm.dll'; Destination = 'payload\dgVoodoo\D3DImm.dll' },
@@ -188,6 +204,13 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $manifestLines = New-Object System.Collections.Generic.List[string]
 $packagedFiles = Get-ChildItem -LiteralPath $stageRoot -Recurse -File |
     Sort-Object FullName
+$expectedFiles = @($releaseFiles | ForEach-Object { $_.Destination.Replace('\', '/') }) + 'README.txt'
+$actualFiles = @($packagedFiles | ForEach-Object {
+    $_.FullName.Substring($stageRoot.Length + 1).Replace('\', '/')
+})
+if (Compare-Object $expectedFiles $actualFiles) {
+    throw 'Release staging directory contains unexpected or missing files.'
+}
 $forbiddenPayload = $packagedFiles | Where-Object {
     $_.Name -match '(?i)(multiplayer|relay|ipx)'
 }

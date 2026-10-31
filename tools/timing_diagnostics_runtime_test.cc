@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <cstdint>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -6,9 +7,22 @@
 namespace {
 int64_t test_clock = 1000;
 uint32_t clock_reads = 0;
+uint64_t test_cpu_time = 100000;
+uint32_t cpu_clock_reads = 0;
+bool cpu_clock_available = true;
 BOOL WINAPI ReadTimingTestClock(LARGE_INTEGER* out) {
   ++clock_reads;
   out->QuadPart = test_clock;
+  return TRUE;
+}
+BOOL WINAPI ReadTimingTestThreadTimes(HANDLE, LPFILETIME creation,
+                                     LPFILETIME exit, LPFILETIME kernel,
+                                     LPFILETIME user) {
+  ++cpu_clock_reads;
+  if (!cpu_clock_available) { return FALSE; }
+  *creation = *exit = *kernel = {};
+  user->dwLowDateTime = static_cast<DWORD>(test_cpu_time);
+  user->dwHighDateTime = static_cast<DWORD>(test_cpu_time >> 32u);
   return TRUE;
 }
 }
@@ -16,7 +30,9 @@ BOOL WINAPI ReadTimingTestClock(LARGE_INTEGER* out) {
 // Exercise the actual opt-in scopes and log writer with a deterministic clock,
 // without launching a game, changing input, or requiring a graphics device.
 #define QueryPerformanceCounter ReadTimingTestClock
+#define GetThreadTimes ReadTimingTestThreadTimes
 #include "../src/deathtrap_native_render_patch.cc"
+#undef GetThreadTimes
 #undef QueryPerformanceCounter
 
 namespace {
@@ -81,20 +97,33 @@ int main() {
   {
     NativeTimingTick disabled;
     if (disabled.Active() || BeginDeathtrapPresentTiming() != 0) { return 1; }
+    const DeathtrapDiagnosticScope guard(deathtrap::timing::Part::kGuard);
     CallOriginalRenderPresentWait(nullptr, 16);
     const NativeTimingSpan pacing(NativeTimingSpanKind::kPacing);
     EndDeathtrapPresentTiming(123, 0, 0, 0);
   }
-  if (clock_reads != 0 || retail_calls != 1 || g_active_timing_frame) {
+  if (clock_reads != 0 || cpu_clock_reads != 0 || retail_calls != 1 ||
+      g_active_timing_frame || DeathtrapExtendedLogsEnabled()) {
     std::cerr << "disabled ExtendedLogs performed a clock query or changed a call\n";
     return 2;
   }
   g_extended_log_enabled.store(true);
   g_debug_log = false;
   g_qpc_frequency.QuadPart = 0;
-  { NativeTimingTick invalid_clock; if (invalid_clock.Active()) { return 3; } }
-  if (clock_reads != 0) { return 4; }
+  {
+    NativeTimingTick invalid_clock;
+    const DeathtrapDiagnosticScope guard(deathtrap::timing::Part::kGuard);
+    if (invalid_clock.Active()) { return 3; }
+  }
+  if (clock_reads != 0 || cpu_clock_reads != 0) { return 4; }
   g_qpc_frequency.QuadPart = 1000;
+  {
+    const DeathtrapDiagnosticScope unscoped(deathtrap::timing::Part::kGuard);
+  }
+  if (clock_reads != 0 || cpu_clock_reads != 0) {
+    std::cerr << "unscoped diagnostics queried a clock\n";
+    return 9;
+  }
   for (uint32_t i = 0; i < 35; ++i) { MeasuredFrame(i, 3); }
   MeasuredFrame(35, 0);
   MeasuredFrame(36, 0);
@@ -120,6 +149,85 @@ int main() {
     return 8;
   }
   if (log.find("presentation_pair") != std::string::npos) { return 7; }
+
+  // A separate window preserves the original 50 Hz cadence assertions above.
+  // Model the actual ordering: guard readback completes before the legacy
+  // Present timer starts. Inclusive hook/guard spans must retain that wait.
+  using deathtrap::timing::Part;
+  g_timing_window = {};
+  g_timing_clock_origin = 0;
+  g_qpc_frequency.QuadPart = 1000000;
+  test_clock = 10000000;
+  {
+    NativeTimingTick tick;
+    tick.Configure(TestMode(3));
+    const auto wall_before = clock_reads;
+    const auto cpu_before = cpu_clock_reads;
+    { const DeathtrapDiagnosticScope disabled(Part::kGuard, false); }
+    if (wall_before != clock_reads || cpu_before != cpu_clock_reads) {
+      std::cerr << "explicitly disabled scope queried a clock\n";
+      return 10;
+    }
+    {
+      const DeathtrapDiagnosticScope hook(Part::kPresentHook);
+      {
+        const DeathtrapDiagnosticScope guard(Part::kGuard);
+        {
+          const DeathtrapDiagnosticScope copies(Part::kGuardCopies);
+          test_clock += 1000;
+          test_cpu_time += 5000;  // 0.5 ms of CPU in 1 ms of wall time.
+        }
+        {
+          const DeathtrapDiagnosticScope map(Part::kGuardMap);
+          test_clock += 24000;
+          test_cpu_time += 1000;  // 0.1 ms of CPU in a 24 ms wait.
+        }
+      }
+      const uint64_t present = BeginDeathtrapPresentTiming();
+      test_clock += 250;
+      test_cpu_time += 500;
+      EndDeathtrapPresentTiming(present, 1, 0, 0);
+    }
+    const auto& guard = g_active_timing_frame->parts[static_cast<size_t>(Part::kGuard)];
+    const auto& hook = g_active_timing_frame->parts[static_cast<size_t>(Part::kPresentHook)];
+    if (guard.wall.count != 1 || std::abs(guard.wall.total - 25.0) > 0.001 ||
+        std::abs(guard.cpu.total - 0.6) > 0.001 || hook.wall.count != 1 ||
+        std::abs(hook.wall.total - 25.25) > 0.001 ||
+        std::abs(g_active_timing_frame->present_ms - 0.25) > 0.001) {
+      std::cerr << "guard wait was hidden in or confused with original Present\n";
+      return 11;
+    }
+    cpu_clock_available = false;
+    {
+      const DeathtrapDiagnosticScope no_cpu(Part::kRenderer);
+      test_clock += 1000;
+    }
+    cpu_clock_available = true;
+    const auto& renderer = g_active_timing_frame->parts[static_cast<size_t>(Part::kRenderer)];
+    if (renderer.wall.count != 1 || renderer.cpu.count != 0) {
+      std::cerr << "failed thread-clock read fabricated CPU work or lost wall time\n";
+      return 12;
+    }
+  }
+  test_clock += 1000;
+  { NativeTimingTick flush; flush.Configure(TestMode(0)); }
+  if (retail_calls != 39 || g_active_timing_frame) {
+    std::cerr << "diagnostic scopes replayed original calls or leaked frame state\n";
+    return 13;
+  }
+  const std::string detailed_log = ReadLog();
+  for (const char* field : {
+           "support_timing_part", "name=guard calls=1 wall_avg_ms=25.000",
+           "name=guard_map calls=1 wall_avg_ms=24.000",
+           "name=guard_copies calls=1 wall_avg_ms=1.000",
+           "name=present_hook calls=1 wall_avg_ms=25.250",
+           "present_avg_ms=0.250", "cpu_samples=1 cpu_avg_ms=0.600",
+           "cpu_samples=0", "inclusive=1"}) {
+    if (detailed_log.find(field) == std::string::npos) {
+      std::cerr << "missing component runtime log field: " << field << '\n';
+      return 14;
+    }
+  }
   std::cout << "timing runtime tests passed: off=no clock queries; "
                "on=bounded logs with DebugLog=0; original calls unchanged\n";
   return 0;

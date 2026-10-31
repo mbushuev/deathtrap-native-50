@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <atomic>
 
 namespace deathtrap::input {
 
@@ -29,6 +30,32 @@ struct ControllerCombatDirection {
   bool backward = false;
   bool left = false;
   bool right = false;
+};
+
+// Presentation polls may see an RT press and release between slow gameplay
+// ticks. Keep one coherent press (including its direction) until a real
+// keyboard poll consumes it. One atomic word prevents mixed direction bits.
+class ControllerCombatInput {
+ public:
+  uint8_t Publish(uint8_t command) {
+    command = (command & 1u) ? command & 0x1Fu : 0u;
+    uint32_t observed = state_.load(std::memory_order_acquire);
+    for (;;) {
+      uint32_t desired = (observed & 0x1F00u) | command;
+      if ((command & 1u) && !(observed & 1u))
+        desired = (static_cast<uint32_t>(command) << 8u) | command;
+      if (state_.compare_exchange_weak(observed, desired,
+              std::memory_order_acq_rel, std::memory_order_acquire))
+        return static_cast<uint8_t>(observed & 0x1Fu);
+    }
+  }
+  uint8_t Consume() {
+    const uint32_t sampled = state_.fetch_and(0x1Fu, std::memory_order_acq_rel);
+    return static_cast<uint8_t>((sampled & 1u) ? sampled & 0x1Fu : (sampled >> 8u) & 0x1Fu);
+  }
+  void Clear() { state_.store(0, std::memory_order_release); }
+ private:
+  std::atomic<uint32_t> state_{0};
 };
 
 struct ControllerJoystickMovementPlan {

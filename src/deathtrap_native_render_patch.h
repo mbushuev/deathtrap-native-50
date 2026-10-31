@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "diagnostic_scopes.h"
+
 // One process session writes all render/input/present diagnostics to one
 // timestamped file under the game's logs subdirectory.
 const wchar_t* GetDeathtrapSessionLogPath();
@@ -91,6 +93,8 @@ void SubmitDeathtrapXInputMouseState(int32_t delta_x, int32_t delta_y,
 // coherent snapshot, not independent synthetic keyboard inputs.
 void SubmitDeathtrapXInputCombatState(bool attack, bool forward, bool backward,
                                       bool left, bool right);
+// Focus loss, disconnect and frontend transitions discard unsent RT presses.
+void ClearDeathtrapXInputCombatState();
 
 // Publishes the fixed XInput gameplay layout as semantic commands. The
 // DirectInput proxy converts these commands to the stable retail wiring; it
@@ -126,7 +130,10 @@ bool DeathtrapModernCameraConsumesMouse();
 bool PollDeathtrapPresentationMouseDelta(int32_t* delta_x, int32_t* delta_y);
 
 // Frontend-safe gate for the DirectInput mouse-to-retail-combat translator.
+// Native F1-F4 rows remain gameplay; radials retain physical mouse ownership.
 bool DeathtrapGameplayAcceptsMouseCombat();
+// Controller RT remains available while a radial captures item navigation.
+bool DeathtrapGameplayAcceptsControllerCombat();
 // Read-only physical attack snapshot; it never consumes the click latch.
 bool DeathtrapPhysicalMouseCombatActive();
 
@@ -144,6 +151,9 @@ bool DeathtrapImmersiveVectorLocomotionActive();
 // separate from the XInput intent and is revalidated at the ground-state
 // dispatcher before any native heading write.
 bool DeathtrapThirdPersonKeyboardCameraRelativeAvailable();
+// Attack-facing can also run with a native F1-F4 selector open, independently
+// of the stricter keyboard locomotion gate.
+bool DeathtrapThirdPersonMouseAttackCameraRelativeAvailable();
 void SubmitDeathtrapThirdPersonKeyboardMovement(int32_t lateral,
                                                 int32_t longitudinal);
 

@@ -17,3 +17,4 @@
 *.lib
 *.log
 *.user
+__pycache__/

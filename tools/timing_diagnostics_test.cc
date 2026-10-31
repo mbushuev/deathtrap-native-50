@@ -146,6 +146,68 @@ int main() {
   unobserved.Add(native, Sample(60, 55, 1), &summary);
   if (!Expect(summary.present_calls == 0u && summary.retail_calls == 1u,
               "a missing DXGI hook fabricated an observed present count")) { return 1; }
+
+  // Component averages are per call, not per source tick. Unequal call counts
+  // catch accidental averaging of frame averages when a window is combined.
+  Window components;
+  Frame first = Sample(0);
+  RecordPart(&first, Part::kGuard, 25.0, 0.5);
+  RecordPart(&first, Part::kGuard, 15.0);
+  RecordPart(&first, Part::kPresentHook, 40.5, 0.7);
+  Frame second = Sample(60);
+  RecordPart(&second, Part::kGuard, 5.0, 0.1);
+  RecordPart(&second, Part::kPresentHook, 5.25, 0.2);
+  components.Add(mode, first, &summary);
+  components.Add(mode, second, &summary);
+  components.Add(native, Sample(120, 55, 1), &summary);
+  const auto& guard = summary.parts[static_cast<size_t>(Part::kGuard)];
+  const auto& hook = summary.parts[static_cast<size_t>(Part::kPresentHook)];
+  if (!Expect(guard.wall.count == 3u && Near(guard.wall.total, 45.0) &&
+              Near(guard.wall.Average(), 15.0) && Near(guard.wall.maximum, 25.0),
+              "component wall times were not aggregated per call") ||
+      !Expect(guard.cpu.count == 2u && Near(guard.cpu.Average(), 0.3) &&
+              Near(guard.cpu.maximum, 0.5),
+              "missing CPU samples were fabricated as zero") ||
+      !Expect(hook.wall.count == 2u && Near(hook.wall.total, 45.75) &&
+              Near(summary.hooks.total, 110.0),
+              "inclusive nested spans altered source-hook elapsed time")) {
+    return 1;
+  }
+
+  Frame bad_parts;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  RecordPart(nullptr, Part::kGuard, 1.0, 1.0);
+  RecordPart(&bad_parts, Part::kCount, 1.0, 1.0);
+  RecordPart(&bad_parts, static_cast<Part>(255), 1.0, 1.0);
+  RecordPart(&bad_parts, Part::kGuard, nan);
+  RecordPart(&bad_parts, Part::kGuard, inf);
+  RecordPart(&bad_parts, Part::kGuard, -1.0);
+  RecordPart(&bad_parts, Part::kGuard, 0.0, 0.0);
+  RecordPart(&bad_parts, Part::kGuard, 1.0, nan);
+  RecordPart(&bad_parts, Part::kGuard, 2.0, inf);
+  RecordPart(&bad_parts, Part::kGuard, 3.0, -1.0);
+  const auto& filtered = bad_parts.parts[static_cast<size_t>(Part::kGuard)];
+  if (!Expect(filtered.wall.count == 4u && Near(filtered.wall.total, 6.0) &&
+              filtered.cpu.count == 1u && Near(filtered.cpu.total, 0.0),
+              "invalid component samples were accepted or zero samples lost")) {
+    return 1;
+  }
+
+  Window bounded_parts;
+  for (uint32_t i = 0; i < 34; ++i) {
+    Frame frame = Sample(i * 60.0);
+    for (uint32_t pass = 0; pass < 3; ++pass) {
+      RecordPart(&frame, Part::kGuardMap, 24.0, 0.1);
+    }
+    const bool emitted = bounded_parts.Add(mode, frame, &summary);
+    if (!Expect(emitted == (i == 33u),
+                "component recording changed the bounded report cadence")) { return 1; }
+  }
+  const auto& maps = summary.parts[static_cast<size_t>(Part::kGuardMap)];
+  if (!Expect(maps.wall.count == 102u && Near(maps.wall.Average(), 24.0) &&
+              maps.cpu.count == 102u && Near(maps.cpu.Average(), 0.1),
+              "component report lost repeated calls within a source tick")) { return 1; }
   std::cout << "timing diagnostics tests passed\n";
   return 0;
 }

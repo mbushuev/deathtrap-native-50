@@ -39,11 +39,15 @@ configure_file(
   @ONLY
 )
 
+configure_file(src/native50_menu_assets.rc.in
+  "${CMAKE_CURRENT_BINARY_DIR}/native50_menu_assets.rc" @ONLY)
+
 add_library(deathtrap_native_dinput SHARED
   src/deathtrap_native_render_patch.cc
   src/dinput_native_proxy.cc
   src/dinput_native_proxy.def
   "${CMAKE_CURRENT_BINARY_DIR}/deathtrap_native_version.rc"
+  "${CMAKE_CURRENT_BINARY_DIR}/native50_menu_assets.rc"
   src/native_d3d11_present_guard.cc
 )
 target_compile_features(deathtrap_native_dinput PRIVATE cxx_std_17)
@@ -142,6 +146,84 @@ target_include_directories(camera_room_collision_test PRIVATE src)
 target_compile_options(camera_room_collision_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
 
+add_executable(modern_control_menu_test
+  tools/modern_control_menu_test.cc
+  src/dinput_native_proxy.cc
+  src/native_d3d11_present_guard.cc)
+target_compile_features(modern_control_menu_test PRIVATE cxx_std_17)
+target_compile_definitions(modern_control_menu_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(modern_control_menu_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(modern_control_menu_test PRIVATE d3d11 dxgi dxguid minhook winmm)
+
+add_executable(native50_menu_test
+  tools/native50_menu_test.cc
+  src/dinput_native_proxy.cc
+  src/native_d3d11_present_guard.cc
+  "${CMAKE_CURRENT_BINARY_DIR}/native50_menu_assets.rc")
+target_compile_features(native50_menu_test PRIVATE cxx_std_17)
+target_compile_definitions(native50_menu_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(native50_menu_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(native50_menu_test PRIVATE d3d11 dxgi dxguid minhook winmm)
+
+add_executable(render_queue_test
+  tools/render_queue_test.cc
+  src/dinput_native_proxy.cc
+  src/native_d3d11_present_guard.cc)
+target_compile_features(render_queue_test PRIVATE cxx_std_17)
+target_compile_definitions(render_queue_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(render_queue_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(render_queue_test PRIVATE d3d11 dxgi dxguid minhook winmm)
+
+add_executable(dual_heroine_test
+  tools/dual_heroine_test.cc
+  src/dinput_native_proxy.cc
+  src/native_d3d11_present_guard.cc)
+target_compile_features(dual_heroine_test PRIVATE cxx_std_17)
+target_compile_definitions(dual_heroine_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(dual_heroine_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(dual_heroine_test PRIVATE d3d11 dxgi dxguid minhook winmm)
+
+add_executable(texture_pool_test
+  tools/texture_pool_test.cc
+  src/dinput_native_proxy.cc
+  src/native_d3d11_present_guard.cc)
+target_compile_features(texture_pool_test PRIVATE cxx_std_17)
+target_compile_definitions(texture_pool_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(texture_pool_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(texture_pool_test PRIVATE d3d11 dxgi dxguid minhook winmm)
+
+add_executable(heroine_waist_test
+  tools/heroine_waist_test.cc
+  src/dinput_native_proxy.cc
+  src/native_d3d11_present_guard.cc)
+target_compile_features(heroine_waist_test PRIVATE cxx_std_17)
+target_compile_definitions(heroine_waist_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(heroine_waist_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(heroine_waist_test PRIVATE d3d11 dxgi dxguid minhook winmm)
+
+add_executable(corpse_retention_test
+  tools/corpse_retention_test.cc
+  src/dinput_native_proxy.cc
+  src/native_d3d11_present_guard.cc)
+target_compile_features(corpse_retention_test PRIVATE cxx_std_17)
+target_compile_definitions(corpse_retention_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(corpse_retention_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(corpse_retention_test PRIVATE d3d11 dxgi dxguid minhook winmm)
+
 add_executable(immersive_first_person_test
   tools/immersive_first_person_test.cc)
 target_compile_features(immersive_first_person_test PRIVATE cxx_std_17)
@@ -229,12 +311,52 @@ target_include_directories(selector_gameplay_command_test PRIVATE src)
 target_compile_options(selector_gameplay_command_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
 
+add_executable(selector_combat_runtime_test
+  tools/selector_combat_runtime_test.cc
+  src/dinput_native_proxy.cc
+  src/native_d3d11_present_guard.cc)
+target_compile_features(selector_combat_runtime_test PRIVATE cxx_std_17)
+target_compile_definitions(selector_combat_runtime_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(selector_combat_runtime_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(selector_combat_runtime_test PRIVATE d3d11 dxgi dxguid minhook winmm)
+
 add_executable(selector_camera_handoff_test
   tools/selector_camera_handoff_probe.cc)
 target_compile_features(selector_camera_handoff_test PRIVATE cxx_std_17)
 target_include_directories(selector_camera_handoff_test PRIVATE src)
 target_compile_options(selector_camera_handoff_test PRIVATE
   /W4 /permissive- /EHsc /utf-8)
+
+add_executable(death_recovery_test
+  tools/death_recovery_test.cc
+  src/dinput_native_proxy.cc
+  src/native_d3d11_present_guard.cc
+  "${CMAKE_CURRENT_BINARY_DIR}/native50_menu_assets.rc")
+target_compile_features(death_recovery_test PRIVATE cxx_std_17)
+target_compile_definitions(death_recovery_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(death_recovery_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(death_recovery_test PRIVATE d3d11 dxgi dxguid minhook winmm)
+
+add_executable(player_wounds_test
+  tools/player_wounds_test.cc
+  src/dinput_native_proxy.cc
+  src/native_d3d11_present_guard.cc)
+target_compile_features(player_wounds_test PRIVATE cxx_std_17)
+target_compile_definitions(player_wounds_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700
+  DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(player_wounds_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(player_wounds_test PRIVATE d3d11 dxgi dxguid minhook winmm)
+
+add_executable(model_pack_test tools/model_pack_test.cc)
+target_compile_features(model_pack_test PRIVATE cxx_std_17)
+target_compile_definitions(model_pack_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_compile_options(model_pack_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(model_pack_test PRIVATE advapi32)
 
 add_executable(music_redbook_probe
   tools/music_redbook_probe.cc)
