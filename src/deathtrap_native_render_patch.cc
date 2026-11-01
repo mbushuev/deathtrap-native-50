@@ -52,6 +52,7 @@
 #include "selector_time_dilation.h"
 #include "timing_diagnostics.h"
 #include "widescreen_layout.h"
+#include "interface_layout.h"
 #include "selector_gameplay_command.h"
 
 namespace {
@@ -879,6 +880,7 @@ uint32_t g_display_window_width = 1280u;
 uint32_t g_display_window_height = 720u;
 thread_local bool g_widescreen_world_render_active = false;
 uint32_t g_selector_slow_motion_percent = 25u;
+int g_interface_scale_percent = 100;
 bool g_selector_slow_motion_active = false;
 // The ordinary mode-3 ownership watchdog is deliberately shorter than a
 // frontend transition. Selector time dilation lengthens the real source tick
@@ -1222,6 +1224,7 @@ bool g_ui_message_lifetime_patched = false;
 bool g_pst_message_lifetime_patched = false;
 int32_t g_xinput_selector_radius = 104;
 int32_t g_xinput_selector_center_y = 316;
+bool g_interface_radial_draw = false;
 double g_xinput_turn_threshold = 0.10;
 double g_xinput_movement_threshold = 0.45;
 double g_xinput_action_threshold = 0.14;
@@ -2777,7 +2780,9 @@ deathtrap::settings::Controls CurrentModernControlSettings() {
           g_third_person_orbit_invert_x, g_third_person_orbit_invert_y,
           g_keep_bodies_enabled.load(std::memory_order_relaxed),
           g_e3_model_requested.load(std::memory_order_relaxed),
-          g_show_body_wounds.load(std::memory_order_relaxed)};
+          g_show_body_wounds.load(std::memory_order_relaxed),
+          g_selector_slow_motion_enabled, static_cast<int>(g_selector_slow_motion_percent),
+          g_interface_scale_percent};
 }
 
 
@@ -2790,7 +2795,7 @@ bool SaveModernControlSettings(
   struct Entry {
     const wchar_t* section = nullptr;
     const wchar_t* key = nullptr;
-    bool value = false;
+    int value = 0;
     std::array<wchar_t, 512> previous{};
     bool existed = false;
   };
@@ -2830,6 +2835,15 @@ bool SaveModernControlSettings(
       entries[0].key = L"ShowWounds";
       entries[0].value = value.body_wounds;
       break;
+    case deathtrap::settings::ControlRow::kSelectorSlowMotion:
+      entries[0].section = L"Selector"; entries[0].key = L"SlowMotion";
+      entries[0].value = value.selector_slow_motion; break;
+    case deathtrap::settings::ControlRow::kSelectorSpeed:
+      entries[0].section = L"Selector"; entries[0].key = L"SlowMotionPercent";
+      entries[0].value = value.selector_speed; break;
+    case deathtrap::settings::ControlRow::kInterfaceScale:
+      entries[0].section = L"Interface"; entries[0].key = L"ScalePercent";
+      entries[0].value = value.interface_scale; break;
     default: return false;
   }
   for (size_t index = 0; index < count; ++index) {
@@ -2844,7 +2858,8 @@ bool SaveModernControlSettings(
   }
   for (size_t index = 0; index < count; ++index) {
     const Entry& entry = entries[index];
-    if (!write(entry.section, entry.key, entry.value ? L"1" : L"0", path)) {
+    const auto saved_value = std::to_wstring(entry.value);
+    if (!write(entry.section, entry.key, saved_value.c_str(), path)) {
       // Do not leave keyboard/controller modes split if the second write
       // fails. Restore exact previous values (or missing keys), then report
       // failure without applying any runtime state.
@@ -12712,6 +12727,8 @@ void __cdecl HookInventorySlotDraw(void* raw_slot) {
       static_cast<double>(g_xinput_selector_center_y) +
       std::cos(angle) * static_cast<double>(g_xinput_selector_radius) - 16.0));
   slot.selected = slot.slot == g_controller_selector.slot ? 1u : 0u;
+  const bool previous_radial_draw = g_interface_radial_draw;
+  g_interface_radial_draw = true;
   g_original_inventory_slot_draw(&slot);
   // Byte 6 controls quantity drawing, NOT inventory availability. All melee
   // slots leave it zero (including the always-available sword and fists).
@@ -12719,6 +12736,7 @@ void __cdecl HookInventorySlotDraw(void* raw_slot) {
   if (slot.selected && slot.icon != 0xFFu && !slot.blank) {
     QueueControllerSelectorName();
   }
+  g_interface_radial_draw = previous_radial_draw;
 }
 
 bool NativeInventoryItemAvailable(int32_t item_id) {
@@ -13570,9 +13588,7 @@ bool ChangeModernControlSetting(deathtrap::settings::ControlRow row,
     return false;
   }
   const auto previous = CurrentModernControlSettings();
-  const auto next = requested < 0
-      ? deathtrap::settings::ToggleControl(previous, row)
-      : deathtrap::settings::SetControl(previous, row, requested != 0);
+  const auto next = deathtrap::settings::ChangeControl(previous, row, requested);
   const std::wstring path = configuration_path ? configuration_path
                                               : ConfigurationPath();
   if (row == deathtrap::settings::ControlRow::kHeroineModel && next.e3_model &&
@@ -13594,6 +13610,9 @@ bool ChangeModernControlSetting(deathtrap::settings::ControlRow row,
   g_keep_bodies_enabled.store(next.keep_bodies,std::memory_order_relaxed);
   g_e3_model_requested.store(next.e3_model,std::memory_order_relaxed);
   g_show_body_wounds.store(next.body_wounds,std::memory_order_relaxed);
+  g_selector_slow_motion_enabled = next.selector_slow_motion;
+  g_selector_slow_motion_percent = static_cast<uint32_t>(next.selector_speed);
+  g_interface_scale_percent = next.interface_scale;
   if (row==deathtrap::settings::ControlRow::kHeroineModel)
     AppendDeathtrapSupportLog("support_heroine_model requested=%s apply=%s",
         next.e3_model?"e3":"original",HeroineLiveSwitchEnabled()?"immediate":"restart");
@@ -13615,11 +13634,13 @@ bool ChangeModernControlSetting(deathtrap::settings::ControlRow row,
   g_hardware_repaint_frames = 2u;
   AppendDeathtrapSupportLog(
       "support_control_settings saved=1 row=%u keyboard_modern=%u "
-      "controller_modern=%u invert_x=%u invert_y=%u keep_bodies=%u e3_model=%u show_wounds=%u",
+      "controller_modern=%u invert_x=%u invert_y=%u keep_bodies=%u e3_model=%u show_wounds=%u "
+      "selector_slow_motion=%u selection_speed=%d interface_scale=%d",
       static_cast<unsigned>(row), next.keyboard_modern ? 1u : 0u,
       next.controller_modern ? 1u : 0u, next.invert_x ? 1u : 0u,
       next.invert_y ? 1u : 0u, next.keep_bodies ? 1u : 0u, next.e3_model ? 1u : 0u,
-      next.body_wounds ? 1u : 0u);
+      next.body_wounds ? 1u : 0u, next.selector_slow_motion ? 1u : 0u,
+      next.selector_speed, next.interface_scale);
   return true;
 }
 
@@ -20400,6 +20421,7 @@ void InitializePatchState() {
       ConfiguredInteger(L"Audio", L"FixMusicTracks", 1) != 0;
   g_safe_save_anywhere_enabled =
       ConfiguredInteger(L"Save", L"SafeAnywhere", 1) != 0;
+  g_interface_scale_percent = std::clamp(ConfiguredInteger(L"Interface", L"ScalePercent", 100), 75, 150);
   g_selector_slow_motion_enabled =
       ConfiguredInteger(L"Selector", L"SlowMotion", 1) != 0;
   g_selector_slow_motion_percent = static_cast<uint32_t>(std::clamp(
@@ -20847,6 +20869,7 @@ bool PatchDungeonCode(uintptr_t rva,
   return written;
 }
 
+#include "interface_scale_runtime.inl"
 #include "render_queue_runtime.inl"
 #include "texture_pool_runtime.inl"
 
@@ -21788,6 +21811,7 @@ bool InstallDeathtrapNativeRenderHooks() {
   // An independently owned page entered through a book on the Setup table.
   // Retail option arrays, files and the Hardware page remain untouched.
   InstallCorpseRetentionHooks();
+  InstallInterfaceScaleHooks();
   InstallNative50MenuHooks();
   InstallDeathRecoveryHooks();
 

@@ -247,9 +247,13 @@ void DrawNative50Page(const deathtrap::menu::Navigation& navigation) {
   api.copy(g_native50_menu_assets->page.data(), {0, 0, 640, 480});
   api.font(0x248Fu); // Native light text with a dark outline, also on shaded parchment.
   const auto values = CurrentModernControlSettings();
-  for (int i = 0; i < deathtrap::menu::kPageRows; ++i) {
+  const int first = deathtrap::menu::PageFirst(navigation.selected);
+  api.text(134,78,0,"<");
+  api.text(274,78,0,first ? "2 / 2" : "1 / 2");
+  api.text(428,78,0,">");
+  for (int i = first; i < std::min(first+deathtrap::menu::kRowsPerPage,deathtrap::menu::kPageRows); ++i) {
     const auto row = static_cast<deathtrap::settings::ControlRow>(i);
-    const int y = deathtrap::menu::kRowTop + i * deathtrap::menu::kRowHeight;
+    const int y = deathtrap::menu::kRowTop + (i-first) * deathtrap::menu::kRowHeight;
     if (navigation.selected == i) api.text(118, y, 0, ">");
     api.text(deathtrap::menu::kTextLeft, y, 0, deathtrap::settings::ControlLabel(language, row));
     const char* value = deathtrap::settings::ControlValue(language, row, values);

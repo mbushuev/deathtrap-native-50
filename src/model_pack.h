@@ -47,13 +47,25 @@ inline constexpr const wchar_t* kCacheFiles[]={L"model-data.bin",L"ASYLUM/PST/HE
     L"ASYLUM/PST/L1.RES",L"ASYLUM/PST/L8.RES",L"ASYLUM/PST/L10.RES",L"ASYLUM/PST/NETGAME.RES",
     L"dual-models.bin",L"resource-map.bin"};
 
+inline constexpr uint32_t kMinModelResources=15345,kMaxModelResources=15369;
+inline bool ValidModelMetadata(const std::array<uint32_t,8>& metadata,uint32_t count) {
+  // Ten Original texture aliases are independent of E3's atlas size. The live
+  // renderer supports 10..32 E3 pages; relocating aliases keeps both models
+  // resident without forcing injury artwork into the healthy atlas space.
+  return metadata[0]==0x4430354Eu && metadata[1]>=1 && metadata[1]<=4 &&
+      count>=kMinModelResources && count<=kMaxModelResources && metadata[2]==count &&
+      metadata[3]>=14135 && metadata[3]<=14157 && metadata[4]==1200 &&
+      metadata[5]==metadata[3]+metadata[4] && metadata[6]==10 && metadata[7]==14125 &&
+      count==metadata[5]+metadata[6]+(metadata[1]>=2?2u:0u);
+}
+
 inline std::vector<OverlayEntry> ReadOverlay(const std::filesystem::path& game) {
   const auto root=game/L"native50/models/e3";
   const uint64_t sizes[]={std::filesystem::file_size(game/kBaseArchive),
                           std::filesystem::file_size(root/kCacheFiles[0])};
   std::ifstream map(root/kCacheFiles[7],std::ios::binary);
   Check(Read<uint32_t>(map)==0x4F30354Eu && Read<uint32_t>(map)==1);
-  const auto count=Read<uint32_t>(map);Check(count==15345 || count==15347);
+  const auto count=Read<uint32_t>(map);Check(count>=kMinModelResources && count<=kMaxModelResources);
   std::vector<OverlayEntry> result(count);
   Read(map,result.data()+1,(count-1)*sizeof(OverlayEntry));
   Check(map.peek()==std::char_traits<char>::eof());
@@ -93,13 +105,11 @@ inline void Build(const std::filesystem::path& base,const std::filesystem::path&
   const uint32_t magic=Read<uint32_t>(delta),version=Read<uint32_t>(delta);
   const uint32_t old_count=Read<uint32_t>(delta),new_count=Read<uint32_t>(delta);
   Check(magic==0x5030354Eu && version==1 && old_count==14125 &&
-        (new_count==15345 || new_count==15347));
+        new_count>=kMinModelResources && new_count<=kMaxModelResources);
   const auto expected_base=Read<Digest>(delta);
   Digest actual_base{};Check(Hash(base,&actual_base) && actual_base==expected_base);
   const auto metadata=Read<std::array<uint32_t,8>>(delta);
-  Check(metadata[0]==0x4430354Eu && metadata[1]>=1 && metadata[1]<=4 &&
-        new_count==(metadata[1]>=2?15347u:15345u) && metadata[2]==new_count &&
-        metadata[3]==14135 && metadata[4]==1200 && metadata[5]==15335 && metadata[6]==10 && metadata[7]==14125);
+  Check(ValidModelMetadata(metadata,new_count));
   source.seekg(0,std::ios::end);const auto base_size=source.tellg();source.seekg(0);
   const auto index=Read<uint32_t>(source);
   Check(uint64_t(index)+4+12ull*(old_count-1)==static_cast<uint64_t>(base_size));

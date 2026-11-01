@@ -8,6 +8,42 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.236 — Interface scaling, selector settings and E3 injury fixes
+
+Changes since the last published release, 0.0.235.
+
+- Add a second page to **Setup → Native 50** with a selector slow-motion
+  toggle and selection world speed from 10% to 75% in 5-point steps.
+  The default remains 25% world speed; disabling slow motion restores normal
+  world speed while retaining the selected percentage for later.
+- Add a saved **Interface scale** setting from 75% to 150% in 5-point steps,
+  defaulting to 100%. Health/portrait, inventory icons, counters, messages,
+  keyboard selectors and controller radial selectors scale together while
+  retaining their screen anchors. Full-screen menus and movies keep their layout.
+- Scale the running/stamina and temporary status bars too, including their
+  fill, background, position and height.
+- All three new settings apply immediately, save automatically, and support
+  keyboard, mouse and controller input in English, French, German and Italian.
+- Rebuild the E3 heroine's partial injuries in the skin and armour materials,
+  removing floating wound polygons and their black outlines while retaining
+  the accepted body shape, normals, costume and native injury progression.
+- Preserve the original wound drawing and brown detail lines. Match exposed
+  skin in injured faces to the clean face instead of carrying over pale patches
+  from the retail damage charts. Keep the separate full-burn artwork.
+- Resample injury colours bilinearly when building E3 skin and armour charts,
+  smoothing the blocky resampled wounds and facial details.
+- Keep E3 hand appearance consistent with a fully burned torso when a death
+  or weapon animation restores a default hand. Cover both hands and all five
+  team variants, respecting Show wounds and Original without carrying burn
+  appearance into a new life.
+- Support the rebuilt injury atlas within the renderer's existing texture-page
+  limit while retaining the exact Original model and compatibility with older
+  reconstruction packs.
+
+Includes the E3 heroine, settings book, optional persistent bodies, death
+recovery and all Windows/Steam Deck improvements introduced in 0.0.235 and
+earlier releases. See the 0.0.235 section below for those features and defaults.
+
 ## 0.0.235 — Halloween release: E3 heroine and in-game settings
 
 Changes since the last published release, 0.0.234.

@@ -223,6 +223,35 @@ The game imports legacy DirectInput, so Windows loads our `DINPUT.dll`; the DLL
 then forwards the original DirectInput exports and activates the native render
 patch. No command-line argument is required.
 
+## Gameplay interface and selector speed
+
+Open **Setup → Native 50**, then use the page arrows to reach page 2.
+Up/down selects a setting; left/right adjusts it. Clicking or pressing Enter
+also changes it. Changes apply immediately and save automatically.
+
+- **Selector slow motion** enables or disables world slowdown while F1-F4
+  selectors or a controller radial selector are open.
+- **Selection world speed** adjusts the world to 10-75% of normal speed in
+  5-point steps. The default 25% is quarter speed (75% slowdown). Camera input
+  and the interface remain responsive. Switching slow motion off retains this
+  value for later.
+- **Interface scale** adjusts the complete gameplay HUD from 75% to 150% in
+  5-point steps. The default is 100%. Portrait/health, inventory, gold/keys,
+  counters, messages, selectors and running/status bars scale together. Corner widgets retain their
+  edge anchors, and the controller radial remains on screen with its name.
+  Full-screen menus and movies retain their original layout.
+
+The corresponding persistent settings in `deathtrap_native.ini` are:
+
+```ini
+[Selector]
+SlowMotion=1
+SlowMotionPercent=25
+
+[Interface]
+ScalePercent=100
+```
+
 ## 7. First-run verification
 
 The normal configuration is:

@@ -206,8 +206,8 @@ while Space remains held during a jump. Attack directions, Ctrl steps, J/K
 sidesteps, selectors, first-person modes and menus keep their original controls.
 
 F1-F4 selectors slow the game world to 25% by default while camera and input
-remain full-rate. Change SlowMotionPercent under [Selector] in
-deathtrap_native.ini if desired.
+remain full-rate. Change this in Setup -> Native 50, page 2, or with
+SlowMotion and SlowMotionPercent under [Selector] in deathtrap_native.ini.
 
 Keyboard Setup has two pages for all twenty actions. Use << and >> on the
 right to switch pages. Keyboard Default restores the complete modern profile.
@@ -291,6 +291,21 @@ deathtrap_native.ini and apply immediately:
 - Heroine model: Original (the default) or the bundled E3 1997 reconstruction.
   Switching applies immediately without restarting the level. This is a
   reconstruction from references, not a recovered original E3 model file.
+
+Use the page arrows to reach page 2 for the new settings:
+
+- Selector slow motion: turn world slowdown during keyboard/controller item
+  selection on or off. Enabled by default.
+- Selection world speed: 10-75% in 5-point steps; 25% (quarter speed) by default.
+  Camera input and the interface remain responsive.
+- Interface scale: 75-150% in 5-point steps; 100% by default. This scales the
+  gameplay health/portrait, inventory, counters, messages, selectors, running
+  and temporary status bars. Full-screen menus and movies keep their layout.
+
+Use up/down to select a row and left/right to adjust it. Clicking or pressing
+Enter cycles a value. Controller navigation is supported too. Settings save
+automatically and apply immediately. The equivalent INI settings are
+Selector/SlowMotion, Selector/SlowMotionPercent and Interface/ScalePercent.
 
 To enable it: open Setup -> Native 50 -> Heroine model -> E3 1997.
 Choose Red Lotus to play as the heroine. Select Original on the same page

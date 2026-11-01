@@ -13,6 +13,24 @@ void File(const std::filesystem::path& path,const std::vector<uint8_t>& bytes) {
   std::ofstream out(path,std::ios::binary);Write(out,bytes.data(),bytes.size());
 }
 void Word(std::ostream& out,uint32_t word) { Write(out,&word,4); }
+void MetadataBounds() {
+  for (uint32_t pages:{10u,19u,32u}) {
+    for (uint32_t version:{1u,4u}) {
+      const uint32_t first=14125+pages,count=first+1210+(version>=2?2:0);
+      std::array<uint32_t,8> metadata{0x4430354Eu,version,count,first,1200,first+1200,10,14125};
+      Require(ValidModelMetadata(metadata,count),"legacy and expanded E3 atlases accepted");
+      for (size_t field:{2u,3u,4u,5u,6u,7u}) {
+        auto invalid=metadata;++invalid[field];
+        Require(!ValidModelMetadata(invalid,count),"inconsistent atlas/alias bounds rejected");
+      }
+    }
+  }
+  for (uint32_t pages:{9u,33u,0xfffffff0u}) {
+    const uint32_t first=14125+pages,count=first+1212;
+    const std::array<uint32_t,8> metadata{0x4430354Eu,4,count,first,1200,first+1200,10,14125};
+    Require(!ValidModelMetadata(metadata,count),"out-of-budget and overflowing layouts rejected");
+  }
+}
 void Synthetic(const std::filesystem::path& root) {
   const auto game=root/L"game",base=game/kBaseArchive,patch=root/L"model.n50p";
   std::filesystem::create_directories(base.parent_path());
@@ -91,6 +109,7 @@ int wmain(int argc,wchar_t** argv) {
   const auto root=std::filesystem::temp_directory_path()/(L"native50-model-pack-test-"+std::to_wstring(GetCurrentProcessId()));
   bool owned=false;
   try {
+    MetadataBounds();
     Require(!std::filesystem::exists(root),"private test root must be new");
     Require(std::filesystem::create_directory(root),"create private test root");owned=true;
     if (argc==1) Synthetic(root);

@@ -18,10 +18,10 @@ void CheckNavigation() {
   n.Poll(400, kRowTop, false, false, false, false, false, false, false);
   Require(n.Poll(400, kRowTop, true, false, false, false, false, false, false) == 1,
           "released click must toggle");
-  Require(n.Poll(400, kRowTop+(kPageRows-1)*kRowHeight, true, false, false, false, false, false, false) == 0,
+  Require(n.Poll(400, kRowTop+(kRowsPerPage-1)*kRowHeight, true, false, false, false, false, false, false) == 0,
           "held click must not toggle another row");
   n.Poll(0, 0, false, false, false, false, false, false, false);
-  Require(n.Poll(0, 0, false, false, true, false, false, false, false) == 0 && n.selected == 0,
+  Require(n.Poll(0, 0, false, false, true, false, false, false, false) == 0 && n.selected == 6,
           "keyboard must wrap without stationary cursor stealing focus");
   n.Poll(0, 0, false, false, false, false, false, false, false);
   Require(n.Poll(0, 0, false, false, false, false, true, false, false) == 3,
@@ -31,6 +31,15 @@ void CheckNavigation() {
   n.Poll(0, 0, false, false, false, false, false, false, false);
   Require(n.Poll(550, 445, true, false, false, false, false, false, false) == 4,
           "mouse/controller Back must leave the custom page");
+  n.Poll(0,0,false,false,false,false,false,false,false);
+  Require(n.Poll(400,kRowTop+2*kRowHeight,true,false,false,false,false,false,false)==1 && n.selected==8,
+      "second-page mouse row must address interface scale, not the first page");
+  n.Poll(0,0,false,false,false,false,false,false,false);
+  Require(n.Poll(400,kRowTop+4*kRowHeight,true,false,false,false,false,false,false)==0 && n.selected==8,
+      "empty second-page rows must not change a setting");
+  n.Poll(0,0,false,false,false,false,false,false,false);
+  Require(n.Poll(430,85,true,false,false,false,false,false,false)==0 && n.selected==0,
+      "page arrow changes pages without toggling a setting");
   BookAnimation a;
   for (uint64_t tick = 100; tick <= 700; tick += 20) a.Advance(true, tick);
   Require(a.frame == kBookFrames-1, "hover must open and stop at the final frame");
@@ -52,7 +61,7 @@ void CheckNavigation() {
     }
   }
   Require(RowAt(100,180) == -1 && RowAt(400,kRowTop-1) == -1 &&
-              RowAt(400,kRowTop+kPageRows*kRowHeight) == -1 && RowAt(400,kRowTop) == 0 &&
+              RowAt(400,kRowTop+kRowsPerPage*kRowHeight) == -1 && RowAt(400,kRowTop) == 0 &&
               RowAt(400,kRowTop+kRowHeight) == 1 && RowAt(400,kRowTop+2*kRowHeight) == 2 &&
               RowAt(400,kRowTop+3*kRowHeight) == 3,
           "page row bounds");
@@ -326,7 +335,7 @@ std::array<std::vector<uint8_t>,4> preview_fonts;
 size_t preview_font = 0;
 deathtrap::menu::Canvas* preview_page = nullptr;
 std::array<int,deathtrap::menu::kPageRows> page_label_ends{};
-bool preview_secondary=false, preview_recovery=false;
+bool preview_secondary=false, preview_recovery=false, preview_interface=false;
 void __cdecl PageFont(uint32_t id) {
   Require(id==0x1485u || id==0x1486u || id==0x248Fu || id==0x2490u,"page must use native fonts");
   preview_font=id==0x248Fu ? 1 : id==0x2490u ? 2 : id==0x1486u ? 3 : 0;
@@ -376,8 +385,10 @@ void __cdecl PageText(int x,int y,int,const char* value) {
       Require(px>=0 && px<640 && py>=0 && py<480,"visible glyph must fit canvas");
       if (y>=deathtrap::menu::kRowTop && y<416) {
         Require(py<416,"localized help must remain on parchment above the bottom roller");
-        if (!preview_recovery && y>=deathtrap::menu::kDescriptionTop && y<deathtrap::menu::kSavedTop)
+        if (!preview_recovery && y>=deathtrap::menu::kDescriptionTop && y<deathtrap::menu::kSavedTop) {
+          if(py>=deathtrap::menu::kSavedTop-4) std::cerr<<"description bounds: y="<<y<<" py="<<py<<" text="<<value<<'\n';
           Require(py<deathtrap::menu::kSavedTop-4,"wrapped description must not overlap save status");
+        }
         if (!preview_recovery && y>=deathtrap::menu::kSavedTop && y<deathtrap::menu::kHelpTop) {
           if (py>=deathtrap::menu::kHelpTop-4)
             std::cerr<<"status bounds: y="<<y<<" py="<<py<<" text="<<value<<'\n';
@@ -492,7 +503,7 @@ void WritePagePreview(const std::filesystem::path& game,const std::filesystem::p
       DrawNative50Page(navigation);
     }
     g_keyboard_mouse_camera_relative_movement=g_xinput_camera_relative_movement=true;
-    g_hardware_save_error_row=-1;navigation.selected=5;g_model_archive_selection.store(2);DrawNative50Page(navigation);
+    g_hardware_save_error_row=-1;navigation.selected=preview_interface ? 8 : 5;g_model_archive_selection.store(2);DrawNative50Page(navigation);
     }
     for (int y=0;y<480;++y) for (int x=0;x<640;++x) {
       const auto& color=assets->paper.palette[(*canvas)[y*640+x]];
@@ -644,6 +655,7 @@ int wmain(int argc, wchar_t** argv) {
     preview_recovery=true;WritePagePreview(argv[2],argv[3]);return 0;
   }
   if (argc==4 && std::wcscmp(argv[1],L"--preview")==0) { WritePreview(argv[2],argv[3]);return 0; }
+  if (argc==4 && std::wcscmp(argv[1],L"--interface-preview")==0) { preview_interface=true; WritePagePreview(argv[2],argv[3]);return 0; }
   if (argc==4 && std::wcscmp(argv[1],L"--page-preview")==0) { WritePagePreview(argv[2],argv[3]);return 0; }
   if (argc > 1) { CheckOriginal(argc, argv); return 0; }
   CheckNavigation(); CheckColorQuality(); CheckRuntime();

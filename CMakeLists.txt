@@ -368,3 +368,10 @@ target_compile_definitions(music_redbook_probe PRIVATE
   _UNICODE)
 target_compile_options(music_redbook_probe PRIVATE
   /W4 /permissive- /EHsc /utf-8)
+
+add_executable(interface_scale_test tools/interface_scale_test.cc
+  src/dinput_native_proxy.cc src/native_d3d11_present_guard.cc)
+target_compile_features(interface_scale_test PRIVATE cxx_std_17)
+target_compile_definitions(interface_scale_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE DIRECTINPUT_VERSION=0x0700 DEATHTRAP_NATIVE_VERSION="${PROJECT_VERSION}")
+target_compile_options(interface_scale_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(interface_scale_test PRIVATE d3d11 dxgi dxguid minhook winmm)

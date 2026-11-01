@@ -36,13 +36,16 @@ constexpr Rect kBookLabel{235,440,155,34};
 constexpr size_t kBookFrames = 16;
 constexpr Rect kBack{520, 426, 120, 54};
 constexpr int kPageRows = static_cast<int>(settings::ControlRow::kCount);
+constexpr int kRowsPerPage = 6;
+constexpr Rect kPreviousPage{134,78,132,25}, kNextPage{298,78,142,25};
+constexpr int PageFirst(int selected) { return selected / kRowsPerPage * kRowsPerPage; }
 constexpr int kRowTop = 112, kRowHeight = 26;
 // Keep the upper value column left of the candle, rather than pushing the
 // entire page below it. Descriptions/help have their own quieter text style.
 constexpr int kTextLeft = 134, kTextRight = 440;
 constexpr int kDescriptionTop = 280, kSavedTop = 341, kHelpTop = 374;
 constexpr int RowAt(int x, int y) {
-  return Rect{118, kRowTop, kTextRight - 118, kPageRows * kRowHeight}.Contains(x, y)
+  return Rect{118, kRowTop, kTextRight - 118, kRowsPerPage * kRowHeight}.Contains(x, y)
       ? (y - kRowTop) / kRowHeight : -1;
 }
 inline uint16_t U16(const uint8_t* p) {
@@ -338,7 +341,8 @@ struct Navigation {
   // Only edges act. A stationary cursor does not steal keyboard focus.
   int Poll(uint16_t x, uint16_t y, bool click, bool up, bool down,
            bool left, bool right, bool accept, bool escape) {
-    const int hovered = RowAt(x, y);
+    const int local = RowAt(x,y);
+    const int hovered = local < 0 || PageFirst(selected)+local >= kPageRows ? -1 : PageFirst(selected)+local;
     if ((x != previous_x || y != previous_y) && hovered >= 0) selected = hovered;
     previous_x = x; previous_y = y;
     const bool key = up || down || left || right || accept;
@@ -346,6 +350,8 @@ struct Navigation {
     if (escape && !escape_latched) action = 4;
     else if (click && !mouse_latched) {
       if (kBack.Contains(x, y)) action = 4;
+      else if (kPreviousPage.Contains(x,y)) selected = PageFirst(selected) ? 0 : kRowsPerPage;
+      else if (kNextPage.Contains(x,y)) selected = PageFirst(selected) ? 0 : kRowsPerPage;
       else if (hovered >= 0) { selected = hovered; action = 1; }
     } else if (key && !key_latched && !click) {
       if (up != down) selected = (selected + (down ? 1 : kPageRows-1)) % kPageRows;
@@ -366,10 +372,10 @@ inline const char* Back(text::Language language) {
 }
 inline const char* Help(text::Language language) {
   switch (language) {
-    case text::Language::kFrench: return "Clic / Entr\x82" "e : modifier";
-    case text::Language::kGerman: return "Klick / Enter: \x84ndern";
-    case text::Language::kItalian: return "Clic / Invio: modifica";
-    default: return "Click / Enter: change";
+    case text::Language::kFrench: return "Fl\x8A" "ches / clic : modifier";
+    case text::Language::kGerman: return "Pfeile / Klick: \x84ndern";
+    case text::Language::kItalian: return "Frecce / clic: modifica";
+    default: return "Arrows / click: change";
   }
 }
 inline const char* BackHelp(text::Language language) {
@@ -411,6 +417,22 @@ inline const char* Description(text::Language language, int row, bool live_model
         "Sofort zwischen Original- und E3-Modell wechseln.","Passa subito tra eroina originale ed E3."};
     const auto index=static_cast<size_t>(language);return messages[index<4?index:0];
   }
+  if (row >= 6 && row < kPageRows) {
+    constexpr const char* extra[4][3] = {
+      {"Slow the world during F1-F4 or pad selection.",
+       "25%: quarter speed. UI and camera remain fluid.",
+       "Health, items, counters, messages and selectors."},
+      {"Ralentir le monde pendant la s\x82lection.",
+       "25% : quart de vitesse. Cam\x82ra fluide.",
+       "Vie, objets, compteurs, messages et s\x82lection."},
+      {"Spielwelt bei der Auswahl verlangsamen.",
+       "25%: Vierteltempo. Kamera bleibt fl\x81ssig.",
+       "Leben, Objekte, Z\x84hler, Meldungen und Auswahl."},
+      {"Rallenta il mondo durante la selezione.",
+       "25%: un quarto. Telecamera sempre fluida.",
+       "Vita, oggetti, contatori, messaggi e selettori."}};
+    const auto lang=static_cast<size_t>(language);return extra[lang<4?lang:0][row-6];
+  }
   constexpr const char* messages[4][6] = {
     {"Modern: camera-relative. Tank: character-relative.",
      "Reverse horizontal movement of the modern camera.",
@@ -437,6 +459,6 @@ inline const char* Description(text::Language language, int row, bool live_model
      "Eroina originale o E3. Riavvia il gioco per applicare.",
      "Mostra ferite. Danni invariati."}};
   const size_t lang = static_cast<size_t>(language);
-  return messages[lang < 4 ? lang : 0][row >= 0 && row < kPageRows ? row : 0];
+  return messages[lang < 4 ? lang : 0][row >= 0 && row < 6 ? row : 0];
 }
 } // namespace deathtrap::menu

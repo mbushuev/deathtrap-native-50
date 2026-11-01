@@ -84,7 +84,10 @@ Controls ReadSaved() {
           GetPrivateProfileIntW(L"Camera", L"InvertY", 0, ini_path.c_str()) != 0,
           GetPrivateProfileIntW(L"Gameplay", L"KeepBodies", 0, ini_path.c_str()) != 0,
           GetPrivateProfileIntW(L"Models", L"E3Heroine", 0, ini_path.c_str()) != 0,
-          GetPrivateProfileIntW(L"Gameplay", L"ShowWounds", 1, ini_path.c_str()) != 0};
+          GetPrivateProfileIntW(L"Gameplay", L"ShowWounds", 1, ini_path.c_str()) != 0,
+          GetPrivateProfileIntW(L"Selector", L"SlowMotion", 1, ini_path.c_str()) != 0,
+          int(GetPrivateProfileIntW(L"Selector", L"SlowMotionPercent", 25, ini_path.c_str())),
+          int(GetPrivateProfileIntW(L"Interface", L"ScalePercent", 100, ini_path.c_str()))};
 }
 void Reset(bool modern = true) {
   g_keyboard_mouse_camera_relative_movement = g_xinput_camera_relative_movement = modern;
@@ -92,6 +95,7 @@ void Reset(bool modern = true) {
   g_keep_bodies_enabled.store(false);
   g_e3_model_requested.store(false);
   g_show_body_wounds.store(true);
+  g_selector_slow_motion_enabled=true; g_selector_slow_motion_percent=25; g_interface_scale_percent=100;
   g_hardware_menu_active = true;
   g_hardware_mouse_latched = g_hardware_keyboard_latched = true;
   g_hardware_control_row = g_hardware_save_error_row = -1;
@@ -114,6 +118,25 @@ BOOL WINAPI FailSecond(LPCWSTR section, LPCWSTR key, LPCWSTR value, LPCWSTR path
 }
 
 void CheckPersistence() {
+  Require(Change(ControlRow::kSelectorSlowMotion,0) && !ReadSaved().selector_slow_motion &&
+      !g_selector_slow_motion_enabled,"selector slowdown off persists and applies");
+  Require(Change(ControlRow::kSelectorSpeed,1) && ReadSaved().selector_speed==30 &&
+      g_selector_slow_motion_percent==30 && !g_selector_slow_motion_enabled,
+      "speed changes preserve the on/off toggle");
+  Require(Change(ControlRow::kSelectorSlowMotion,1) && g_selector_slow_motion_enabled,
+      "selector slowdown on applies");
+  for(int i=0;i<30;++i) Require(Change(ControlRow::kInterfaceScale,1),"increase interface scale");
+  Require(ReadSaved().interface_scale==150 && g_interface_scale_percent==150,"interface scale upper bound");
+  for(int i=0;i<40;++i) Require(Change(ControlRow::kInterfaceScale,0),"decrease interface scale");
+  Require(ReadSaved().interface_scale==75 && g_interface_scale_percent==75,"interface scale lower bound");
+  Require(Change(ControlRow::kInterfaceScale,-1) && g_interface_scale_percent==80,"click steps interface scale");
+  for(int i=0;i<30;++i) Require(Change(ControlRow::kSelectorSpeed,0),"decrease selection speed");
+  Require(ReadSaved().selector_speed==10,"selection speed lower bound");
+  for(int i=0;i<30;++i) Require(Change(ControlRow::kSelectorSpeed,1),"increase selection speed");
+  Require(ReadSaved().selector_speed==75,"selection speed upper bound");
+  Require(Change(ControlRow::kSelectorSpeed,-1) && g_selector_slow_motion_percent==10,"click cycles percentage");
+  Reset();
+
   Controls defaults;
   Require(defaults.keyboard_modern && defaults.controller_modern &&
               !defaults.invert_x && !defaults.invert_y && !defaults.keep_bodies && !defaults.e3_model &&
@@ -178,6 +201,13 @@ void CheckPersistence() {
   Require(!ChangeModernControlSetting(ControlRow::kKeepBodies,1,invalid.c_str()) &&
               !g_keep_bodies_enabled.load(),"failed body-setting save must not publish runtime state");
   Require(!Change(ControlRow::kCount, -1), "invalid menu rows must not write settings");
+  const auto before_interface=CurrentModernControlSettings();
+  Require(!ChangeModernControlSetting(ControlRow::kInterfaceScale,1,invalid.c_str()) &&
+      g_interface_scale_percent==before_interface.interface_scale,"failed UI scale save must not apply");
+  Require(!ChangeModernControlSetting(ControlRow::kSelectorSpeed,1,invalid.c_str()) &&
+      g_selector_slow_motion_percent==static_cast<uint32_t>(before_interface.selector_speed),"failed speed save must not apply");
+  Require(!ChangeModernControlSetting(ControlRow::kSelectorSlowMotion,0,invalid.c_str()) &&
+      g_selector_slow_motion_enabled==before_interface.selector_slow_motion,"failed slowdown save must not apply");
   g_e3_model_available.store(false);
   Require(!Change(ControlRow::kHeroineModel,1) && !ReadSaved().e3_model && !g_e3_model_requested.load(),
           "missing optional assets must not enable E3 or modify saved choice");

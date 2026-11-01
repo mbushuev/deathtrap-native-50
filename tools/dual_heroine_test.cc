@@ -210,7 +210,10 @@ int RunDualTest(int argc,wchar_t** argv) {
     RequireDual(HookDualHeroineNode(node.data(),nullptr)==1927 && g_dual_heroine_groups[group].ready,"Both families resident before scene-node draw");
   }
   const auto loads_after_warm=dual_loads;
-  RequireDual(loads_after_warm==2420+(HeroineSharedChains()?2u:0u),"Two model sets, texture sets and only two shared chains load once");
+  const uint32_t texture_sets=g_dual_heroine_pack.first_mesh-g_dual_heroine_pack.e3_texture_first+
+      g_dual_heroine_pack.texture_count;
+  RequireDual(loads_after_warm==2*g_dual_heroine_pack.mesh_count+texture_sets+(HeroineSharedChains()?2u:0u),
+      "Two model sets, declared texture sets and only two shared chains load once");
   const auto settings=root/L"settings.ini";
   for(int repeat=0;repeat<3;++repeat) for(int e3=0;e3<2;++e3) {
     RequireDual(ChangeModernControlSetting(deathtrap::settings::ControlRow::kHeroineModel,e3,settings.c_str()) &&
@@ -247,6 +250,60 @@ int RunDualTest(int argc,wchar_t** argv) {
   }
   RequireDual(ChangeModernControlSetting(deathtrap::settings::ControlRow::kBodyWounds,1,settings.c_str()) &&
       dual_loads==loads_after_warm,"showing/hiding wounds must not reload resident resources");
+  // A weapon/death animation can publish its default native hand after the
+  // actor has already switched to the full-burn torso. Use actual initialized
+  // resources and an animated bone/leaf hierarchy; never mutate that hierarchy.
+  std::array<uint8_t,256> torso_bone{},torso_leaf{},hand_bone{};
+  const auto tb=reinterpret_cast<uintptr_t>(torso_bone.data());
+  const auto tl=reinterpret_cast<uintptr_t>(torso_leaf.data());
+  const auto hb=reinterpret_cast<uintptr_t>(hand_bone.data());
+  SafeWrite(pelvis.data()+kChildOffset,&tb,4);
+  SafeWrite(torso_bone.data()+kParentOffset,&parent,4);SafeWrite(torso_bone.data()+kChildOffset,&tl,4);
+  SafeWrite(torso_leaf.data()+kParentOffset,&tb,4);
+  SafeWrite(torso_bone.data()+kSiblingOffset,&hb,4);SafeWrite(hand_bone.data()+kParentOffset,&parent,4);
+  SafeWrite(hand_bone.data()+kChildOffset,&fixture_node,4);SafeWrite(node.data()+kParentOffset,&hb,4);
+  for(uint32_t family=0;family<5;++family) {
+    const uint32_t body=family==0?4281:8139+(family-1)*240+220;
+    SafeWrite(torso_leaf.data()+kRenderResourceHandleOffset,&body,4);
+    for(int side=0;side<2;++side) for(int stage=0;stage<12;++stage) {
+      const uint32_t id=family==0 ? (stage==0?(side?3893:3886):4070+(stage-1)*20+(side?17:14)) :
+          8139+(family-1)*240+stage*20+(side?11:4);
+      const auto burned=family==0?(side?4287u:4284u):body+(side?11u:4u);
+      for(int e3=0;e3<2;++e3) for(int wounds=0;wounds<2;++wounds) {
+        g_e3_model_requested.store(e3!=0);g_show_body_wounds.store(wounds!=0);
+        const auto visible=!wounds?deathtrap::wounds::HealthyPart(id):e3?burned:id;
+        expected_draw_id=e3?visible:g_dual_heroine_pack.first_mesh+static_cast<uint32_t>(HeroineMeshIndex(visible));
+        SafeWrite(node.data()+kRenderResourceHandleOffset,&id,4);
+        const auto before_node=node,before_torso=torso_leaf,before_pelvis=pelvis;
+        RequireDual(HookDualHeroineNode(node.data(),nullptr)==1927 && node==before_node &&
+            torso_leaf==before_torso && pelvis==before_pelvis,
+            "Death/weapon reset retains burned hands; Original and wound toggle stay independent");
+      }
+    }
+  }
+  g_e3_model_requested.store(true);g_show_body_wounds.store(true);
+  const uint32_t source_hand=3893,burned_body=4281,burned_hand=4287;
+  SafeWrite(node.data()+kRenderResourceHandleOffset,&source_hand,4);
+  SafeWrite(torso_leaf.data()+kRenderResourceHandleOffset,&burned_body,4);
+  expected_draw_id=burned_hand;
+  RequireDual(HookDualHeroineNode(node.data(),nullptr)==1927,"Burned death hand before animation replacement");
+  for(uint32_t body:{3903u,4081u,4261u,0u}) {
+    SafeWrite(torso_leaf.data()+kRenderResourceHandleOffset,&body,4);expected_draw_id=source_hand;
+    RequireDual(HookDualHeroineNode(node.data(),nullptr)==1927,
+        "Respawn, partial injuries and missing torso never retain a cached burn");
+  }
+  SafeWrite(torso_leaf.data()+kRenderResourceHandleOffset,&burned_body,4);
+  const uintptr_t no_parent=0;SafeWrite(node.data()+kParentOffset,&no_parent,4);expected_draw_id=source_hand;
+  RequireDual(HookDualHeroineNode(node.data(),nullptr)==1927,"Detached hand never borrows the live actor's burn");
+  SafeWrite(node.data()+kParentOffset,&hb,4);
+  const auto saved_hand=LoadedHeroineResource(burned_hand);const uintptr_t absent=0;
+  SafeWrite(g_dungeon_base+kRenderResourceTableRva+burned_hand*4,&absent,4);
+  SafeWrite(g_dungeon_base+kPrtCurrentNodeRva,&fixture_node,4);
+  RequireDual(HookHeroinePrtDraw(reinterpret_cast<void*>(LoadedHeroineResource(source_hand)))==1927 &&
+      dual_loads==loads_after_warm,"Missing burn mesh falls back without leaf-render I/O");
+  SafeWrite(g_dungeon_base+kRenderResourceTableRva+burned_hand*4,&saved_hand,4);
+  SafeWrite(node.data()+kParentOffset,&parent,4);SafeWrite(pelvis.data()+kChildOffset,&no_parent,4);
+  RequireDual(dual_loads==loads_after_warm,"Burn correction uses existing resident resources only");
   const uintptr_t no_player=0;SafeWrite(g_dungeon_base+kUiOwnerPointerRva,&no_player,4);
   // Simulate a resource family being freed at a level boundary. The next node
   // entry must reload it before drawing, even if other family members survive.
@@ -263,7 +320,7 @@ int RunDualTest(int argc,wchar_t** argv) {
   RequireDual(absolute_root.parent_path()==std::filesystem::canonical(temporary) &&
       absolute_root.filename()==L"native50-dual-"+std::to_wstring(GetCurrentProcessId()),"Fixture cleanup stays in its exact temporary directory");
   std::filesystem::remove_all(absolute_root);
-  std::cout<<"Dual heroine: 1200 parts/states, five teams, live model/wound toggles with zero reloads, unchanged pose/ownership, level reload recovery and guarded archive routing passed\n";
+  std::cout<<"Dual heroine: 1200 parts/states, five teams, live model/wound toggles, burned death hands and respawn isolation, zero reloads, unchanged pose/ownership, level reload recovery and guarded archive routing passed\n";
   return 0;
 }
 int CheckStartup(int argc,wchar_t** argv) {

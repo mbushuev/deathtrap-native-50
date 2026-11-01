@@ -20,7 +20,11 @@ dual-model reconstruction. Repeated resource blocks are shared losslessly.
 `tools/share_e3_chains.py` separates exactly matching torso/hip metalwork into
 two shared native meshes reused by all 60 injury/team sets. It also merges
 identical position/normal vertices and clears only native initialization caches.
-Skin, wound polygons, UVs, normals and materials are preserved. Both chains
+The accepted skin geometry and normal field are preserved. Partial injuries
+are baked into skin/armour materials instead of separate floating polygons;
+the original wound artwork and full-burn appearance remain. Injury colours
+are sampled bilinearly before palette conversion, avoiding nearest-pixel blocks
+when rasterizing the new UV charts. Both chains
 warm once before node rendering and follow the current bone's native transform,
 including detached parts; Original never draws them.
 `tools/model_pack_test.cc` verifies bounds, invalid inputs, cache reuse/recovery
@@ -28,3 +32,8 @@ and byte equality with every resource in the tested reconstruction.
 
 The reconstruction follows surviving E3 references; it does not claim recovery
 of the original model's unknown topology.
+
+Version 0.0.236 uses 29 E3 texture pages, within the live
+renderer's existing 32-page limit. The 1,200 Original mesh aliases and their ten
+texture pages are relocated together and remain visually exact. Older ten-page
+packs remain supported. The cache decoder checks all interval and count bounds.

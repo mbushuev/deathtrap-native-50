@@ -108,6 +108,69 @@ int HeroineBodyStage(uint32_t id) {
     return static_cast<int>(((id-8139)/20)%12);
   return -1;
 }
+int HeroineHandSide(uint32_t id) {
+  if (id==3886) return 0;
+  if (id==3893) return 1;
+  if (id>=4070 && id<=4289) {
+    const auto part=(id-4070)%20;
+    return part==14?0:part==17?1:-1;
+  }
+  if (id>=8139 && id<=9098) {
+    const auto part=(id-8139)%20;
+    return part==4?0:part==11?1:-1;
+  }
+  return -1;
+}
+uint32_t HeroineBurnedHand(uint32_t body,int side) {
+  if (side<0 || side>1 || HeroineBodyStage(body)!=11) return 0;
+  if (body==4281) return side?4287u:4284u;
+  // Team families put torso at offset zero, with hands at four and eleven.
+  return body+(side?11u:4u);
+}
+uint32_t ResolveHeroineHandAppearance(uintptr_t node,uint32_t resource) {
+  const int side=HeroineHandSide(resource);
+  if (side<0 || !HeroineE3VisualActive() ||
+      !g_show_body_wounds.load(std::memory_order_relaxed) || !IsPlayerVisualNode(node)) return resource;
+  const auto root=ResolveLivePlayerRenderRoot();
+  if (!root) return resource;
+  // Weapon/animation changes can restore the native hand mesh even while the
+  // body remains fully burned. Resolve appearance from this actor's current
+  // torso, never from a cached death state or a nearby/detached model.
+  std::array<uintptr_t,128> pending{},visited{};
+  size_t count=1,seen=0;pending[0]=root;uint32_t selected=0;
+  while (count && seen<visited.size()) {
+    const auto current=pending[--count];
+    if (std::find(visited.begin(),visited.begin()+seen,current)!=visited.begin()+seen) return resource;
+    visited[seen++]=current;
+    uint32_t id=0;uintptr_t child=0,sibling=0;
+    if (!SafeReadValue(reinterpret_cast<void*>(current+kRenderResourceHandleOffset),&id) ||
+        !SafeReadValue(reinterpret_cast<void*>(current+kChildOffset),&child)) return resource;
+    const auto burned=HeroineBurnedHand(id,side);
+    if (burned) {
+      if (selected && selected!=burned) return resource;
+      selected=burned;
+    }
+    if (child) {
+      uintptr_t parent=0;
+      if (!SafeReadValue(reinterpret_cast<void*>(child+kParentOffset),&parent) || parent!=current || count==pending.size()) return resource;
+      pending[count++]=child;
+    }
+    if (current!=root) {
+      if (!SafeReadValue(reinterpret_cast<void*>(current+kSiblingOffset),&sibling)) return resource;
+      if (sibling) {
+        uintptr_t parent=0,other_parent=0;
+        if (!SafeReadValue(reinterpret_cast<void*>(current+kParentOffset),&parent) ||
+            !SafeReadValue(reinterpret_cast<void*>(sibling+kParentOffset),&other_parent) ||
+            parent!=other_parent || count==pending.size()) return resource;
+        pending[count++]=sibling;
+      }
+    }
+  }
+  // Reject a truncated/cyclic tree instead of inferring another actor's state.
+  if (count || !selected) return resource;
+  return selected;
+}
+
 bool HeroinePelvisResource(uint32_t id) {
   return id==3890 || (id>=4070 && id<=4270 && (id-4070)%20==0) ||
       (id>=8147 && id<=9087 && (id-8147)%20==0);
@@ -383,6 +446,18 @@ int __cdecl HookHeroinePrtDraw(void* mesh) {
   if (healthy!=resource && IsPlayerVisualNode(node)) {
     const auto clean_mesh=LoadedHeroineResource(healthy);
     if (clean_mesh) { resource=healthy;mesh=reinterpret_cast<void*>(clean_mesh); }
+  }
+  const auto appearance=ResolveHeroineHandAppearance(node,resource);
+  if (appearance!=resource) {
+    const auto burned=LoadedHeroineResource(appearance);
+    if (burned) {
+      static uint32_t previous_source=0,previous_target=0;
+      if (resource!=previous_source || appearance!=previous_target) {
+        AppendDeathtrapSupportLog("support_heroine_burn_hand native_resource=%u visible_resource=%u",resource,appearance);
+        previous_source=resource;previous_target=appearance;
+      }
+      resource=appearance;mesh=reinterpret_cast<void*>(burned);
+    }
   }
   if (HeroineMeshIndex(resource)<0) return g_original_heroine_prt_draw(mesh);
   if (HeroineBodyStage(native_resource)>=0) LogHeroineVisualStage(node,native_resource,resource);

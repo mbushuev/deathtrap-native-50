@@ -107,6 +107,9 @@ if ($LASTEXITCODE -ne 0) { throw 'DirectInput forwarding smoke test failed.' }
 & (Join-Path $buildPath "$Configuration\input_device_routing_test.exe")
 if ($LASTEXITCODE -ne 0) { throw 'DirectInput device/axis ownership test failed.' }
 
+& (Join-Path $buildPath "$Configuration\interface_scale_test.exe")
+if ($LASTEXITCODE -ne 0) { throw 'Interface layout test failed.' }
+
 & (Join-Path $buildPath "$Configuration\widescreen_layout_test.exe")
 if ($LASTEXITCODE -ne 0) { throw 'Widescreen layout matrix test failed.' }
 

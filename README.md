@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current version: **0.0.235**
+Current version: **0.0.236**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -9,7 +9,7 @@ Current version: **0.0.235**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.235.png" alt="Deathtrap Native 50 v0.0.235 — Halloween release" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.236-halloween.png" alt="Deathtrap Native 50 v0.0.236 — Halloween release" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -82,6 +82,9 @@ Required wrapper runtime files are redistributed under their published terms.
   third-person camera return behind the character with `Y`.
 - A dedicated Native 50 settings book in Setup, with saved modern/tank movement,
   independent camera X/Y inversion, persistent-body and wound-visibility options.
+  A second page controls selector slow motion, selection world speed and the
+  gameplay interface scale (75-150%), including health, inventory, messages,
+  selectors and running/status bars.
 - Optional persistent enemy bodies that retain dismemberment without delaying
   item drops or encounter progression.
 - A choice to load the latest save from the current level run or restart after
