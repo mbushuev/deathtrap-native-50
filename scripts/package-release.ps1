@@ -142,7 +142,8 @@ $releaseName = "Deathtrap-Native-50-$version"
 $stageRoot = Join-Path $outputRoot $releaseName
 $archivePath = Join-Path $outputRoot "$releaseName.zip"
 $archiveHashPath = Join-Path $outputRoot "$releaseName-SHA256.txt"
-foreach ($path in @($stageRoot, $archivePath, $archiveHashPath)) {
+$installerPath = Join-Path $outputRoot "$releaseName-Setup.exe"
+foreach ($path in @($stageRoot, $archivePath, $archiveHashPath, $installerPath)) {
     if (Test-Path -LiteralPath $path) {
         throw "Release output already exists; use an empty output directory: $path"
     }
@@ -290,10 +291,17 @@ finally {
 }
 $archiveHash = (Get-FileHash -LiteralPath $archivePath `
     -Algorithm SHA256).Hash.ToLowerInvariant()
+& (Join-Path $PSScriptRoot 'build-installer.ps1') -PayloadDirectory $stageRoot `
+    -OutputPath $installerPath
+if ($LASTEXITCODE -ne 0) { throw 'Standalone Windows installer build failed.' }
+& python (Join-Path $PSScriptRoot 'test-native-installer.py') $installerPath
+if ($LASTEXITCODE -ne 0) { throw 'Standalone Windows installer tests failed.' }
+$installerHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
 [System.IO.File]::WriteAllText(
     $archiveHashPath,
-    "$archiveHash  $([System.IO.Path]::GetFileName($archivePath))`n",
+    "$archiveHash  $([System.IO.Path]::GetFileName($archivePath))`n$installerHash  $([System.IO.Path]::GetFileName($installerPath))`n",
     $utf8NoBom)
 
 Write-Host "Release package: $archivePath"
+Write-Host "Standalone Windows installer: $installerPath"
 Write-Host "Release checksum: $archiveHashPath"

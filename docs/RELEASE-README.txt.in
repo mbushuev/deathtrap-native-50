@@ -21,12 +21,27 @@ QUICK INSTALL - WINDOWS
 Everything required for the supported setup is already included. You do not
 need to download or configure dgVoodoo before the first launch.
 
+Recommended: download Deathtrap-Native-50-@VERSION@-Setup.exe, run it, select
+the installed game folder containing DD_CD.EXE, then choose Install. This EXE
+is self-contained and does not need this ZIP, PowerShell or .NET. It preserves
+current Native 50 settings by default. Close the game before installing.
+It is built to target Windows 7 and later. Neither installation nor gameplay
+has been tested on a real Windows 7 system; patch operation is not guaranteed
+on that OS. The supported Windows gameplay target remains Windows 10/11.
+
+The ZIP installation method remains available:
+
 1. Close the game.
 2. Extract every file from this patch ZIP directly beside DD_CD.EXE. Preserve
    the included payload directory.
 3. Double-click INSTALL.cmd once.
 4. Start Deathtrap Dungeon normally through Steam, GOG Galaxy, its desktop
    shortcut or DD_CD.EXE.
+
+Both Windows installers back up replaced files under the game's back folder.
+The EXE also restores previous files automatically if setup fails or is
+cancelled. Its rollback folder includes RESTORE.txt with recovery instructions.
+An installation to a protected folder may require Run as administrator.
 
 QUICK INSTALL - STEAM DECK
 

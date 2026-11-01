@@ -188,6 +188,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Bundled model delta reconstruction/isolation t
 & $selectorCameraHandoff
 if ($LASTEXITCODE -ne 0) { throw 'Selector camera handoff test failed.' }
 
+& (Join-Path $PSScriptRoot 'test-install-powershell-compatibility.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Installer legacy PowerShell compatibility check failed.' }
+
 & (Join-Path $PSScriptRoot 'test-install-crlf.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Installer CRLF binding test failed.' }
 

@@ -47,6 +47,9 @@ struct Native50MenuApi {
   KeyboardBindingDrawTextFn secondary_text = nullptr;
 };
 Native50MenuApi g_native50_menu_api;
+std::vector<uint8_t> g_root_menu_version_font;
+bool g_root_menu_version_font_attempted = false;
+constexpr char kRootMenuBuildVersion[] = "native-50 v." DEATHTRAP_NATIVE_VERSION;
 
 bool Native50ReadHeadingFont(const std::wstring& game, std::vector<uint8_t>* bytes,
                              uint32_t id = 0x1485u) {
@@ -70,6 +73,45 @@ bool Native50ReadHeadingFont(const std::wstring& game, std::vector<uint8_t>* byt
   if (ok) { bytes->resize(entry[1]); ok=read_at(entry[0],bytes->data(),entry[1]); }
   CloseHandle(file);
   return ok;
+}
+
+void DrawRootMenuBuildVersion() {
+  if (!g_original_menu_sprite) return;
+  if (!g_root_menu_version_font_attempted && g_root_menu_version_font.empty()) {
+    g_root_menu_version_font_attempted = true;
+    // Native pale-blue menu glyphs, not the parchment's brown helper font.
+    Native50ReadHeadingFont(ModuleDirectory(), &g_root_menu_version_font, 0x1486u);
+  }
+  const auto& font = g_root_menu_version_font;
+  if (font.size() < sizeof(deathtrap::text::RetailFontHeader)) return;
+  const auto* header = reinterpret_cast<const deathtrap::text::RetailFontHeader*>(font.data());
+  if (header->signature != deathtrap::text::kRetailFontSignature ||
+      header->glyph_count > deathtrap::text::kMaximumFontGlyphs ||
+      font.size() < 8u + header->glyph_count * 8u) return;
+  const auto* glyphs = reinterpret_cast<const deathtrap::text::RetailFontGlyph*>(font.data() + 8);
+  int width = 0;
+  for (const auto* p = reinterpret_cast<const unsigned char*>(kRootMenuBuildVersion); *p; ++p) {
+    const size_t index = *p - deathtrap::text::kFirstFontCharacter;
+    if (index >= header->glyph_count) return;
+    const auto& glyph = glyphs[index];
+    if (glyph.advance_x < 0 || glyph.height > 32 ||
+        static_cast<size_t>(glyph.pixels) + glyph.width * glyph.height > font.size()) return;
+    width += glyph.advance_x;
+  }
+  if (width < 1 || width > 600) return;
+  // Retail MAIN/MAINMP.PCX contains 1.0 at the lower right. Leave those pixels
+  // untouched and use the same right margin, with a separate line above it.
+  int x = 628 - width;
+  constexpr int y = 428;
+  for (const auto* p = reinterpret_cast<const unsigned char*>(kRootMenuBuildVersion); *p; ++p) {
+    const auto& glyph = glyphs[*p - deathtrap::text::kFirstFontCharacter];
+    const int left = x + glyph.offset_x, top = y + glyph.offset_y;
+    if (glyph.width && glyph.height && left >= 0 && left + glyph.width <= 640 &&
+        top >= 0 && top + glyph.height <= 448) {
+      g_original_menu_sprite(font.data() + glyph.pixels, glyph.width, glyph.height, left, top);
+    }
+    x += glyph.advance_x;
+  }
 }
 
 bool Native50ReadPcx(const std::wstring& path, deathtrap::menu::Image* image) {

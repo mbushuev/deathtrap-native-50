@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current version: **0.0.236**
+Current version: **0.0.237**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -9,7 +9,7 @@ Current version: **0.0.236**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.236-halloween.png" alt="Deathtrap Native 50 v0.0.236 — Halloween release" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.237-halloween.png" alt="Deathtrap Native 50 v0.0.237 — Halloween release" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -165,9 +165,11 @@ D3D9 output directly to Proton/DXVK.
 
 ## Download and verification
 
-Published builds are distributed as versioned ZIP files through GitHub
-Releases. Each release also includes a SHA-256 file for the complete archive,
-and the archive contains `SHA256SUMS.txt` for its individual files.
+Published builds include a standalone Windows EXE installer and a complete ZIP
+through GitHub Releases. Download the EXE for the recommended Windows setup,
+or the ZIP for Steam Deck and the alternative Windows script installer.
+The release SHA-256 file covers both downloads; the ZIP also contains
+`SHA256SUMS.txt` for its individual files.
 
 The ZIP can be extracted directly into the game directory. Runtime files are
 kept in `payload` so extracting an update cannot overwrite the installed patch
@@ -212,8 +214,19 @@ requires its configuration and additional native bindings in
 
 ## Installation
 
+Download `Deathtrap-Native-50-0.0.237-Setup.exe` for Windows. Close the game,
+run the installer, select the folder containing `DD_CD.EXE`, and
+choose **Install**. The EXE contains the complete Windows patch, preserves
+current Native 50 preferences by default, and creates a rollback copy before
+replacing files. It requires neither PowerShell nor .NET. Windows 7 is an
+installer build target; neither the installer nor gameplay has been tested on
+a real Windows 7 system, and patch operation on that OS is not guaranteed.
+The ZIP and `INSTALL-DECK.sh` remain available for Steam Deck.
+
 **No separate dgVoodoo download or setup is required.** The release already
 contains the tested dgVoodoo 2.86.2 x86 runtime and graphics configuration.
+
+For the alternative Windows script installation:
 
 1. Close the game.
 2. Extract every file from the Deathtrap Native 50 release ZIP directly beside
@@ -221,7 +234,7 @@ contains the tested dgVoodoo 2.86.2 x86 runtime and graphics configuration.
 3. Double-click `INSTALL.cmd` once.
 4. Start Deathtrap Dungeon normally through Steam or `DD_CD.EXE`.
 
-That is the complete normal installation. `INSTALL.cmd` checks the game,
+`INSTALL.cmd` checks the game,
 backs up any existing patch, dgVoodoo, control and rendering files, and then
 installs the complete tested setup.
 

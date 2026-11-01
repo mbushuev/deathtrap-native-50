@@ -2015,10 +2015,16 @@ bool RootMenuHasActiveGame() {
   return g_root_menu_gameplay_seen.load(std::memory_order_acquire);
 }
 
+void DrawRootMenuBuildVersion();
+
 uint8_t __cdecl HookRootMenuInput() {
   if (!g_original_root_menu_input || !g_dungeon_base) {
     return 0u;
   }
+  // Draw before retail captures the cursor background and presents this page.
+  // Repeating on each pending page also covers both flip buffers and returns
+  // from submenus, without leaving text/cursor fragments behind.
+  DrawRootMenuBuildVersion();
   const uint8_t retail_action = g_original_root_menu_input();
   // +0x69890 is an edge-consuming query, so it must remain exclusively owned
   // by the original routine above. After retail returns Quit (6), distinguish

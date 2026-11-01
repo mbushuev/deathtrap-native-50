@@ -18,11 +18,21 @@ then creates:
 
 ```text
 artifacts/Deathtrap-Native-50-<version>.zip
+artifacts/Deathtrap-Native-50-<version>-Setup.exe
 artifacts/Deathtrap-Native-50-<version>-SHA256.txt
 ```
 
 Inspect the archive and verify its checksum before creating a tag. The release
 configuration must keep `Diagnostics/DebugLog=0`.
+
+The EXE is the independent Windows download. It embeds only 18 explicitly
+allowlisted patch/support files from the same checksum-verified ZIP staging
+directory. It is a native x86 Win32 application, statically linked with MSVC
+2022 and targeting the Windows 7 subsystem. It never invokes PowerShell or
+.NET. Its current-host integration tests cover installation, settings, blocked
+files, damaged payloads, cancellation and rollback after a failed write.
+Run a real Windows 7 SP1 test before claiming gameplay support on Windows 7.
+See [Windows installer](WINDOWS-INSTALLER.md) for build and test instructions.
 
 The ZIP must contain only the runtime DLL and INI, the two verified unmodified
 dgVoodoo 2.86.2 x86 runtime DLLs and tested configuration in a `payload`
@@ -64,7 +74,7 @@ Pushing the tag starts `.github/workflows/release.yml` on a Windows runner. It:
 
 The draft is intentionally not published automatically. Before publishing it,
 replace the generated notes with the reviewed release copy, attach screenshots
-or video links, confirm the two assets and compare the published checksum with
+or video links, confirm the three assets and compare the published checksums with
 the locally verified archive. Platform-specific announcement drafts and the
 final GitHub release copy are private publishing material: keep them outside
 the repository (for example under the ignored `release-prep` directory), not

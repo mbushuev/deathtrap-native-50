@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$ArchivePath,
     [Parameter(Mandatory = $true)][hashtable]$GameDirectories,
-    [string]$BuildDirectory = 'build'
+    [string]$BuildDirectory = 'build',
+    [string]$InstallerPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -77,10 +78,18 @@ try {
         Check ($LASTEXITCODE -eq 0 -and
             $profile.Contains("profile: $($profiles[$name]) passed")) `
             "Production compatibility gate failed for $name`: $profile"
-        $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
-            -File (Join-Path $patch 'install.ps1') -GameDirectory $game |
-            Out-String
-        Check ($LASTEXITCODE -eq 0) "Packaged installer failed for $name`: $output"
+        if ($InstallerPath) {
+            $installerLog = Join-Path $testRoot "$name-setup.txt"
+            $process = Start-Process -FilePath $InstallerPath -Wait -PassThru -WindowStyle Hidden `
+                -ArgumentList @('--install', '--reset-settings', '--game-dir', ('"' + $game + '"'), '--log', ('"' + $installerLog + '"'))
+            $output = [System.IO.File]::ReadAllText($installerLog)
+            Check ($process.ExitCode -eq 0) "EXE installer failed for $name`: $output"
+        } else {
+            $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+                -File (Join-Path $patch 'install.ps1') -GameDirectory $game |
+                Out-String
+            Check ($LASTEXITCODE -eq 0) "Packaged installer failed for $name`: $output"
+        }
         Check (-not $output.Contains('does not match the version tested')) `
             "Known $name game was reported as unknown: $output"
         Check ((Hash (Join-Path $game 'DD_CD.EXE')) -eq $before['DD_CD.EXE']) `
@@ -94,7 +103,8 @@ try {
                             'dxwrapper.dll', 'dxwrapper.ini', 'D3D9.dll',
                             'D3DImm.dll', 'dgVoodoo.conf')) {
             if ($before.ContainsKey($file)) {
-                $saved = Join-Path $backup[0].FullName ($file -replace '[\\/]', '_')
+                $savedName = if ($InstallerPath) { $file } else { $file -replace '[\\/]', '_' }
+                $saved = Join-Path $backup[0].FullName $savedName
                 Check ((Hash $saved) -eq $before[$file]) "Wrong $name backup: $file"
             }
         }

@@ -52,6 +52,7 @@ jobs:
           name: deathtrap-native-50-${{ github.ref_name }}
           path: |
             artifacts/*.zip
+            artifacts/*-Setup.exe
             artifacts/*-SHA256.txt
           if-no-files-found: error
 
@@ -104,10 +105,10 @@ jobs:
         run: |
           $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
           $assets = @(Get-ChildItem -LiteralPath artifacts -File |
-            Where-Object { $_.Extension -eq '.zip' -or $_.Name.EndsWith('-SHA256.txt') } |
+            Where-Object { $_.Extension -eq '.zip' -or $_.Name.EndsWith('-Setup.exe') -or $_.Name.EndsWith('-SHA256.txt') } |
             ForEach-Object { $_.FullName })
-          if ($assets.Count -ne 2) {
-            throw "Expected ZIP and checksum assets; found $($assets.Count)."
+          if ($assets.Count -ne 3) {
+            throw "Expected ZIP, Windows EXE installer and checksum assets; found $($assets.Count)."
           }
           $releaseNotesPath = ".github/release-notes/v$version.md"
           if (Test-Path -LiteralPath $releaseNotesPath -PathType Leaf) {

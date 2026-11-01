@@ -8,6 +8,39 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.237 — Standalone Windows installer and menu version
+
+Changes since 0.0.236. This release also includes all changes from 0.0.235 and
+0.0.236, detailed in the sections below.
+
+- Add a separate, self-contained Windows EXE installer with folder selection,
+  embedded file verification, Steam/GOG game checks, preserved Native 50
+  preferences, timestamped backups and automatic rollback on failure or
+  cancellation. It requires neither PowerShell nor .NET. Keep the complete ZIP
+  and Steam Deck installation script as a separate download. Windows 7 is an
+  installer target. Neither installation nor gameplay has been tested on a
+  real Windows 7 system; operation of the patch on Win7 is not guaranteed.
+- Make the common Windows installer compatible with Windows PowerShell 2.0
+  syntax and built-in command parameters. Fix the first-line
+  `SupportsShouldProcess` parser error and the subsequent path, configuration
+  reading, constructor and .NET overload incompatibilities. Preserve payload
+  verification, backups, WhatIf and the existing Windows installation flow.
+  This installer change does not establish Windows 7 gameplay compatibility.
+- Display the Native 50 build version above the original game's 1.0 label in
+  the main menu, using native menu glyphs and the build's VERSION value.
+- Update the Halloween release poster for 0.0.237.
+
+Included from 0.0.236: saved selector slow motion and world-speed settings,
+75–150% interface scaling for the full HUD including stamina/status bars,
+and E3 wound, injured-face, filtering and burned-hand animation fixes.
+
+Included from 0.0.235: the optional E3 1997 heroine reconstruction, the
+localized Native 50 settings book, movement and camera inversion settings,
+optional persistent enemy bodies, Show wounds, death recovery and all prior
+Windows/Steam Deck improvements. To enable E3, select **Setup → Native 50 →
+Heroine model → E3 1997**. Fresh installations select Original; the new EXE
+preserves an existing model preference by default.
+
 ## 0.0.236 — Interface scaling, selector settings and E3 injury fixes
 
 Changes since the last published release, 0.0.235.

@@ -1,4 +1,4 @@
-[CmdletBinding(SupportsShouldProcess)]
+[CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [string]$GameDirectory = '',
     [string]$DllPath = '',
@@ -12,13 +12,16 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repoRoot = Split-Path -Parent $PSScriptRoot
+# Windows 7 ships Windows PowerShell 2.0. Keep this entry point compatible
+# without requiring a framework/PowerShell upgrade before installing the patch.
+$scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repoRoot = Split-Path -Parent $scriptDirectory
 if (-not $GameDirectory) {
-    $localExecutable = Join-Path $PSScriptRoot 'DD_CD.EXE'
+    $localExecutable = Join-Path $scriptDirectory 'DD_CD.EXE'
     if (-not (Test-Path -LiteralPath $localExecutable -PathType Leaf)) {
         throw 'GameDirectory is required unless install.ps1 is beside DD_CD.EXE.'
     }
-    $GameDirectory = $PSScriptRoot
+    $GameDirectory = $scriptDirectory
 }
 $game = (Resolve-Path -LiteralPath $GameDirectory).Path
 $dungeon = Join-Path $game 'Dungeon.dll'
@@ -71,11 +74,11 @@ function Get-FileSha256 {
                 $hasher.ComputeHash($stream))).Replace('-', '')
         }
         finally {
-            $hasher.Dispose()
+            $hasher.Clear()
         }
     }
     finally {
-        $stream.Dispose()
+        $stream.Close()
     }
 }
 
@@ -103,7 +106,7 @@ if (-not $SkipGameHashCheck) {
         @{ Name = 'DD_CD.EXE'; Path = $executable; Expected = $expectedExecutables }
     )) {
         $actual = Get-FileSha256 -Path $binary.Path
-        if ($actual -notin $binary.Expected) {
+        if ($binary.Expected -notcontains $actual) {
             Write-Warning (
                 "$($binary.Name) does not match the version tested by the " +
                 "project. Expected SHA-256: $($binary.Expected -join ', '); actual: " +
@@ -114,7 +117,7 @@ if (-not $SkipGameHashCheck) {
 }
 
 if (-not $DgVoodooRuntimeDirectory) {
-    $payloadRuntime = Join-Path $PSScriptRoot 'payload\dgVoodoo'
+    $payloadRuntime = Join-Path $scriptDirectory 'payload\dgVoodoo'
     $repositoryRuntime = Join-Path $repoRoot 'third_party\dgVoodoo2-2.86.2\x86'
     $DgVoodooRuntimeDirectory = if (
         (Test-Path -LiteralPath (Join-Path $payloadRuntime 'D3D9.dll') -PathType Leaf) -and
@@ -147,7 +150,7 @@ foreach ($wrapper in $dgVoodooPayload) {
     }
 }
 if (-not $DxWrapperRuntimeDirectory) {
-    $payloadRuntime = Join-Path $PSScriptRoot 'payload\dxwrapper'
+    $payloadRuntime = Join-Path $scriptDirectory 'payload\dxwrapper'
     $repositoryRuntime = Join-Path $repoRoot `
         'third_party\deathtrap-dxwrapper-release225\x86'
     $DxWrapperRuntimeDirectory = if (
@@ -181,7 +184,7 @@ foreach ($wrapper in $dxWrapperPayload) {
     }
 }
 if (-not $DxWrapperConfigPath) {
-    $payloadConfig = Join-Path $PSScriptRoot 'payload\dxwrapper.ini'
+    $payloadConfig = Join-Path $scriptDirectory 'payload\dxwrapper.ini'
     $DxWrapperConfigPath = if (Test-Path -LiteralPath $payloadConfig -PathType Leaf) {
         $payloadConfig
     } else {
@@ -189,19 +192,19 @@ if (-not $DxWrapperConfigPath) {
     }
 }
 $dxConfigSource = (Resolve-Path -LiteralPath $DxWrapperConfigPath).Path
+$dxConfigText = [System.IO.File]::ReadAllText($dxConfigSource)
 foreach ($requiredSetting in @(
     '^Dd7to9\s*=\s*1\s*$',
     '^DdrawUseExternalD3D9\s*=\s*1\s*$',
     '^DdrawInternalResolutionScale\s*=\s*[234]\s*$',
     '^DdrawWidescreenAspectX1000\s*=\s*1\s*$'
 )) {
-    if (-not (Select-String -LiteralPath $dxConfigSource `
-            -Pattern $requiredSetting -Quiet)) {
+    if (-not [regex]::IsMatch($dxConfigText, '(?m)' + $requiredSetting)) {
         throw "Bundled dxwrapper configuration is missing: $requiredSetting"
     }
 }
 if (-not $DgVoodooConfigPath) {
-    $payloadConfig = Join-Path $PSScriptRoot 'payload\dgVoodoo.conf'
+    $payloadConfig = Join-Path $scriptDirectory 'payload\dgVoodoo.conf'
     $DgVoodooConfigPath = if (Test-Path -LiteralPath $payloadConfig -PathType Leaf) {
         $payloadConfig
     } else {
@@ -209,19 +212,19 @@ if (-not $DgVoodooConfigPath) {
     }
 }
 $dgConfigSource = (Resolve-Path -LiteralPath $DgVoodooConfigPath).Path
-if (-not (Select-String -LiteralPath $dgConfigSource `
-        -Pattern '^OutputAPI\s*=\s*d3d11_fl11_0\s*$' -Quiet)) {
+$dgConfigText = [System.IO.File]::ReadAllText($dgConfigSource)
+if (-not [regex]::IsMatch($dgConfigText,
+        '(?m)^OutputAPI\s*=\s*d3d11_fl11_0\s*$')) {
     throw 'Bundled dgVoodoo configuration must use OutputAPI = d3d11_fl11_0.'
 }
-$dgConfigText = Get-Content -LiteralPath $dgConfigSource -Raw
 if ($dgConfigText -notmatch `
         '(?ms)^\[DirectX\]\s*$.*?^Antialiasing\s*=\s*8x\s*$') {
     throw 'Bundled dgVoodoo DirectX configuration must use Antialiasing = 8x.'
 }
 
 if (-not $DllPath) {
-    $payloadDll = Join-Path $PSScriptRoot 'payload\DINPUT.dll'
-    $flatDll = Join-Path $PSScriptRoot 'DINPUT.dll'
+    $payloadDll = Join-Path $scriptDirectory 'payload\DINPUT.dll'
+    $flatDll = Join-Path $scriptDirectory 'DINPUT.dll'
     $DllPath = if (Test-Path -LiteralPath $payloadDll -PathType Leaf) {
         $payloadDll
     } elseif (Test-Path -LiteralPath $flatDll -PathType Leaf) {
@@ -232,8 +235,8 @@ if (-not $DllPath) {
 }
 $dll = (Resolve-Path -LiteralPath $DllPath).Path
 if (-not $IniPath) {
-    $payloadIni = Join-Path $PSScriptRoot 'payload\deathtrap_native.ini'
-    $flatIni = Join-Path $PSScriptRoot 'deathtrap_native.ini'
+    $payloadIni = Join-Path $scriptDirectory 'payload\deathtrap_native.ini'
+    $flatIni = Join-Path $scriptDirectory 'deathtrap_native.ini'
     $IniPath = if (Test-Path -LiteralPath $payloadIni -PathType Leaf) {
         $payloadIni
     } elseif (Test-Path -LiteralPath $flatIni -PathType Leaf) {
@@ -244,8 +247,8 @@ if (-not $IniPath) {
 }
 $ini = (Resolve-Path -LiteralPath $IniPath).Path
 if (-not $KeysPath) {
-    $payloadKeys = Join-Path $PSScriptRoot 'payload\keys.cfg'
-    $flatKeys = Join-Path $PSScriptRoot 'keys.cfg'
+    $payloadKeys = Join-Path $scriptDirectory 'payload\keys.cfg'
+    $flatKeys = Join-Path $scriptDirectory 'keys.cfg'
     $KeysPath = if (Test-Path -LiteralPath $payloadKeys -PathType Leaf) {
         $payloadKeys
     } elseif (Test-Path -LiteralPath $flatKeys -PathType Leaf) {
@@ -275,7 +278,7 @@ function Set-RetailConfigValue {
     $Text = [regex]::Replace(
         $Text, "(?m)(?<=\S)(?=$namePattern\s+)", $newline)
     $hadTerminalNewline = $Text.EndsWith("`n")
-    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines = New-Object 'System.Collections.Generic.List[string]'
     foreach ($existingLine in [regex]::Split($Text, "\r?\n")) {
         $lines.Add($existingLine)
     }
@@ -285,7 +288,7 @@ function Set-RetailConfigValue {
     }
 
     $pattern = "^\s*$namePattern(?:\s+.*)?\s*$"
-    $rewritten = [System.Collections.Generic.List[string]]::new()
+    $rewritten = New-Object 'System.Collections.Generic.List[string]'
     $inserted = $false
     foreach ($existingLine in $lines) {
         if ([regex]::IsMatch($existingLine, $pattern)) {
@@ -301,7 +304,8 @@ function Set-RetailConfigValue {
         $rewritten.Add("$Name $Value")
     }
 
-    $result = [string]::Join($newline, $rewritten)
+    # .NET 2.0 has the string[] overload, not the newer IEnumerable overload.
+    $result = [string]::Join($newline, [string[]]$rewritten.ToArray())
     if ($hadTerminalNewline -or $Text.Length -eq 0) {
         $result += $newline
     }
@@ -407,8 +411,8 @@ function Set-NativeDisplayResolution {
         $text = [regex]::Replace(
             $text, $pattern, '${1}' + [string]$setting[1], 1)
     }
-    [System.IO.File]::WriteAllText(
-        $Path, $text, [System.Text.UTF8Encoding]::new($false))
+    $utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    [System.IO.File]::WriteAllText($Path, $text, $utf8NoBom)
 }
 
 if ($PSCmdlet.ShouldProcess($game, 'Install Deathtrap Native 50 overlay')) {

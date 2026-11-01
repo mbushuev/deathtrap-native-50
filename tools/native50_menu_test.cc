@@ -525,6 +525,50 @@ void WritePagePreview(const std::filesystem::path& game,const std::filesystem::p
   g_native50_menu_assets=nullptr;preview_page=nullptr;g_recovery_page=nullptr;
   std::cout<<"Actual retail fonts: all four page languages and settings fit the parchment\n";
 }
+deathtrap::menu::Image* version_preview = nullptr;
+unsigned version_glyphs = 0;
+void __cdecl VersionSprite(const void* source,int width,int height,int x,int y) {
+  Require(version_preview && source && x>=0 && x+width<=640 && y>=420 && y+height<=448,
+          "build label must fit above the original version without touching it");
+  const auto* pixels=static_cast<const uint8_t*>(source);
+  for (int row=0;row<height;++row) for (int col=0;col<width;++col)
+    if (pixels[row*width+col]) version_preview->pixels[(y+row)*640+x+col]=pixels[row*width+col];
+  ++version_glyphs;
+}
+uint8_t __cdecl VersionInput() {
+  Require(version_glyphs>0,"version must draw before the retail cursor capture/present");
+  return 42;
+}
+void CheckRootVersion(const std::filesystem::path& game,const std::filesystem::path& output={}) {
+  auto page=std::make_unique<deathtrap::menu::Image>();
+  Require(Native50ReadPcx((game/L"ASYLUM"/L"MENU"/L"MAIN.PCX").wstring(),page.get()),"main menu background");
+  const auto original=page->pixels;
+  Require(Native50ReadHeadingFont(game.wstring(),&g_root_menu_version_font,0x1486u),"native version font");
+  const auto sprite=g_original_menu_sprite; const auto input=g_original_root_menu_input;
+  version_preview=page.get();g_original_menu_sprite=&VersionSprite;g_original_root_menu_input=&VersionInput;
+  Require(std::strcmp(kRootMenuBuildVersion,"native-50 v." DEATHTRAP_NATIVE_VERSION)==0,
+          "display version must follow the compiled patch version");
+  for (int frame=0;frame<4;++frame) {
+    page->pixels=original;version_glyphs=0;
+    if (g_dungeon_base) Require(HookRootMenuInput()==42,"version must preserve native menu actions");
+    else DrawRootMenuBuildVersion();
+    unsigned changed=0;
+    for (int y=0;y<480;++y) for (int x=0;x<640;++x) {
+      const size_t p=y*640+x;
+      if (page->pixels[p]!=original[p]) {
+        Require(y>=420 && y<448 && x>400,"main art and original 1.0 must remain byte-exact");++changed;
+      }
+    }
+    Require(changed>200 && version_glyphs>10,"label must remain visible on every pending page");
+  }
+  if (!output.empty()) {
+    std::ofstream file(output,std::ios::binary);file<<"P6\n640 480\n255\n";
+    for (uint8_t ink:page->pixels) file.write(reinterpret_cast<const char*>(page->palette[ink].data()),3);
+    Require(file.good(),"version preview output");
+  }
+  version_preview=nullptr;g_original_menu_sprite=sprite;g_original_root_menu_input=input;
+  g_root_menu_version_font.clear();g_root_menu_version_font_attempted=false;
+}
 void CheckOriginal(int argc, wchar_t** argv) {
   for (int i=1; i<argc; ++i) {
     Require(MH_Initialize() == MH_OK, "MinHook init");
@@ -598,6 +642,7 @@ void CheckOriginal(int argc, wchar_t** argv) {
       if (rgb[2]>rgb[0]+15 && rgb[2]>rgb[1]+10) ++blue;
     }
     Require(blue>400,"caption must contain large visible blue glyphs, not black page-font text");
+    CheckRootVersion(std::filesystem::path(argv[i]).parent_path());
     CheckNativeTransitions(std::filesystem::path(argv[i]).parent_path());
     std::cout << "Native 50 book/page: " << ActiveDungeonProfileName() << " passed\n";
     Require(MH_Uninitialize() == MH_OK, "test hooks teardown");
@@ -651,6 +696,7 @@ void WritePreview(const std::filesystem::path& game,const std::filesystem::path&
 }
 }
 int wmain(int argc, wchar_t** argv) {
+  if (argc==4 && std::wcscmp(argv[1],L"--version-preview")==0) { CheckRootVersion(argv[2],argv[3]);return 0; }
   if (argc==4 && std::wcscmp(argv[1],L"--death-preview")==0) {
     preview_recovery=true;WritePagePreview(argv[2],argv[3]);return 0;
   }
