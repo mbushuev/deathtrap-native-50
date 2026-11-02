@@ -1,8 +1,11 @@
 """Create a deterministic, allowlisted native installer resource from release staging."""
 import argparse
 import hashlib
+import os
 from pathlib import Path
 import struct
+import subprocess
+import tempfile
 
 FILES = {
     'payload/DINPUT.dll': 'DINPUT.dll',
@@ -29,6 +32,30 @@ PINNED = {
 }
 
 
+def compress(payload, directory):
+    # Use the Windows CAB codec: LZX compresses the complete verified payload,
+    # and the Win7-compatible FDI decoder needs no redistributed archive DLL.
+    if not 44 <= len(payload) <= 64 * 1024 * 1024:
+        raise ValueError('Invalid total installer payload size')
+    with tempfile.TemporaryDirectory(prefix='native50-cab-', dir=directory) as temporary:
+        root = Path(temporary)
+        raw = root / 'payload.bin'
+        raw.write_bytes(payload)
+        os.utime(raw, (946684800, 946684800))
+        makecab = Path(os.environ['SystemRoot']) / 'System32/makecab.exe'
+        result = subprocess.run([str(makecab), '/D', 'CompressionType=LZX', '/D',
+                                 'CompressionMemory=21', 'payload.bin', 'payload.cab'],
+                                cwd=root, capture_output=True)
+        if result.returncode:
+            raise RuntimeError('Windows CAB compression failed: ' +
+                               result.stdout.decode(errors='replace'))
+        cabinet = (root / 'payload.cab').read_bytes()
+        if cabinet[:4] != b'MSCF' or struct.unpack_from('<I', cabinet, 8)[0] != len(cabinet):
+            raise ValueError('Invalid compressed cabinet')
+    return (b'N50CAB01' + hashlib.sha256(cabinet).digest() +
+            struct.pack('<II', len(payload), len(cabinet)) + cabinet)
+
+
 def build(stage, output):
     manifest = {}
     for line in (stage / 'SHA256SUMS.txt').read_text(encoding='utf-8').splitlines():
@@ -52,8 +79,11 @@ def build(stage, output):
         name = destination.encode('ascii')
         body += struct.pack('<HI', len(name), len(data)) + bytes.fromhex(digest) + name + data
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(b'N50SET01' + hashlib.sha256(body).digest() + body)
-    print(f'Native installer payload: {len(FILES)} reviewed files, {len(body) + 40} bytes')
+    payload = b'N50SET01' + hashlib.sha256(body).digest() + body
+    packed = compress(payload, output.parent)
+    output.write_bytes(packed)
+    print(f'Native installer payload: {len(FILES)} reviewed files, '
+          f'{len(payload)} -> {len(packed)} bytes (LZX)')
 
 
 if __name__ == '__main__':

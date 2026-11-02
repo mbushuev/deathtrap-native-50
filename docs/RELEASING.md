@@ -60,6 +60,14 @@ git push origin "v$version"
 Do not reuse or move a published release tag. Increment `VERSION` for every
 new public build, including a rebuilt DLL.
 
+If the maintainer explicitly requests replacing only an installer in an
+existing release, retain the published tag, runtime ZIP and gameplay DLL.
+Commit the installer changes separately and link that exact source commit in
+the release notes. Build against the unchanged release ZIP staging directory,
+verify the installed files match, and replace only the EXE and its release
+checksum file. Record the installer revision in the notes; do not present it
+as a new gameplay build.
+
 ## GitHub Actions result
 
 Pushing the tag starts `.github/workflows/release.yml` on a Windows runner. It:

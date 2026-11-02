@@ -10,6 +10,18 @@ the patch, model reconstruction delta, tested Windows graphics wrappers,
 configuration, documentation and required licenses/source patches. No original
 game files, screenshots, posters or local development resources are included.
 
+The embedded files are LZX-compressed into one CAB. Windows' built-in
+[FDI decoder](https://learn.microsoft.com/en-us/windows/win32/api/fdi/nf-fdi-fdicopy)
+unpacks the data entirely in memory. The compressed CAB, original payload and
+individual files are SHA-256 checked before installation writes begin. Both
+compressed and expanded sizes are bounded; no external archive program runs
+on the user's machine. The raw file list and installed contents are unchanged.
+
+After a successful installation the window offers **Finish**, with Install
+hidden and further installation commands blocked. Errors or cancellation
+retain the option to retry. Run the EXE again to perform a later update or
+reinstallation.
+
 ## Installation behavior
 
 Select the installed directory containing `DD_CD.EXE`. Known Steam and GOG
@@ -52,11 +64,14 @@ An existing reviewed release staging directory can also be used:
 python scripts/test-native-installer.py artifacts/Deathtrap-Native-50-<version>-Setup.exe
 ```
 
-The build requires CMake, Python 3.10+ and Visual Studio 2022 C++/Windows SDK.
+The build requires CMake, Python 3.10+, the Windows-supplied `makecab.exe`, and
+Visual Studio 2022 C++/Windows SDK.
 It uses a separate CMake project without downloading dependencies. The native
 core test injects a failure/cancellation after file replacement has begun.
 Python tests run the actual EXE against disposable fixtures, check preservation
-and backup behavior, and corrupt its resource to verify rejection. The PE check
+and backup behavior, and corrupt compressed bytes, digests, size fields,
+CAB headers, file names and streams to verify rejection before game writes.
+The PE check
 rejects a CLR dependency, dynamic VC runtime, CodeView paths or a newer subsystem.
 
 For tests against five legitimate local editions, use

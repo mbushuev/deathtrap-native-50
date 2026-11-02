@@ -50,9 +50,21 @@ def pe_check(exe):
         start = offset(name_rva)
         imports.append(data[start:data.index(0, start)].decode('ascii').lower())
         cursor += 20
-    allowed = {'kernel32.dll', 'user32.dll', 'advapi32.dll', 'gdi32.dll', 'comctl32.dll', 'shell32.dll', 'ole32.dll'}
+    allowed = {'kernel32.dll', 'user32.dll', 'advapi32.dll', 'gdi32.dll', 'comctl32.dll', 'shell32.dll', 'ole32.dll', 'cabinet.dll'}
     check(set(imports) <= allowed, 'Unexpected installer runtime imports: ' + str(imports))
     print('PASS: native x86, Win7 subsystem, static runtime, no CLR/debug paths; imports:', ', '.join(imports))
+
+    root = offset(struct.unpack_from('<I', data, directories + 2 * 8)[0])
+    def entries(relative):
+        at = root + relative
+        named, ids = struct.unpack_from('<HH', data, at + 12)
+        return [struct.unpack_from('<II', data, at + 16 + i * 8) for i in range(named + ids)]
+    rcdata = next(child & 0x7fffffff for name, child in entries(0) if name == 10)
+    payload = next(child & 0x7fffffff for name, child in entries(rcdata) if name == 101)
+    languages = entries(payload)
+    check(len(languages) == 1 and not languages[0][1] & 0x80000000, 'Invalid payload resource languages')
+    rva, size = struct.unpack_from('<II', data, root + languages[0][1])
+    return offset(rva), size
 
 
 def snapshot(root):
@@ -82,7 +94,7 @@ def fixture(root):
 
 
 def main(exe):
-    pe_check(exe)
+    resource, resource_size = pe_check(exe)
     run(exe, '--verify-payload')
     with tempfile.TemporaryDirectory(prefix='native50-installer-test-') as directory:
         root = Path(directory)
@@ -138,15 +150,40 @@ def main(exe):
         check(len(list((game / 'back').iterdir())) == 2, 'Update overwrote previous rollback copy')
         check(not list(game.glob('.native50-setup-*')), 'Private staging left behind')
         print('PASS: missing/unknown/read-only/locked inputs, Unicode paths, update, backup, settings, saves, E3 payload and rendering config')
-        damaged = root / 'damaged-installer.exe'
-        data = bytearray(exe.read_bytes())
-        at = data.rindex(b'N50SET01')
-        check(struct.unpack_from('<I', data, at + 40)[0] == 18, 'Resource payload not located')
-        # A byte inside the resource digest, away from executable code.
-        data[at + 10] ^= 1
-        damaged.write_bytes(data)
-        run(damaged, '--verify-payload', success=False)
-        print('PASS: damaged embedded payload rejected')
+        original = exe.read_bytes()
+        packed = original[resource:resource + resource_size]
+        check(packed[:8] == b'N50CAB01', 'Expected compressed payload')
+        raw_size, cab_size = struct.unpack_from('<II', packed, 40)
+        check(cab_size == resource_size - 48 and packed[48:52] == b'MSCF', 'Invalid compressed resource')
+        check(hashlib.sha256(packed[48:]).digest() == packed[8:40], 'Compressed payload hash mismatch')
+        check(cab_size < raw_size * 0.6, 'Release installer payload is not effectively compressed')
+        before = snapshot(game)
+        for case in ('digest', 'compressed-data', 'oversized', 'wrong-length', 'compressed-length', 'cabinet-header', 'cabinet-file', 'cabinet-stream'):
+            data = bytearray(original)
+            if case == 'digest': data[resource + 10] ^= 1
+            elif case == 'compressed-data': data[resource + resource_size - 20] ^= 1
+            elif case == 'oversized': struct.pack_into('<I', data, resource + 40, 0xffffffff)
+            elif case == 'wrong-length': struct.pack_into('<I', data, resource + 40, raw_size + 1)
+            elif case == 'compressed-length': struct.pack_into('<I', data, resource + 44, cab_size + 1)
+            else:
+                # Rehash the changed CAB too, so the Windows decoder and its
+                # memory/output bounds are tested beyond the outer digest.
+                cabinet = resource + 48
+                if case == 'cabinet-header': data[cabinet] ^= 1
+                elif case == 'cabinet-stream':
+                    first_block = struct.unpack_from('<I', data, cabinet + 36)[0]
+                    struct.pack_into('<H', data, cabinet + first_block + 4, 0xffff)
+                else:
+                    file_table = struct.unpack_from('<I', data, cabinet + 16)[0]
+                    data[cabinet + file_table + 16] = ord('x')
+                data[resource + 8:resource + 40] = hashlib.sha256(data[resource + 48:resource + resource_size]).digest()
+            damaged = root / ('damaged-' + case + '.exe')
+            damaged.write_bytes(data)
+            run(damaged, '--verify-payload', success=False)
+            run(damaged, '--install', '--accept-unknown', '--game-dir', game, success=False)
+            check(snapshot(game) == before, 'Damaged payload changed game files: ' + case)
+            damaged.unlink()
+        print('PASS: compressed payload hash, size bounds, invalid cabinet/header/name/stream rejected before game writes')
 
 
 if __name__ == '__main__':

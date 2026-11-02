@@ -15,7 +15,7 @@ struct App {
        browse = nullptr, keep = nullptr, notice = nullptr, bar = nullptr, status = nullptr,
        detail = nullptr, install = nullptr, close = nullptr;
   HFONT font = nullptr, titleFont = nullptr; int dpi = 96;
-  HANDLE worker = nullptr; std::atomic<bool> cancel{false}; bool busy = false;
+  HANDLE worker = nullptr; std::atomic<bool> cancel{false}; bool busy = false, completed = false;
   setup::Inspection game; bool keepSettings = true;
   ~App() { if (worker) CloseHandle(worker); if (font) DeleteObject(font); if (titleFont) DeleteObject(titleFont); }
 };
@@ -50,8 +50,8 @@ void Layout(App& a) {
 }
 void Busy(App& a, bool value) {
   a.busy = value;
-  for (HWND h : {a.path, a.browse, a.keep, a.install}) EnableWindow(h, !value);
-  SetWindowTextW(a.close, value ? L"Cancel" : L"Close");
+  for (HWND h : {a.path, a.browse, a.keep, a.install}) EnableWindow(h, !value && !a.completed);
+  SetWindowTextW(a.close, value ? L"Cancel" : a.completed ? L"Finish" : L"Close");
   EnableWindow(a.close, TRUE);
 }
 DWORD WINAPI Worker(void* context) {
@@ -100,11 +100,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM w, LPARAM l) {
       limits->ptMinTrackSize.y = MulDiv(520, a->dpi, 96); return 0;
     }
     case WM_COMMAND: {
-      if (LOWORD(w) == browseId) {
+      if (LOWORD(w) == browseId && !a->busy && !a->completed) {
         BROWSEINFOW info{}; info.hwndOwner = window; info.lpszTitle = L"Select the Deathtrap Dungeon folder containing DD_CD.EXE";
         info.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE; auto selected = SHBrowseForFolderW(&info);
         if (selected) { wchar_t path[MAX_PATH]; if (SHGetPathFromIDListW(selected, path)) SetWindowTextW(a->path, path); CoTaskMemFree(selected); }
-      } else if (LOWORD(w) == installId && !a->busy) {
+      } else if (LOWORD(w) == installId && !a->busy && !a->completed) {
         try {
           a->game = setup::Inspect(WindowText(a->path));
           if (!a->game.known && MessageBoxW(window,
@@ -123,13 +123,23 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM w, LPARAM l) {
       SendMessageW(a->bar, PBM_SETPOS, w, 0); SetWindowTextW(a->status, text->c_str()); return 0;
     }
     case finishedMessage: {
-      std::unique_ptr<Result> result(reinterpret_cast<Result*>(l)); Busy(*a, false);
+      std::unique_ptr<Result> result(reinterpret_cast<Result*>(l));
+      a->completed = result->success;
+      Busy(*a, false);
       if (a->worker) { CloseHandle(a->worker); a->worker = nullptr; }
       SetWindowTextW(a->status, result->success ? L"Installation complete." : L"Installation stopped.");
       SetWindowTextW(a->detail, result->message.c_str());
+      if (a->completed) {
+        SetWindowTextW(a->intro, L"The patch is installed. Choose Finish, then start the game normally.");
+        ShowWindow(a->install, SW_HIDE);
+        SendMessageW(a->install, BM_SETSTYLE, BS_PUSHBUTTON, TRUE);
+        SendMessageW(a->close, BM_SETSTYLE, BS_DEFPUSHBUTTON, TRUE);
+        SetFocus(a->close);
+      }
       if (!result->success && !a->cancel.load()) MessageBoxW(window, result->message.c_str(), L"Installation stopped", MB_OK | MB_ICONERROR);
       return 0;
     }
+    case DM_GETDEFID: return MAKELRESULT(a->completed ? closeId : installId, DC_HASDEFID);
     case WM_CLOSE:
       if (a->busy) { a->cancel.store(true); EnableWindow(a->close, FALSE); SetWindowTextW(a->status, L"Cancelling and restoring previous files..."); return 0; }
       DestroyWindow(window); return 0;

@@ -1,4 +1,5 @@
 #include "core.h"
+#include "cabinet.h"
 #include <wincrypt.h>
 #include <algorithm>
 #include <map>
@@ -185,8 +186,10 @@ std::string Utf8(const std::wstring& text) {
 std::vector<File> Payload() {
   HMODULE module = GetModuleHandleW(nullptr); HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(101), RT_RCDATA);
   if (!resource) Fail(L"Installer payload is missing.");
-  const auto* bytes = static_cast<const unsigned char*>(LockResource(LoadResource(module, resource)));
-  size_t size = SizeofResource(module, resource);
+  const auto* packed = static_cast<const unsigned char*>(LockResource(LoadResource(module, resource)));
+  const auto unpacked = UnpackPayloadResource(packed, SizeofResource(module, resource));
+  const auto* bytes = unpacked.data();
+  const size_t size = unpacked.size();
   if (!bytes || size < 44 || std::string(reinterpret_cast<const char*>(bytes), 8) != "N50SET01") Fail(L"Invalid installer payload.");
   const auto digest = Hash(bytes + 40, size - 40); const char* hex = "0123456789abcdef"; std::string expected;
   for (size_t i = 8; i < 40; ++i) { expected += hex[bytes[i] >> 4]; expected += hex[bytes[i] & 15]; }

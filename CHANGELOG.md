@@ -10,6 +10,16 @@ Thanks to the community members who helped test public builds:
 
 ## 0.0.237 — Standalone Windows installer and menu version
 
+Installer-only update to the existing 0.0.237 release; the runtime ZIP and
+gameplay DLL are unchanged.
+
+- Finish the Windows installer with a single **Finish** action after success,
+  instead of re-enabling Install. Keep retry available after an error or
+  cancellation, and block repeat installation commands on the completed screen.
+- Compress the standalone Windows installer's embedded files with LZX.
+  Decode them in memory through Windows Cabinet APIs, preserving SHA-256
+  verification and the exact installed files without an external archive tool.
+
 Changes since 0.0.236. This release also includes all changes from 0.0.235 and
 0.0.236, detailed in the sections below.
 
