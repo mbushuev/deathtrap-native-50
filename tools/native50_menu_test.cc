@@ -56,8 +56,8 @@ void CheckNavigation() {
   for (int y = kBook.y; y < kBook.y + kBook.height; ++y) {
     for (int x = kBook.x; x < kBook.x + kBook.width; ++x) {
       Require(!Rect{46,128,196,98}.Contains(x,y) && !Rect{246,98,118,174}.Contains(x,y) &&
-                  !Rect{77,232,133,87}.Contains(x,y) && !Rect{375,129,265,297}.Contains(x,y),
-              "book must not overlap a native item hitbox");
+                  !Rect{77,232,133,87}.Contains(x,y),
+              "book must not overlap Keyboard, Sounds or Graphics hitboxes");
     }
   }
   Require(RowAt(100,180) == -1 && RowAt(400,kRowTop-1) == -1 &&
@@ -65,8 +65,14 @@ void CheckNavigation() {
               RowAt(400,kRowTop+kRowHeight) == 1 && RowAt(400,kRowTop+2*kRowHeight) == 2 &&
               RowAt(400,kRowTop+3*kRowHeight) == 3,
           "page row bounds");
-  Require(kBookLabel.y>=kBook.y+kBook.height+4,
-          "caption must be below the whole animation, with a visible gap");
+  Require(kBookLabel.y>=kBook.y+kBook.height+4 &&
+              std::abs(kBookLabel.x+kBookLabel.width/2-kBook.x-kBook.width/2)<=1,
+          "hover caption must remain centered below the full animation, with a visible gap");
+  Require(kBook.y+kBook.height<=kHeight && kBookLabel.y+kBookLabel.height<=kHeight &&
+              !kBack.Intersects(kBook) && !kBack.Intersects(kBookLabel),
+          "book and label must stay on screen and clear of Back");
+  Require(kBook.width==124 && kBook.height==134,
+          "the book must retain the original authored size without resampling");
   for (const auto caption : kNativeItemCaptions) {
     Require(!kBook.Intersects(caption) && !kBookLabel.Intersects(caption),
             "neither artwork nor its opaque erase rectangle may touch a native item caption");
@@ -257,6 +263,62 @@ void __cdecl FrameSprite(const void* input,int width,int height,int x,int y) {
     const uint8_t ink=source[row*width+col];
     if (ink) (*frame_pages[frame_page])[(y+row)*640+x+col]=ink;
   }
+}
+// Read the widths from each edition's actual hover blits. In French the
+// Graphics push is 184, not the 136 used by English/German/Italian. Guessing
+// from an English rectangle hid this collision in the old preview and tests.
+std::array<deathtrap::menu::Rect,4> RetailSetupCaptions(const std::filesystem::path& game) {
+  HMODULE module=LoadLibraryExW((game/L"Dungeon.dll").c_str(),nullptr,DONT_RESOLVE_DLL_REFERENCES);
+  Require(module!=nullptr,"retail caption layout mapping");
+  const auto variant=IdentifyDungeonImage(reinterpret_cast<uint8_t*>(module));
+  Require(variant!=DungeonImageVariant::kUnsupported,"known retail caption layout");
+  const size_t shift=variant==DungeonImageVariant::kGermanGog ? 0x30 : 0;
+  constexpr std::array<size_t,4> pushes{{0x14CDA,0x14D09,0x14D32,0x14D5E}};
+  auto rects=deathtrap::menu::kNativeItemCaptions;
+  for (size_t i=0;i<rects.size();++i) {
+    const auto* p=reinterpret_cast<const uint8_t*>(module)+pushes[i]+shift;
+    Require(p[0]==0x68 || p[0]==0x6A,"retail caption width instruction");
+    uint32_t width=p[1];
+    if (p[0]==0x68) std::memcpy(&width,p+1,4);
+    Require(width>0 && width<=static_cast<unsigned>(rects[i].width),
+            "protected caption region must cover the actual localized width");
+    rects[i].width=static_cast<int>(width);
+  }
+  FreeLibrary(module);return rects;
+}
+constexpr std::array<int,4> kRetailCaptionSourceY{{136,232,184,280}};
+void CheckCaptionIsolation(const std::filesystem::path& game,Native50MenuAssets* assets) {
+  auto atlas=std::make_unique<deathtrap::menu::Image>();
+  Require(Native50ReadPcx((game/L"ASYLUM"/L"MENU"/L"KEYS2.PCX").wstring(),atlas.get()),
+          "genuine localized hover caption atlas");
+  const auto rects=RetailSetupCaptions(game);
+  const auto previous_api=g_native50_menu_api;
+  auto* previous_assets=g_native50_menu_assets;
+  g_native50_menu_assets=assets;g_native50_menu_api.copy=&FrameCopy;
+  for (size_t c=0;c<rects.size();++c) {
+    const auto r=rects[c];
+    Require(!r.Intersects(deathtrap::menu::kBook) && !r.Intersects(deathtrap::menu::kBookLabel),
+            "complete localized caption must not intersect book or label restoration");
+    auto expected=std::make_unique<deathtrap::menu::Canvas>(assets->table.pixels);
+    for (int y=0;y<r.height;++y) for (int x=0;x<r.width;++x)
+      (*expected)[(r.y+y)*640+r.x+x]=atlas->pixels[(kRetailCaptionSourceY[c]+y)*640+x];
+    for (auto& page:frame_pages) page=std::make_unique<deathtrap::menu::Canvas>(*expected);
+    for (bool hovered:{true,false}) for (unsigned f=0;f<deathtrap::menu::kBookFrames;++f) {
+      for (frame_page=0;frame_page<2;++frame_page) {
+        g_native50_book_hovered=hovered;g_native50_book_animation={};
+        g_native50_book_animation.frame=f;DrawNative50Book();
+        const auto& displayed=*frame_pages[frame_page];
+        for (int y=0;y<480;++y) for (int x=0;x<640;++x) {
+          if (deathtrap::menu::kBook.Contains(x,y) || deathtrap::menu::kBookLabel.Contains(x,y)) continue;
+          Require(displayed[y*640+x]==(*expected)[y*640+x],
+                  "every native caption and all other retail pixels must remain byte-exact on both pages");
+        }
+      }
+    }
+  }
+  g_native50_menu_api=previous_api;g_native50_menu_assets=previous_assets;
+  g_native50_book_hovered=false;g_native50_book_animation={};
+  frame_page=0;frame_pages[0].reset();frame_pages[1].reset();
 }
 void CheckNativeTransitions(const std::filesystem::path& game) {
   // Use the ORIGINAL path builder and its real initialized menu prefix. A
@@ -543,14 +605,33 @@ void CheckRootVersion(const std::filesystem::path& game,const std::filesystem::p
   auto page=std::make_unique<deathtrap::menu::Image>();
   Require(Native50ReadPcx((game/L"ASYLUM"/L"MENU"/L"MAIN.PCX").wstring(),page.get()),"main menu background");
   const auto original=page->pixels;
-  Require(Native50ReadHeadingFont(game.wstring(),&g_root_menu_version_font,0x1486u),"native version font");
+  Require(LoadRootMenuVersionFont(game.wstring(),&g_root_menu_version_font),"native blue version font");
+  std::vector<uint8_t> untinted;
+  Require(Native50ReadHeadingFont(game.wstring(),&untinted,0x1486u),"original version glyphs");
+  const size_t metadata=8+reinterpret_cast<const deathtrap::text::RetailFontHeader*>(untinted.data())->glyph_count*8;
+  Require(untinted.size()==g_root_menu_version_font.size() &&
+              std::memcmp(untinted.data(),g_root_menu_version_font.data(),metadata)==0,
+          "version recoloring must preserve all original glyph shapes and metrics");
+  std::array<bool,256> native_blue{};
+  for (int y=96;y<480;++y) for (int x=0;x<640;++x) {
+    const uint8_t ink=page->pixels[y*640+x];const auto rgb=page->palette[ink];
+    if (rgb[2]>rgb[0]+20 && rgb[2]>rgb[1]+10) native_blue[ink]=true;
+  }
+  for (size_t p=metadata;p<untinted.size();++p) {
+    Require(bool(untinted[p])==bool(g_root_menu_version_font[p]),"version glyph coverage must not change");
+    if (untinted[p]) Require(native_blue[g_root_menu_version_font[p]],
+                            "version ink must come from original blue menu lettering, not pale helper text");
+  }
   const auto sprite=g_original_menu_sprite; const auto input=g_original_root_menu_input;
+  const auto quit_input=g_original_root_menu_quit_input;
   version_preview=page.get();g_original_menu_sprite=&VersionSprite;g_original_root_menu_input=&VersionInput;
+  g_original_root_menu_quit_input=&VersionInput;
   Require(std::strcmp(kRootMenuBuildVersion,"native-50 v." DEATHTRAP_NATIVE_VERSION)==0,
           "display version must follow the compiled patch version");
-  for (int frame=0;frame<4;++frame) {
+  for (bool quitting:{false,true}) for (int frame=0;frame<4;++frame) {
     page->pixels=original;version_glyphs=0;
-    if (g_dungeon_base) Require(HookRootMenuInput()==42,"version must preserve native menu actions");
+    if (quitting) Require(HookRootMenuQuitInput()==42,"version must preserve Quit confirmation actions");
+    else if (g_dungeon_base) Require(HookRootMenuInput()==42,"version must preserve native menu actions");
     else DrawRootMenuBuildVersion();
     unsigned changed=0;
     for (int y=0;y<480;++y) for (int x=0;x<640;++x) {
@@ -567,6 +648,47 @@ void CheckRootVersion(const std::filesystem::path& game,const std::filesystem::p
     Require(file.good(),"version preview output");
   }
   version_preview=nullptr;g_original_menu_sprite=sprite;g_original_root_menu_input=input;
+  g_original_root_menu_quit_input=quit_input;
+  g_root_menu_version_font.clear();g_root_menu_version_font_attempted=false;
+}
+uint32_t quit_test_key=0;
+int __cdecl QuitTestKey(uint32_t key) { return key==quit_test_key; }
+void CheckQuitVersionPresentation(const std::filesystem::path& game) {
+  // Execute the real localized Quit input, including native cursor capture,
+  // both Flip pages and saved-background restoration. Only device/blit/clock
+  // boundaries are replaced; the actual hook installed above must draw first.
+  auto background=std::make_unique<deathtrap::menu::Image>();
+  Require(Native50ReadPcx((game/L"ASYLUM"/L"MENU"/L"QUIT.PCX").wstring(),background.get()),
+          "original Quit confirmation background");
+  Require(LoadRootMenuVersionFont(game.wstring(),&g_root_menu_version_font),"Quit version glyphs");
+  const auto sprite=g_original_menu_sprite;
+  g_original_menu_sprite=&VersionSprite;version_preview=background.get();DrawRootMenuBuildVersion();
+  version_preview=nullptr;g_original_menu_sprite=&FrameSprite;
+  auto unlabelled=std::make_unique<deathtrap::menu::Image>();
+  Require(Native50ReadPcx((game/L"ASYLUM"/L"MENU"/L"QUIT.PCX").wstring(),unlabelled.get()),"clean Quit page");
+  for (auto& page:frame_pages) page=std::make_unique<deathtrap::menu::Canvas>(unlabelled->pixels);
+  std::vector<uint8_t> cursor(84*84),saved(84*84);
+  const uintptr_t cp=reinterpret_cast<uintptr_t>(cursor.data()),sp=reinterpret_cast<uintptr_t>(saved.data());
+  for (size_t f=0;f<16;++f)
+    Require(SafeWrite(g_dungeon_base+kMenuCursorFramesRva+f*4,&cp,4),"Quit cursor fixture");
+  Require(SafeWrite(g_dungeon_base+kMenuCursorFramesRva-0x44,&sp,4),"Quit saved cursor fixture");
+  PatchJump(0x69890u,reinterpret_cast<const void*>(&QuitTestKey));
+  // The cursor's saved rectangle deliberately overlaps the added version.
+  mouse_x=500;mouse_y=396;buttons=0;quit_test_key=0;frame_page=frame_flips=0;
+  const auto input=reinterpret_cast<RootMenuInputFn>(g_dungeon_base+kRootMenuQuitInputRva);
+  for (unsigned frame=0;frame<6;++frame) {
+    Require(input()==0,"idle Quit confirmation must remain open");
+    Require(*frame_pages[frame_page^1]==background->pixels,
+            "version must survive every presented Quit frame and cursor restoration on both pages");
+  }
+  const auto localized_key=[&](uintptr_t english_rva) {
+    const auto* p=g_dungeon_base+ActiveDungeonCodeRva(english_rva);
+    Require(p[0]==0x68,"localized Quit accelerator instruction");
+    uint32_t key=0;std::memcpy(&key,p+1,4);return key;
+  };
+  quit_test_key=localized_key(0x1A6FFu);Require(input()==2,"No must keep its original action");
+  quit_test_key=localized_key(0x1A6ECu);Require(input()==1,"Yes must keep its original action");
+  quit_test_key=0;g_original_menu_sprite=sprite;frame_pages[0].reset();frame_pages[1].reset();
   g_root_menu_version_font.clear();g_root_menu_version_font_attempted=false;
 }
 void CheckOriginal(int argc, wchar_t** argv) {
@@ -642,8 +764,10 @@ void CheckOriginal(int argc, wchar_t** argv) {
       if (rgb[2]>rgb[0]+15 && rgb[2]>rgb[1]+10) ++blue;
     }
     Require(blue>400,"caption must contain large visible blue glyphs, not black page-font text");
+    CheckCaptionIsolation(std::filesystem::path(argv[i]).parent_path(),assets.get());
     CheckRootVersion(std::filesystem::path(argv[i]).parent_path());
     CheckNativeTransitions(std::filesystem::path(argv[i]).parent_path());
+    CheckQuitVersionPresentation(std::filesystem::path(argv[i]).parent_path());
     std::cout << "Native 50 book/page: " << ActiveDungeonProfileName() << " passed\n";
     Require(MH_Uninitialize() == MH_OK, "test hooks teardown");
     FreeLibrary(module); g_dungeon_base = nullptr;
@@ -658,11 +782,11 @@ void WritePreview(const std::filesystem::path& game,const std::filesystem::path&
   auto atlas=std::make_unique<deathtrap::menu::Image>();
   Require(Native50ReadPcx((game/L"ASYLUM"/L"MENU"/L"KEYS2.PCX").wstring(),atlas.get()),
           "preview must include genuine native captions");
-  constexpr std::array<int,4> source_y{{136,232,184,280}};
-  for (size_t c=0;c<deathtrap::menu::kNativeItemCaptions.size();++c) {
-    const auto rect=deathtrap::menu::kNativeItemCaptions[c];
+  const auto captions=RetailSetupCaptions(game);
+  for (size_t c=0;c<captions.size();++c) {
+    const auto rect=captions[c];
     for (int y=0;y<rect.height;++y) for (int x=0;x<rect.width;++x) {
-      assets->table.pixels[(rect.y+y)*640+rect.x+x]=atlas->pixels[(source_y[c]+y)*640+x];
+      assets->table.pixels[(rect.y+y)*640+rect.x+x]=atlas->pixels[(kRetailCaptionSourceY[c]+y)*640+x];
     }
   }
   const HRSRC resource=FindResourceW(nullptr,MAKEINTRESOURCEW(501),RT_RCDATA);

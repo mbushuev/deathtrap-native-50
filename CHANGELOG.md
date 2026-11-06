@@ -8,6 +8,17 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.238 — Menu fixes
+
+- Match the patch-version label to the original menu's blue 1.0 lettering and
+  retain it while the Quit confirmation is open, including cursor restoration
+  and both display pages.
+
+- Reposition the Native 50 settings book beside the wider French **Graphismes**
+  caption, retaining the original book size and its hover label underneath, so
+  animation and background restoration cannot cover original menu captions. Check
+  all supported Steam/GOG languages against their actual retail menu artwork.
+
 ## 0.0.237 — Standalone Windows installer and menu version
 
 Installer-only update to the existing 0.0.237 release; the runtime ZIP and

@@ -5,6 +5,7 @@ using NativeMenuCopyFn = void(__cdecl*)(const void*, void*, int, int, int, int, 
 using NativeMenuDimensionsFn = void(__cdecl*)(int, int, int, int);
 constexpr DungeonCodeRva kSetupMenuRva{0x147F0u};
 constexpr DungeonCodeRva kSetupInputRva{0x18E10u};
+constexpr DungeonCodeRva kRootMenuQuitInputRva{0x1A600u};
 constexpr DungeonCodeRva kMenuSpriteRva{0x2F20u};
 constexpr DungeonCodeRva kMenuCopyRva{0x9B630u};
 constexpr DungeonCodeRva kMenuDimensionsRva{0x9B590u};
@@ -26,6 +27,7 @@ struct Native50MenuAssets {
 Native50MenuAssets* g_native50_menu_assets = nullptr;
 KeyboardBindingMenuFn g_original_setup_menu = nullptr;
 KeyboardBindingInputFn g_original_setup_input = nullptr;
+RootMenuInputFn g_original_root_menu_quit_input = nullptr;
 NativeMenuSpriteFn g_original_menu_sprite = nullptr;
 bool g_native50_menu_hooks_installed = false;
 bool g_native50_setup_active = false, g_native50_setup_input = false;
@@ -75,12 +77,22 @@ bool Native50ReadHeadingFont(const std::wstring& game, std::vector<uint8_t>* byt
   return ok;
 }
 
+bool Native50ReadPcx(const std::wstring& path, deathtrap::menu::Image* image);
+bool LoadRootMenuVersionFont(const std::wstring& game,std::vector<uint8_t>* font) {
+  auto main=std::make_unique<deathtrap::menu::Image>();
+  if (!Native50ReadHeadingFont(game,font,0x1486u) ||
+      !Native50ReadPcx(game+L"\\ASYLUM\\MENU\\MAIN.PCX",main.get()) ||
+      !deathtrap::menu::TintVersionFont(font,*main)) {
+    font->clear();return false;
+  }
+  return true;
+}
+
 void DrawRootMenuBuildVersion() {
   if (!g_original_menu_sprite) return;
   if (!g_root_menu_version_font_attempted && g_root_menu_version_font.empty()) {
     g_root_menu_version_font_attempted = true;
-    // Native pale-blue menu glyphs, not the parchment's brown helper font.
-    Native50ReadHeadingFont(ModuleDirectory(), &g_root_menu_version_font, 0x1486u);
+    LoadRootMenuVersionFont(ModuleDirectory(), &g_root_menu_version_font);
   }
   const auto& font = g_root_menu_version_font;
   if (font.size() < sizeof(deathtrap::text::RetailFontHeader)) return;
@@ -112,6 +124,14 @@ void DrawRootMenuBuildVersion() {
     }
     x += glyph.advance_x;
   }
+}
+
+uint8_t __cdecl HookRootMenuQuitInput() {
+  if (!g_original_root_menu_quit_input) return 0;
+  // The confirmation owns a separate capture -> cursor -> Flip -> restore
+  // loop, so the root-menu input hook does not run while it is on screen.
+  DrawRootMenuBuildVersion();
+  return g_original_root_menu_quit_input();
 }
 
 bool Native50ReadPcx(const std::wstring& path, deathtrap::menu::Image* image) {
@@ -437,22 +457,26 @@ bool InstallNative50MenuHooks() {
   if (g_native50_menu_hooks_installed) return true;
   constexpr std::array<uint8_t, 5> setup = {0x83, 0xEC, 0x04, 0x33, 0xC0};
   constexpr std::array<uint8_t, 6> input = {0x83, 0xEC, 0x08, 0x53, 0x6A, 0x02};
+  constexpr std::array<uint8_t, 7> quit_input = {0x83,0xEC,0x08,0x8D,0x44,0x24,0x02};
   constexpr std::array<uint8_t, 6> sprite = {0x56, 0x57, 0x8B, 0x7C, 0x24, 0x14};
   constexpr std::array<uint8_t, 6> background = {0x8B,0x44,0x24,0x04,0x81,0xEC};
   if (!g_dungeon_base || !MatchesDungeonCode(kSetupMenuRva, setup) ||
       !MatchesDungeonCode(kSetupInputRva, input) || !MatchesDungeonCode(kMenuSpriteRva, sprite) ||
+      !MatchesDungeonCode(kRootMenuQuitInputRva,quit_input) ||
       !MatchesDungeonCode(kMenuBackgroundRva,background)) {
     AppendDeathtrapSupportLog("support_native50_menu state=signature_mismatch fallback=native");
     return false;
   }
   struct Hook { void* target; void* detour; void** original; bool made = false, enabled = false; };
-  std::array<Hook, 3> hooks = {{
+  std::array<Hook, 4> hooks = {{
     {g_dungeon_base + kSetupMenuRva, reinterpret_cast<void*>(&HookNative50SetupMenu),
       reinterpret_cast<void**>(&g_original_setup_menu)},
     {g_dungeon_base + kSetupInputRva, reinterpret_cast<void*>(&HookNative50SetupInput),
       reinterpret_cast<void**>(&g_original_setup_input)},
     {g_dungeon_base + kMenuSpriteRva, reinterpret_cast<void*>(&HookNative50MenuSprite),
-      reinterpret_cast<void**>(&g_original_menu_sprite)}}};
+      reinterpret_cast<void**>(&g_original_menu_sprite)},
+    {g_dungeon_base + kRootMenuQuitInputRva, reinterpret_cast<void*>(&HookRootMenuQuitInput),
+      reinterpret_cast<void**>(&g_original_root_menu_quit_input)}}};
   const auto rollback = [&]() {
     for (auto& hook : hooks) {
       if (hook.enabled) MH_DisableHook(hook.target);

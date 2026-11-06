@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current version: **0.0.237**
+Current version: **0.0.238**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -9,7 +9,7 @@ Current version: **0.0.237**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.237-halloween.png" alt="Deathtrap Native 50 v0.0.237 — Halloween release" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.238.png" alt="Deathtrap Native 50 v0.0.238" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -214,7 +214,7 @@ requires its configuration and additional native bindings in
 
 ## Installation
 
-Download `Deathtrap-Native-50-0.0.237-Setup.exe` for Windows. Close the game,
+Download `Deathtrap-Native-50-0.0.238-Setup.exe` for Windows. Close the game,
 run the installer, select the folder containing `DD_CD.EXE`, and
 choose **Install**. The EXE contains the complete Windows patch, preserves
 current Native 50 preferences by default, and creates a rollback copy before

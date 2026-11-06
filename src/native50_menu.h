@@ -27,12 +27,17 @@ struct Rect {
            y<other.y+other.height && y+height>other.y;
   }
 };
-// Reserve actual DRAWN captions too, not only native object click regions.
-// Opaque page restoration must never erase Sounds/Graphics while hovering.
+// Reserve the full retail blit rectangles, including French Graphismes (184
+// pixels wide). These are larger than both the English text and the hitboxes.
+// Opaque page restoration must never erase a localized caption.
 constexpr std::array<Rect,4> kNativeItemCaptions{{
-    {16,208,144,40},{264,256,96,40},{112,312,136,40},{456,288,152,40}}};
-constexpr Rect kBook{250,300,124,134};
-constexpr Rect kBookLabel{235,440,155,34};
+    {16,208,144,40},{264,256,96,40},{112,312,184,40},{456,288,152,40}}};
+// Keep the original artwork size and the label below it. The book starts to
+// the right of the full French caption, including its background restoration.
+// The retail Hardware hitbox includes this empty tabletop margin; the book
+// owns clicks within its own bounds through ResolveSetupAction below.
+constexpr Rect kBook{298,306,124,134};
+constexpr Rect kBookLabel{283,444,155,34};
 constexpr size_t kBookFrames = 16;
 constexpr Rect kBack{520, 426, 120, 54};
 constexpr int kPageRows = static_cast<int>(settings::ControlRow::kCount);
@@ -120,6 +125,44 @@ inline bool TintSecondaryFont(std::vector<uint8_t>* font, const Palette& palette
       // changes. Built-in 0x2490 is olive under this scroll's palette.
       (*font)[p]=(static_cast<unsigned>(color[0])+color[1]+color[2]>96) ? ink : outline;
     }
+  }
+  return true;
+}
+inline bool TintVersionFont(std::vector<uint8_t>* font,const Image& main) {
+  if (!font || font->size()<8) return false;
+  text::RetailFontHeader header{};
+  std::memcpy(&header,font->data(),sizeof(header));
+  if (header.signature!=text::kRetailFontSignature || !header.glyph_count ||
+      header.glyph_count>text::kMaximumFontGlyphs || 8+header.glyph_count*8>font->size()) return false;
+  const auto* glyphs=reinterpret_cast<const text::RetailFontGlyph*>(font->data()+8);
+  for (size_t c=0;c<header.glyph_count;++c) {
+    const auto& glyph=glyphs[c];
+    if (static_cast<size_t>(glyph.pixels)+glyph.width*glyph.height>font->size() ||
+        (glyph.width && glyph.height && glyph.pixels<8+header.glyph_count*8)) return false;
+  }
+  // Sample the dominant blue from the retail 1.0 label, in this edition's own
+  // palette. Its original pixels, glyph metrics and transparency stay intact.
+  std::array<unsigned,256> counts{};
+  for (int y=440;y<480;++y) for (int x=580;x<640;++x) {
+    const uint8_t ink=main.pixels[y*kWidth+x];
+    const auto& rgb=main.palette[ink];
+    if (rgb[2]>rgb[0]+20 && rgb[2]>rgb[1]+10) ++counts[ink];
+  }
+  // The localized GOG backgrounds omit the baked 1.0. Use their original
+  // menu lettering instead, so the version remains available in every language.
+  if (*std::max_element(counts.begin(),counts.end())==0) {
+    for (int y=96;y<440;++y) for (int x=0;x<kWidth;++x) {
+      const uint8_t ink=main.pixels[y*kWidth+x];const auto& rgb=main.palette[ink];
+      if (rgb[2]>rgb[0]+20 && rgb[2]>rgb[1]+10) ++counts[ink];
+    }
+  }
+  const auto best=std::max_element(counts.begin(),counts.end());
+  if (!*best) return false;
+  const auto ink=static_cast<uint8_t>(best-counts.begin());
+  for (size_t c=0;c<header.glyph_count;++c) {
+    const auto& glyph=glyphs[c];
+    for (size_t p=glyph.pixels;p<static_cast<size_t>(glyph.pixels)+glyph.width*glyph.height;++p)
+      if ((*font)[p]) (*font)[p]=ink;
   }
   return true;
 }
