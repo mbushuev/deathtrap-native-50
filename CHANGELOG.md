@@ -8,6 +8,14 @@ Thanks to the community members who helped test public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.239 — Skeleton deaths
+
+- With **Keep bodies** enabled, regular skeletons and skeleton archers fall
+  at the end of their death animation and remain on the ground. Loot drops
+  and enemy cleanup follow the original game timing.
+- Ghosts and skeleton champions complete their original death sequences.
+  The patch also skips body retention when the death animation is missing.
+
 ## 0.0.238 — Menu fixes
 
 - Match the patch-version label to the original menu's blue 1.0 lettering and

@@ -21,7 +21,7 @@ struct Actor {
   std::array<uint8_t,0x60> definition{},registration{};
   std::array<uint8_t,0xC0> metadata{};
   std::array<uint8_t,16> options{};
-  std::array<uintptr_t,2> owner{};
+  std::array<uintptr_t,1+kSkeletonFallBones> owner{};
   uintptr_t address() { return reinterpret_cast<uintptr_t>(actor.data()); }
   uintptr_t node() { return reinterpret_cast<uintptr_t>(root.data()); }
   uintptr_t child() { return reinterpret_cast<uintptr_t>(mesh.data()); }
@@ -40,6 +40,7 @@ struct Actor {
     Put(reinterpret_cast<uintptr_t>(options.data()),4,flags);
     Put(node(),0x6C,int16_t{2});Put(node(),0x30,child());Put(child(),0x2C,node());
     Put(child(),0x30,extra());Put(extra(),0x2C,child());
+    Put(node(),0x50,uint32_t{3216}); // Retail Ratman death animation.
     Put(node(),0x58,uint16_t{12});Put(child(),0x3C,uintptr_t{0x123});
     Put(node(),0x100,node()+0x180);Put(child(),0x100,node()+0x180);
     Put(extra(),0x3C,uintptr_t{0x124});Put(extra(),0x100,node()+0x180);
@@ -393,6 +394,84 @@ unsigned Finish(bool check_visual) {
   Require(ticks<64 && !IsRegisteredCorpseActor(actors[0].address()),"dead actor must leave the active list");
   return ticks;
 }
+void CheckSkeletonFall() {
+  constexpr size_t tracks=20+kSkeletonFallBones*8;
+  std::array<uint32_t,3344/4> standing{},prone{};
+  std::array<std::array<uint8_t,0x200>,kSkeletonFallBones-1> other_bones{};
+  const auto put_clip=[&](auto& clip,uint32_t id,uint16_t frames,
+                          int32_t height,uint32_t pitch) {
+    clip.fill(0);
+    const auto data=reinterpret_cast<uintptr_t>(clip.data());
+    Put(data,0,uint32_t{2});
+    Put(data,16,frames);
+    Put(data,18,static_cast<uint16_t>(kSkeletonFallBones));
+    for (size_t i=0;i<kSkeletonFallBones;++i) {
+      const size_t offset=i*(frames+1);
+      Put(data,24+i*8,static_cast<uint32_t>(offset));
+      Put(data,tracks+offset*4,pitch);
+      Put(data,tracks+(offset+1)*4,static_cast<uint32_t>(height)<<10);
+      for (unsigned j=1;j<frames;++j)
+        Put(data,tracks+(offset+1+j)*4,pitch|0x40000000u);
+    }
+    Put(Game(),kRenderResourceTableRva+id*sizeof(uintptr_t),data);
+  };
+  const auto old_count=Get<int32_t>(Game(),kRenderResourceCountRva);
+  Put(Game(),kRenderResourceCountRva,int32_t{2216});
+  for (const uint32_t death:{kBonesDeath,kBoneArcherDeath}) {
+    const bool archer=death==kBoneArcherDeath;
+    const uint32_t resting=archer ? 2165u:2196u;
+    const auto death_slot=kRenderResourceTableRva+death*sizeof(uintptr_t);
+    const auto resting_slot=kRenderResourceTableRva+resting*sizeof(uintptr_t);
+    const auto old_death=Get<uintptr_t>(Game(),death_slot);
+    const auto old_resting=Get<uintptr_t>(Game(),resting_slot);
+    put_clip(standing,death,23,354,992);
+    put_clip(prone,resting,33,45,291);
+    ResetFixture();
+    auto& actor=actors[0];
+    actor.Init(archer ? 0x231D:0x2318);
+    GiveItems();
+    const auto root=actor.node(),pelvis=actor.child();
+    Put(root,0x50,death);
+    Put(root,0x6C,int16_t{17});
+    Put(pelvis,0x04,int32_t{777});
+    auto node=pelvis;
+    for (int16_t i=0;i<kSkeletonFallBones;++i) {
+      actor.owner[i+1]=node;
+      Put(node,0x50,death);
+      Put(node,0x58,uint16_t{22});
+      Put(node,0x6E,i);
+      if (i+1<kSkeletonFallBones) {
+        other_bones[i].fill(0);
+        const auto sibling=reinterpret_cast<uintptr_t>(other_bones[i].data());
+        Put(node,0x34,sibling);
+        Put(sibling,0x2C,root);
+        node=sibling;
+      }
+    }
+    Tick();
+    Require(g_retained_corpses.size()==1 && g_retained_corpses[0].fall &&
+        Get<uint32_t>(root,0x50)==death && Get<uint32_t>(pelvis,0x50)==0 &&
+        Get<int32_t>(pelvis,4)>69 && Get<int32_t>(pelvis,4)<354,
+        "the skeleton rig must start falling after the retail death clip");
+    auto& corpse=g_retained_corpses[0];
+    RestoreSkeletonAnimation(corpse);
+    Require(Get<uint32_t>(pelvis,0x50)==death && Get<int32_t>(pelvis,4)==777,
+        "native animation inputs must be restored before actor cleanup");
+    Finish(true);
+    for (unsigned i=0;i<kSkeletonFallTicks;++i) Tick();
+    Require(g_retained_corpses.size()==1 && g_retained_corpses[0].actor==0 &&
+        Get<int32_t>(pelvis,4)==69 && (Get<int32_t>(pelvis,0x18)&1023)==291 &&
+        drops.size()==1 && items==15 && Get<uint32_t>(spawn_table,8)==1,
+        "prone pose must persist after normal actor removal, loot and spawn signal");
+    g_keep_bodies_enabled.store(false);
+    MaintainRetainedCorpses();
+    Require(g_retained_corpses.empty() && destroyed.size()==1,
+        "disabling Keep Bodies must release the fallen skeleton");
+    Put(Game(),death_slot,old_death);
+    Put(Game(),resting_slot,old_resting);
+  }
+  Put(Game(),kRenderResourceCountRva,old_count);
+}
 void CheckLifecycle() {
   ResetFixture(2);MakeLiving(1);GiveItems();g_keep_bodies_enabled.store(false);
   const unsigned retail_ticks=Finish(false);
@@ -478,6 +557,34 @@ void CheckLifecycle() {
     ResetFixture();actors[0].Init(flags);ObserveCorpseDeath(actors[0].address());
     Require(g_retained_corpses.empty(),"native persistent/special deaths must not be retained");
   }
+  struct DeathWithoutBody {
+    uint16_t flags;
+    uint32_t animation;
+  };
+  for (const auto& death : std::array<DeathWithoutBody,5>{{
+           {0x2318,2215}, // Bones
+           {0x231D,2178}, // Skeleton archer
+           {0x031B,6478}, // Skeleton champion
+           {0x0220,7117}, // Ghost
+           {0x0010,0},    // No animation
+       }}) {
+    const auto finish = [&](bool keep_bodies) {
+      ResetFixture();
+      actors[0].Init(death.flags);
+      Put(actors[0].node(),0x50,death.animation);
+      GiveItems();
+      g_keep_bodies_enabled.store(keep_bodies);
+      Tick();
+      Require(g_retained_corpses.empty(),"death without a corpse pose must stay native");
+      const auto ticks=1+Finish(false);
+      Require(destroyed.size()==1 && drops.size()==1 && items==15 &&
+          Get<uint32_t>(spawn_table,8)==1,
+          "death without a corpse pose must still destroy the model and drop loot");
+      return ticks;
+    };
+    const auto native_removal_ticks=finish(false);
+    Require(finish(true)==native_removal_ticks,"Keep Bodies must not change native removal timing");
+  }
   ResetFixture();MakeLiving(0);ObserveCorpseDeath(actors[0].address());
   Require(g_retained_corpses.empty(),"living entities must never be retained");
   ResetFixture();g_active_presentation_trace.stage=DeathtrapNativePresentationStage::kMidpoint;
@@ -542,6 +649,7 @@ void CheckOriginal(const wchar_t* path) {
   const auto old_create=g_original_corpse_model_create;
   g_original_corpse_model_destroy=&DestroyModelFixture;g_original_corpse_model_create=&CreateModelFixture;
   CheckLifecycle();
+  CheckSkeletonFall();
   CheckDismemberment();
   g_original_corpse_model_destroy=old_destroy;g_original_corpse_model_create=old_create;
   std::cout<<"Retail fade + full C130/C2A0 + spawn signal + drops + visual retention + native melee/fragments: "

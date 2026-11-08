@@ -17,6 +17,21 @@ constexpr DungeonDataRva kCorpseRegisteredRva{0x34F9C0u,0x350420u,0x34FE90u,0x35
 constexpr DungeonDataRva kCorpseAiHeadRva{0x1D7A70u,0x1D84D0u,0x1D7F40u,0x1D8120u};
 constexpr DungeonDataRva kCorpseNodePoolRva{0x236F8Cu,0x2379ECu,0x23745Cu,0x23763Cu};
 constexpr size_t kMaximumRetainedCorpses=32,kMaximumCorpseNodes=256;
+constexpr uint32_t kBonesDeath=2215,kBoneArcherDeath=2178;
+constexpr uint32_t kBoneChampionDeath=6478,kGhostDeath=7117;
+constexpr size_t kSkeletonFallBones=16;
+constexpr unsigned kSkeletonFallTicks=9;
+using SkeletonTransform=std::array<int32_t,9>;
+struct SkeletonFallBone {
+  uintptr_t node=0;
+  SkeletonTransform native{},start{},end{};
+};
+struct SkeletonFall {
+  std::array<SkeletonFallBone,kSkeletonFallBones> bones{};
+  uint32_t animation=0;
+  unsigned ticks=0;
+  bool applied=false;
+};
 struct CorpseAppearance {
   uintptr_t resource=0;
   uint32_t fade_flag=0,tint=0;
@@ -29,6 +44,7 @@ struct RetainedCorpse {
   uint32_t last_melee_attack=0;
   bool struck=false;
   std::vector<CorpseVisualNode> nodes;
+  std::unique_ptr<SkeletonFall> fall;
 };
 std::vector<RetainedCorpse> g_retained_corpses;
 using CorpseActorFn=void(__cdecl*)(uintptr_t);
@@ -109,10 +125,135 @@ void WriteCorpseAppearance(uintptr_t node,const CorpseAppearance& state,bool vis
   WriteCorpseField(node,0x3C,state.resource);
   WriteCorpseField(node,0x128,state.tint);
 }
+
+// The skeleton and archer have stock prone poses on their own rigs. Read
+// their packed ANM tracks from the loaded level; no game assets are embedded.
+uintptr_t SkeletonAnimationResource(uint32_t id,uint16_t frames) {
+  int32_t count=0;
+  uintptr_t resource=0;
+  uint32_t flags=0;
+  uint16_t actual_frames=0,bones=0;
+  if (!SafeReadValue(g_dungeon_base+kRenderResourceCountRva,&count) ||
+      count<=static_cast<int32_t>(id) ||
+      !SafeReadValue(g_dungeon_base+kRenderResourceTableRva+id*sizeof(uintptr_t),&resource) ||
+      !ReadCorpseField(resource,0,&flags) || flags!=2 ||
+      !ReadCorpseField(resource,16,&actual_frames) || actual_frames!=frames ||
+      !ReadCorpseField(resource,18,&bones) || bones!=kSkeletonFallBones) return 0;
+  return resource;
+}
+int32_t UnpackSkeletonCoordinate(uint32_t value,unsigned bits) {
+  const uint32_t sign=1u<<(bits-1);
+  return static_cast<int32_t>(value^sign)-static_cast<int32_t>(sign);
+}
+bool ReadSkeletonPose(uintptr_t resource,size_t size,size_t bone,unsigned frame,
+                      SkeletonTransform* pose) {
+  constexpr size_t tracks_start=20+kSkeletonFallBones*8;
+  uint32_t track=0,rotation=0,translation=0;
+  if (!ReadCorpseField(resource,24+bone*8,&track) || track>=(size-tracks_start)/4) return false;
+  size_t cursor=tracks_start+track*4;
+  bool has_translation=false;
+  for (unsigned i=0;i<=frame;++i) {
+    if (cursor+4>size || !ReadCorpseField(resource,cursor,&rotation)) return false;
+    cursor+=4;
+    if (!(rotation&0x40000000u)) {
+      if (cursor+4>size || !ReadCorpseField(resource,cursor,&translation)) return false;
+      cursor+=4;
+      has_translation=true;
+    }
+  }
+  if (!has_translation) return false;
+  *pose={UnpackSkeletonCoordinate(translation>>21,11),
+         UnpackSkeletonCoordinate((translation>>10)&2047u,11),
+         UnpackSkeletonCoordinate(translation&1023u,10),0,0,0,
+         static_cast<int32_t>(rotation&1023u),
+         static_cast<int32_t>((rotation>>10)&1023u),
+         static_cast<int32_t>((rotation>>20)&1023u)};
+  return true;
+}
+bool PrepareSkeletonFall(RetainedCorpse& corpse,uint32_t animation) {
+  const bool archer=animation==kBoneArcherDeath;
+  const auto from=SkeletonAnimationResource(animation,23);
+  const auto to=SkeletonAnimationResource(archer ? 2165u:2196u,33);
+  if (!from || !to) return false;
+  auto fall=std::make_unique<SkeletonFall>();
+  fall->animation=animation;
+  for (const auto& visual:corpse.nodes) {
+    if (visual.node==corpse.root) continue; // Leave actor placement and timing on the scene root.
+    uint32_t current=0,flags=0;
+    int16_t index=-1;
+    uint16_t frame=0;
+    if (!ReadCorpseField(visual.node,0x50,&current) || !ReadCorpseField(visual.node,0x24,&flags) ||
+        !ReadCorpseField(visual.node,0x6E,&index)) return false;
+    if (current!=animation || (flags&4u) || index<0 || index>=kSkeletonFallBones) continue;
+    auto& bone=fall->bones[index];
+    if (bone.node || !ReadCorpseField(visual.node,0x58,&frame) ||
+        !ReadSkeletonPose(from,2448,index,(std::min)(unsigned{frame},22u),&bone.start) ||
+        !ReadSkeletonPose(to,archer ? 3152u:3344u,index,16,&bone.end)) return false;
+    bone.node=visual.node;
+  }
+  for (const auto& bone:fall->bones) if (!bone.node) return false;
+  auto& pelvis=fall->bones.front();
+  // Keep the corpse where it died, including when the archer's stock
+  // prone clip would slide forward. Raise the resting rig a little so its
+  // lowest mesh vertices clear the floor.
+  pelvis.end[0]=pelvis.start[0];
+  pelvis.end[1]+=24;
+  pelvis.end[2]=pelvis.start[2];
+  corpse.fall=std::move(fall);
+  return true;
+}
+void InvalidateCorpseLocalTransforms(const RetainedCorpse& corpse) {
+  for (const auto& visual:corpse.nodes) {
+    uint32_t flags=0;
+    if (ReadCorpseField(visual.node,0x24,&flags))
+      WriteCorpseField(visual.node,0x24,flags&~0x100000u);
+  }
+}
+void RestoreSkeletonAnimation(RetainedCorpse& corpse) {
+  if (!corpse.fall || !corpse.fall->applied) return;
+  auto& fall=*corpse.fall;
+  for (const auto& bone:fall.bones) {
+    WriteCorpseField(bone.node,0,bone.native);
+    WriteCorpseField(bone.node,0x50,fall.animation);
+  }
+  fall.applied=false;
+  InvalidateCorpseLocalTransforms(corpse);
+}
+void ApplySkeletonFall(RetainedCorpse& corpse) {
+  if (!corpse.fall) return;
+  auto& fall=*corpse.fall;
+  if (fall.applied && fall.ticks==kSkeletonFallTicks) return;
+  if (!fall.applied) {
+    // Capture the native inputs after each actor update, before temporarily
+    // replacing the animation with local transforms for scene rendering.
+    for (auto& bone:fall.bones)
+      if (!ReadCorpseField(bone.node,0,&bone.native)) return;
+  }
+  fall.ticks=(std::min)(fall.ticks+1,kSkeletonFallTicks);
+  const float t=static_cast<float>(fall.ticks)/kSkeletonFallTicks;
+  const float blend=t*t*(3.0f-2.0f*t);
+  for (const auto& bone:fall.bones) {
+    auto pose=bone.start;
+    for (size_t i=0;i<pose.size();++i) {
+      int32_t delta=bone.end[i]-bone.start[i];
+      if (i>=6) delta=((delta+512)&1023)-512; // Shortest arc in retail angle units.
+      pose[i]+=static_cast<int32_t>(std::lround(delta*blend));
+    }
+    WriteCorpseField(bone.node,0,pose);
+    WriteCorpseField(bone.node,0x50,uint32_t{0});
+  }
+  fall.applied=true;
+  InvalidateCorpseLocalTransforms(corpse);
+}
 bool RememberCorpseModel(uintptr_t actor) {
   uintptr_t root=0;int16_t count=0;
   if (!ReadCorpseIdentity(actor,&root) || !IsRegisteredCorpseActor(actor)) return false;
   if (FindCorpseModel(root)) return true;
+  // Retail also reports animation completion when the root has no clip.
+  // Leave these deaths on the original path, including effects and removal.
+  uint32_t animation=0;
+  if (!ReadCorpseField(root,0x50,&animation) || !animation ||
+      animation==kBoneChampionDeath || animation==kGhostDeath) return false;
   if (g_retained_corpses.size()>=kMaximumRetainedCorpses ||
       !ReadCorpseField(root,0x6C,&count) || count<=0 || count>kMaximumCorpseNodes) return false;
   RetainedCorpse corpse;corpse.actor=actor;corpse.root=root;corpse.nodes.reserve(count);
@@ -137,6 +278,10 @@ bool RememberCorpseModel(uintptr_t actor) {
     if (child) pending.push_back(child);
     if (node.node!=root && sibling) pending.push_back(sibling);
     node.fade=node.visible;corpse.nodes.push_back(node);
+  }
+  if (animation==kBonesDeath || animation==kBoneArcherDeath) {
+    if (!PrepareSkeletonFall(corpse,animation)) return false;
+    AppendDeathtrapSupportLog("support_bodies skeleton_fall death_animation=%u",animation);
   }
   g_retained_corpses.push_back(std::move(corpse));
   return true;
@@ -171,9 +316,12 @@ void __cdecl HookCorpseModelDestroy(uintptr_t root) {
   // Partial model destruction (e.g. scripted dismemberment) also invalidates
   // the saved appearance. Never write a recycled child-node address later.
   g_retained_corpses.erase(std::remove_if(g_retained_corpses.begin(),g_retained_corpses.end(),
-      [&](const RetainedCorpse& c) {
-        return c.root==root || std::any_of(c.nodes.begin(),c.nodes.end(),
+      [&](RetainedCorpse& c) {
+        if (c.root==root) return true;
+        const bool removing_child=std::any_of(c.nodes.begin(),c.nodes.end(),
             [&](const CorpseVisualNode& n) { return n.node==root; });
+        if (removing_child && c.actor) RestoreSkeletonAnimation(c);
+        return removing_child;
       }),g_retained_corpses.end());
   g_original_corpse_model_destroy(root);
 }
@@ -211,15 +359,20 @@ void __cdecl HookCorpseDelete(uintptr_t actor) {
 void BeginCorpseFadeUpdate() {
   if (!g_corpse_retention_hooks_installed || g_corpse_dispatch_depth ||
       g_active_presentation_trace.stage!=DeathtrapNativePresentationStage::kNone) return;
-  for (const auto& corpse:g_retained_corpses) if (corpse.actor)
+  for (auto& corpse:g_retained_corpses) if (corpse.actor) {
+    RestoreSkeletonAnimation(corpse);
     for (const auto& node:corpse.nodes) WriteCorpseAppearance(node.node,node.fade,false);
+  }
 }
 void EndCorpseFadeUpdate() {
   if (!g_corpse_retention_hooks_installed || g_corpse_dispatch_depth!=1 ||
       g_active_presentation_trace.stage!=DeathtrapNativePresentationStage::kNone) return;
-  for (auto& corpse:g_retained_corpses) for (auto& node:corpse.nodes) {
-    if (corpse.actor) ReadCorpseAppearance(node.node,&node.fade);
-    WriteCorpseAppearance(node.node,node.visible,true);
+  for (auto& corpse:g_retained_corpses) {
+    for (auto& node:corpse.nodes) {
+      if (corpse.actor) ReadCorpseAppearance(node.node,&node.fade);
+      WriteCorpseAppearance(node.node,node.visible,true);
+    }
+    ApplySkeletonFall(corpse);
   }
 }
 void MaintainRetainedCorpses() {
@@ -245,8 +398,10 @@ void MaintainRetainedCorpses() {
             !ReadCorpseIdentity(c.actor,&root) || root!=c.root);
       }),g_retained_corpses.end());
   if (!g_keep_bodies_enabled.load(std::memory_order_relaxed)) {
-    for (const auto& corpse:g_retained_corpses) if (corpse.actor)
+    for (auto& corpse:g_retained_corpses) if (corpse.actor) {
+      RestoreSkeletonAnimation(corpse);
       for (const auto& node:corpse.nodes) WriteCorpseAppearance(node.node,node.fade,false);
+    }
     while (ReleaseOldestCorpseVisual()) {}
     g_retained_corpses.clear(); // Pending actors finish their retail fade normally.
   }
