@@ -461,19 +461,23 @@ inline const char* Description(text::Language language, int row, bool live_model
     const auto index=static_cast<size_t>(language);return messages[index<4?index:0];
   }
   if (row >= 6 && row < kPageRows) {
-    constexpr const char* extra[4][3] = {
+    constexpr const char* extra[4][4] = {
       {"Slow the world during F1-F4 or pad selection.",
        "25%: quarter speed. UI and camera remain fluid.",
-       "Health, items, counters, messages and selectors."},
+       "Health, items, counters, messages and selectors.",
+       "In RicViper, RB casts. Hold B for tank movement."},
       {"Ralentir le monde pendant la s\x82lection.",
        "25% : quart de vitesse. Cam\x82ra fluide.",
-       "Vie, objets, compteurs, messages et s\x82lection."},
+       "Vie, objets, compteurs, messages et s\x82lection.",
+       "RicViper met la magie sur RB. B maintenu pour les pas."},
       {"Spielwelt bei der Auswahl verlangsamen.",
        "25%: Vierteltempo. Kamera bleibt fl\x81ssig.",
-       "Leben, Objekte, Z\x84hler, Meldungen und Auswahl."},
+       "Leben, Objekte, Z\x84hler, Meldungen und Auswahl.",
+       "Bei RicViper zaubert RB. B f\x81r Seitenschritte halten."},
       {"Rallenta il mondo durante la selezione.",
        "25%: un quarto. Telecamera sempre fluida.",
-       "Vita, oggetti, contatori, messaggi e selettori."}};
+       "Vita, oggetti, contatori, messaggi e selettori.",
+       "RicViper usa RB per la magia. Tieni B per i passi."}};
     const auto lang=static_cast<size_t>(language);return extra[lang<4?lang:0][row-6];
   }
   constexpr const char* messages[4][6] = {

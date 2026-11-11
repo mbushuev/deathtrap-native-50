@@ -1208,6 +1208,9 @@ bool g_weapon_wheel_enabled = false;
 bool g_weapon_wheel_invert = false;
 bool g_xinput_enabled = false;
 bool g_xinput_base_bindings = false;
+std::atomic<bool> g_xinput_ricviper_requested{false};
+bool g_xinput_ricviper = false;
+uint32_t g_xinput_quick_heal_slot = 0;
 uint32_t g_xinput_controller_index = 0;
 uint32_t g_xinput_selector_hold_ms = 225;
 int32_t g_xinput_left_deadzone = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
@@ -2789,7 +2792,8 @@ deathtrap::settings::Controls CurrentModernControlSettings() {
           g_e3_model_requested.load(std::memory_order_relaxed),
           g_show_body_wounds.load(std::memory_order_relaxed),
           g_selector_slow_motion_enabled, static_cast<int>(g_selector_slow_motion_percent),
-          g_interface_scale_percent};
+          g_interface_scale_percent,
+          g_xinput_ricviper_requested.load(std::memory_order_relaxed)};
 }
 
 
@@ -2851,6 +2855,9 @@ bool SaveModernControlSettings(
     case deathtrap::settings::ControlRow::kInterfaceScale:
       entries[0].section = L"Interface"; entries[0].key = L"ScalePercent";
       entries[0].value = value.interface_scale; break;
+    case deathtrap::settings::ControlRow::kControllerLayout:
+      entries[0].section = L"XInput"; entries[0].key = L"ControllerLayout";
+      entries[0].value = value.controller_ricviper; break;
     default: return false;
   }
   for (size_t index = 0; index < count; ++index) {
@@ -4226,6 +4233,8 @@ struct ControllerSelectorState {
   bool row_open = false;
   bool cancelled = false;
   bool selection_confirmed = false;
+  bool commit_suppressed = false;
+  bool right_stick_engaged = false;
   uint32_t category = 0;
   uint32_t slot = 0;
   uint64_t pressed_ms = 0;
@@ -4259,6 +4268,11 @@ HMODULE g_xinput_module = nullptr;
 DynamicXInputGetStateFn g_xinput_get_state = nullptr;
 DynamicXInputSetStateFn g_xinput_set_state = nullptr;
 ControllerSelectorState g_controller_selector;
+std::array<int32_t, 2> g_ricviper_equipped_slots{-1, -1};
+uint32_t g_ricviper_last_weapon_category = 0;
+bool g_ricviper_dpad_waiting_for_release = false;
+deathtrap::input::TankDirection g_ricviper_tank_direction =
+    deathtrap::input::TankDirection::kNeutral;
 std::array<bool, static_cast<size_t>(InjectedKey::kCount)>
     g_injected_keys{};
 bool g_injected_mouse_left = false;
@@ -12521,6 +12535,7 @@ int __cdecl HookDamageHandler(void* target, int32_t requested_damage,
 
 void ReleaseInjectedControllerInput() {
   g_camera_recenter.Cancel();
+  g_ricviper_tank_direction = deathtrap::input::TankDirection::kNeutral;
   g_controller_cast_blocked_until_release = true;
   g_xinput_camera_relative_intent.store(false,
                                         std::memory_order_release);
@@ -12878,19 +12893,80 @@ bool CommitControllerSlot(uint32_t category, uint32_t slot) {
     return false;
   }
   g_controller_selector.remembered_slot[category - 1u] = slot;
+  if (g_xinput_ricviper && category <= 2u &&
+      deathtrap::selector_text::ItemForSlot(category, slot) !=
+          deathtrap::selector_text::kChalkItem) {
+    g_ricviper_equipped_slots[category - 1u] = static_cast<int32_t>(slot);
+    g_ricviper_last_weapon_category = category;
+  }
   AppendNativeLog("xinput selector commit category=%u slot=%u", category,
                   slot + 1u);
   return true;
 }
 
-uint32_t NextAvailableControllerSlot(uint32_t category, uint32_t current) {
+uint32_t NextAvailableControllerSlot(uint32_t category, uint32_t current,
+                                     bool include_special = true) {
   for (uint32_t distance = 1; distance <= 8u; ++distance) {
     const uint32_t candidate = (current + distance) & 7u;
+    if (!include_special) {
+      const int32_t item = deathtrap::selector_text::ItemForSlot(category, candidate);
+      if (item == deathtrap::selector_text::kChalkItem ||
+          deathtrap::selector_gameplay::RequiresExactSelectorDispatch(item)) {
+        continue;
+      }
+    }
     if (ControllerSlotAvailable(category, candidate)) {
       return candidate;
     }
   }
-  return current & 7u;
+  return include_special ? current & 7u : 8u;
+}
+
+void UseRicViperQuickHeal() {
+  if (g_xinput_quick_heal_slot != 0u) {
+    CommitControllerSlot(4u, g_xinput_quick_heal_slot - 1u);
+    return;
+  }
+  for (uint32_t slot = 0; slot < 8u; ++slot) {
+    std::array<char, 128> name{};
+    if (!ControllerSlotAvailable(4u, slot) ||
+        !ReadControllerSelectorName(4u, slot, &name)) {
+      continue;
+    }
+    for (char& c : name) {
+      if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+    }
+    // The name table uses CP850. The prefixes work with accented names.
+    constexpr const char* kHealingNames[] = {
+        "heal", "health", "life", "vie", "sant", "heil", "gesund",
+        "cura", "salut", "vita", "salud", "vida"};
+    if (std::any_of(std::begin(kHealingNames), std::end(kHealingNames),
+                    [&name](const char* word) { return std::strstr(name.data(), word) != nullptr; })) {
+      CommitControllerSlot(4u, slot);
+      return;
+    }
+  }
+}
+
+void TapRicViperSelector(uint32_t category, uint32_t slot) {
+  if (category == 4u) {
+    UseRicViperQuickHeal();
+    return;
+  }
+  if (category <= 2u && g_ricviper_last_weapon_category != category) {
+    const int32_t remembered = g_ricviper_equipped_slots[category - 1u];
+    if (remembered >= 0 &&
+        CommitControllerSlot(category, static_cast<uint32_t>(remembered))) {
+      return;
+    }
+  }
+  uint32_t next = slot;
+  for (uint32_t attempt = 0; attempt < 7u; ++attempt) {
+    next = NextAvailableControllerSlot(category, next, false);
+    if (next >= 8u || next == slot || CommitControllerSlot(category, next)) {
+      return;
+    }
+  }
 }
 
 uint32_t DpadCategory(WORD buttons) {
@@ -12909,14 +12985,17 @@ uint32_t DpadCategory(WORD buttons) {
   return 0;
 }
 
-uint32_t RightStickSlot(const XINPUT_GAMEPAD& pad, uint32_t fallback) {
+uint32_t RightStickSlot(const XINPUT_GAMEPAD& pad, uint32_t fallback,
+                        bool* engaged = nullptr) {
   const double x = static_cast<double>(pad.sThumbRX);
   const double y = static_cast<double>(pad.sThumbRY);
-  if (x * x + y * y <
-      static_cast<double>(g_xinput_right_deadzone) *
-          static_cast<double>(g_xinput_right_deadzone)) {
+  const double radius_squared = x * x + y * y;
+  const double deadzone = g_xinput_right_deadzone;
+  if (radius_squared < deadzone * deadzone ||
+      (engaged && radius_squared == 0.0)) {
     return fallback;
   }
+  if (engaged) *engaged = true;
   constexpr double kPi = 3.14159265358979323846;
   double angle = std::atan2(x, y);
   if (angle < 0.0) {
@@ -12927,21 +13006,63 @@ uint32_t RightStickSlot(const XINPUT_GAMEPAD& pad, uint32_t fallback) {
          7u;
 }
 
-void CloseControllerSelector() {
+void CloseControllerSelector(bool interrupted = false) {
+  if (interrupted && g_xinput_ricviper && g_controller_selector.direction_down) {
+    g_ricviper_dpad_waiting_for_release = true;
+  }
   if (g_controller_selector.row_open) {
     SetNativeSelectorMode(0);
   }
   PublishControllerSelector(false, 0, 0, false, false);
+  const auto remembered = g_controller_selector.remembered_slot;
   g_controller_selector = {};
+  if (g_xinput_ricviper) g_controller_selector.remembered_slot = remembered;
+}
+
+void ApplyControllerLayout() {
+  const bool ricviper =
+      g_xinput_ricviper_requested.load(std::memory_order_acquire);
+  if (ricviper == g_xinput_ricviper) return;
+  g_ricviper_dpad_waiting_for_release = ricviper && g_controller_selector.direction_down;
+  CloseControllerSelector();
+  ReleaseInjectedControllerInput();
+  g_controller_selector.remembered_slot.fill(0);
+  g_ricviper_equipped_slots.fill(-1);
+  g_ricviper_last_weapon_category = 0;
+  g_xinput_ricviper = ricviper;
+}
+
+WORD ControllerCastButton() {
+  return g_xinput_ricviper ? XINPUT_GAMEPAD_RIGHT_SHOULDER : XINPUT_GAMEPAD_B;
+}
+
+bool RicViperTankHeld(WORD buttons) {
+  return g_xinput_ricviper && (buttons & XINPUT_GAMEPAD_B) != 0;
 }
 
 void PublishControllerCombatInput(const XINPUT_GAMEPAD& pad);
 
 void UpdateControllerSelector(const XINPUT_GAMEPAD& pad, bool gameplay) {
-  const uint32_t category = gameplay ? DpadCategory(pad.wButtons) : 0u;
-  // Capture B before closing/resetting a row, including simultaneous D-pad
+  uint32_t category = gameplay ? DpadCategory(pad.wButtons) : 0u;
+  if (g_xinput_ricviper && !gameplay) {
+    CloseControllerSelector(true);
+    return;
+  }
+  if (g_xinput_ricviper && g_ricviper_dpad_waiting_for_release) {
+    // A direction held through a focus/menu transition belongs to the
+    // interrupted gesture. Its eventual release must not become a tap.
+    g_ricviper_dpad_waiting_for_release = category != 0u;
+    return;
+  }
+  if (g_xinput_ricviper && gameplay && g_controller_selector.direction_down) {
+    constexpr WORD kDirections[] = {XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_DPAD_RIGHT,
+                                    XINPUT_GAMEPAD_DPAD_DOWN, XINPUT_GAMEPAD_DPAD_LEFT};
+    const auto held = g_controller_selector.category;
+    category = (pad.wButtons & kDirections[held - 1u]) ? held : 0u;
+  }
+  // Capture the spell button before closing/resetting a row, including simultaneous D-pad
   // release. Presentation-rate selector polls must consume the same press.
-  if ((pad.wButtons & XINPUT_GAMEPAD_B) != 0 &&
+  if ((pad.wButtons & ControllerCastButton()) != 0 &&
       (g_controller_selector.direction_down || category != 0u)) {
     g_controller_cast_blocked_until_release = true;
   }
@@ -12963,6 +13084,9 @@ void UpdateControllerSelector(const XINPUT_GAMEPAD& pad, bool gameplay) {
     g_controller_selector.category = category;
     g_controller_selector.slot = CurrentControllerSlot(category);
     g_controller_selector.pressed_ms = now;
+    if (g_xinput_ricviper) {
+      g_controller_selector.selection_confirmed = (pad.wButtons & XINPUT_GAMEPAD_A) != 0;
+    }
     return;
   }
   if (!g_controller_selector.direction_down) {
@@ -12974,7 +13098,17 @@ void UpdateControllerSelector(const XINPUT_GAMEPAD& pad, bool gameplay) {
   }
   if (category == 0u) {
     const uint64_t duration = now - g_controller_selector.pressed_ms;
-    if (!g_controller_selector.row_open &&
+    if (g_xinput_ricviper) {
+      if (!g_controller_selector.cancelled && !g_controller_selector.row_open &&
+          duration < g_xinput_selector_hold_ms) {
+        TapRicViperSelector(g_controller_selector.category, g_controller_selector.slot);
+      } else if (!g_controller_selector.commit_suppressed && g_controller_selector.row_open &&
+                 !(pad.wButtons & XINPUT_GAMEPAD_B) &&
+                 g_controller_selector.right_stick_engaged &&
+                 g_controller_selector.category != 4u) {
+        CommitControllerSlot(g_controller_selector.category, g_controller_selector.slot);
+      }
+    } else if (!g_controller_selector.row_open &&
         !g_controller_selector.cancelled && duration < g_xinput_selector_hold_ms &&
         g_controller_selector.category != 4u) {
       const uint32_t next = NextAvailableControllerSlot(
@@ -12999,11 +13133,15 @@ void UpdateControllerSelector(const XINPUT_GAMEPAD& pad, bool gameplay) {
                     g_controller_selector.category);
   }
   if (!g_controller_selector.row_open || g_controller_selector.cancelled) {
+    if (g_xinput_ricviper) {
+      g_controller_selector.selection_confirmed = (pad.wButtons & XINPUT_GAMEPAD_A) != 0;
+    }
     return;
   }
   const uint32_t previous_slot = g_controller_selector.slot;
   g_controller_selector.slot =
-      RightStickSlot(pad, g_controller_selector.slot);
+      RightStickSlot(pad, g_controller_selector.slot,
+                     g_xinput_ricviper ? &g_controller_selector.right_stick_engaged : nullptr);
   if (g_controller_selector.slot != previous_slot) {
     g_selector_tick_vibration_pending.store(true,
                                              std::memory_order_release);
@@ -13017,9 +13155,20 @@ void UpdateControllerSelector(const XINPUT_GAMEPAD& pad, bool gameplay) {
       g_controller_selector.category, g_controller_selector.slot);
   PublishControllerSelector(true, g_controller_selector.category,
                             g_controller_selector.slot, available,
-                            g_controller_selector.category == 2u ||
-                                g_controller_selector.category == 4u);
-  if (pad.wButtons & XINPUT_GAMEPAD_B) {
+                             g_controller_selector.category == 4u ||
+                                 (!g_xinput_ricviper && g_controller_selector.category == 2u));
+  if (g_xinput_ricviper) {
+    const bool suppress_commit = (pad.wButtons & XINPUT_GAMEPAD_B) != 0 &&
+        !g_controller_selector.commit_suppressed;
+    if (suppress_commit) g_controller_selector.commit_suppressed = true;
+    const bool confirm = (pad.wButtons & XINPUT_GAMEPAD_A) != 0;
+    if (g_controller_selector.category == 4u && available &&
+        !suppress_commit && confirm &&
+        !g_controller_selector.selection_confirmed) {
+      CommitControllerSlot(4u, g_controller_selector.slot);
+    }
+    g_controller_selector.selection_confirmed = confirm;
+  } else if (pad.wButtons & XINPUT_GAMEPAD_B) {
     g_controller_selector.cancelled = true;
     SetNativeSelectorMode(0);
     PublishControllerSelector(false, 0, 0, false, false);
@@ -13038,10 +13187,12 @@ void UpdateControllerSelector(const XINPUT_GAMEPAD& pad, bool gameplay) {
 }
 
 void PollOpenControllerSelectorForPresentation() {
-  if (!g_controller_selector.row_open || !g_xinput_get_state) {
+  ScopedXInputPoll poll(g_xinput_poll_guard);
+  if (!poll || !g_controller_selector.row_open || !g_xinput_get_state) {
     return;
   }
   if (!DeathtrapGameplayAcceptsControllerCombat()) {
+    if (g_xinput_ricviper) CloseControllerSelector(true);
     ClearDeathtrapXInputCombatState();
     return;
   }
@@ -13059,6 +13210,7 @@ void PollOpenControllerSelectorForPresentation() {
     UpdateControllerSelector(state.Gamepad, true);
     g_selector_presentation_input_poll = previous_poll;
   } else {
+    if (g_xinput_ricviper) CloseControllerSelector(true);
     ClearDeathtrapXInputCombatState();
   }
 }
@@ -13195,8 +13347,10 @@ NormalizedStick2 NormalizeCircularStick(SHORT raw_x, SHORT raw_y,
 
 void PublishControllerCombatInput(const XINPUT_GAMEPAD& pad) {
   const auto stick = NormalizeCircularStick(pad.sThumbLX, pad.sThumbLY, g_xinput_left_deadzone);
-  const auto direction = deathtrap::input::ResolveControllerCombatDirection(
-      stick.x, stick.y, g_xinput_action_threshold);
+  const bool keep_movement = RicViperTankHeld(pad.wButtons);
+  const auto direction = keep_movement ? deathtrap::input::ControllerCombatDirection{}
+      : deathtrap::input::ResolveControllerCombatDirection(
+            stick.x, stick.y, g_xinput_action_threshold);
   SubmitDeathtrapXInputCombatState(pad.bRightTrigger >= g_xinput_trigger_threshold,
       direction.forward, direction.backward, direction.left, direction.right);
 }
@@ -13620,6 +13774,10 @@ bool ChangeModernControlSetting(deathtrap::settings::ControlRow row,
   g_selector_slow_motion_enabled = next.selector_slow_motion;
   g_selector_slow_motion_percent = static_cast<uint32_t>(next.selector_speed);
   g_interface_scale_percent = next.interface_scale;
+  if (row == deathtrap::settings::ControlRow::kControllerLayout) {
+    g_xinput_ricviper_requested.store(next.controller_ricviper,
+                                     std::memory_order_release);
+  }
   if (row==deathtrap::settings::ControlRow::kHeroineModel)
     AppendDeathtrapSupportLog("support_heroine_model requested=%s apply=%s",
         next.e3_model?"e3":"original",HeroineLiveSwitchEnabled()?"immediate":"restart");
@@ -14281,7 +14439,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     SafeReadValue(g_dungeon_base + kUiSelectorModeRva, &native_selector_mode);
   }
   const auto cast_button = deathtrap::input::ResolveControllerCastButtonPlan(
-      (buttons & XINPUT_GAMEPAD_B) != 0,
+      (buttons & ControllerCastButton()) != 0,
       !gameplay || selector_captures_controls ||
           g_controller_selector.direction_down || native_selector_mode != 0,
       g_controller_cast_blocked_until_release);
@@ -14316,10 +14474,15 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         (pressed & XINPUT_GAMEPAD_X) != 0) {
       NotifyDeathtrapOperateInput();
     }
-    const bool cautious_modifier =
+    const bool tank_modifier = RicViperTankHeld(buttons);
+    const bool cautious_modifier = !tank_modifier &&
         (buttons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
-    const bool cautious_strafe_modifier =
+    const bool cautious_strafe_modifier = !g_xinput_ricviper &&
         (buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
+    const bool selector_blocks_movement = selector_captures_controls && !g_xinput_ricviper;
+    g_ricviper_tank_direction = deathtrap::input::LatchTankDirection(
+        g_ricviper_tank_direction, tank_modifier, movement_stick.x,
+        movement_stick.y, movement_stick.magnitude, g_xinput_action_threshold);
     const bool custom_head_movement = CustomHeadViewSelected();
     const bool first_person_movement =
         g_xinput_first_person_toggled.load(std::memory_order_acquire) ||
@@ -14327,8 +14490,9 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     const bool controller_attack =
         pad.bRightTrigger >= g_xinput_trigger_threshold;
     const auto mouse_facing = GetDeathtrapThirdPersonMouseAttackFacingPhase();
-    const bool controller_combat_owns_stick = controller_attack ||
-        (cautious_strafe_modifier &&
+    const bool controller_combat_owns_stick =
+        (controller_attack && !tank_modifier) ||
+        ((cautious_strafe_modifier || tank_modifier) &&
          (DeathtrapPhysicalMouseCombatActive() ||
           (mouse_facing != DeathtrapMouseAttackFacingPhase::kIdle &&
            mouse_facing != DeathtrapMouseAttackFacingPhase::kCanceled)));
@@ -14337,9 +14501,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     uintptr_t current_controller = 0;
     const bool native_joystick_available =
         g_native_joystick_hooks_installed.load(std::memory_order_acquire);
-    // While RT is held, the stick is a combat selector rather than a second
-    // simultaneous locomotion source. Letting the native joystick keep moving
-    // while F+direction was synthesized made side attacks stall and slide.
+    // RT selects attack direction unless RicViper's B modifier owns movement.
     bool desired_heading_valid = false;
     if (custom_head_movement) {
       const CameraRelativeHeadingTarget view_heading =
@@ -14363,7 +14525,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
          g_immersive_root_motion_hooks_installed.load(
              std::memory_order_acquire)) &&
         !controller_combat_owns_stick &&
-        !selector_captures_controls &&
+        !selector_blocks_movement &&
         (!first_person_movement || custom_head_movement) &&
         CustomCameraOwnsMode3() &&
         desired_heading_valid &&
@@ -14371,8 +14533,8 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     const deathtrap::input::ControllerMovementContext movement_context{
         native_joystick_available, camera_relative_available,
         first_person_movement, custom_head_movement,
-        selector_captures_controls, controller_combat_owns_stick,
-        cautious_modifier, cautious_strafe_modifier};
+        selector_blocks_movement, controller_combat_owns_stick,
+        cautious_modifier, cautious_strafe_modifier, g_ricviper_tank_direction};
     const deathtrap::input::ControllerMovementThresholds movement_thresholds{
         g_xinput_turn_threshold, g_xinput_movement_threshold,
         g_xinput_run_threshold, g_xinput_run_release_threshold,
@@ -14386,7 +14548,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
             : 0.0;
     g_xinput_movement_sample_ms = movement_now_ms;
     const bool movement_blocked =
-        selector_captures_controls || controller_combat_owns_stick;
+        selector_blocks_movement || controller_combat_owns_stick;
     g_xinput_filtered_movement_magnitude =
         deathtrap::input::SmoothControllerMovementMagnitude(
             g_xinput_filtered_movement_magnitude,
@@ -14476,7 +14638,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     InjectVirtualKey(InjectedKey::kK, false);
     g_xinput_run_active = movement_plan.run;
     g_xinput_walk_active = movement_plan.walking &&
-        !cautious_modifier && !cautious_strafe_modifier;
+        !cautious_modifier && !cautious_strafe_modifier && !movement_plan.cautious;
     set_gameplay_command(deathtrap::input::Command::kRun,
                          g_xinput_run_active);
     set_gameplay_command(
@@ -14488,6 +14650,8 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     set_gameplay_command(
         deathtrap::input::Command::kCastSpell,
         cast_button.cast);
+    set_gameplay_command(deathtrap::input::Command::kKeepMovementDuringAttack,
+                         tank_modifier);
     InjectVirtualKey(InjectedKey::kShift, false);
     InjectVirtualKey(InjectedKey::kSpace, false);
     InjectVirtualKey(InjectedKey::kE, false);
@@ -14525,8 +14689,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
                          (buttons & XINPUT_GAMEPAD_START) != 0);
     InjectVirtualKey(InjectedKey::kTab, false);
     SubmitDeathtrapXInputGameplayCommands(gameplay_commands);
-    // RT and the left-stick combat direction remain available while the
-    // radial owns right-stick selection and A/B confirmation/cancellation.
+    // RT remains available while the radial owns the right stick and A/B.
     PublishControllerCombatInput(pad);
     // RT now publishes a virtual combat command instead of masquerading as a
     // physical mouse click. Mouse and controller still converge in the same
@@ -14555,6 +14718,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
             CustomCameraOwnsMode3());
   } else {
     g_camera_recenter.Cancel();
+    g_ricviper_tank_direction = deathtrap::input::TankDirection::kNeutral;
     PublishCameraRelativeMovementIntent(false, 0, 0.0);
     PublishNativeJoystickMovement(false, 0.0, 0.0);
     g_xinput_direct_heading_steering_was_active = false;
@@ -14690,6 +14854,7 @@ void UpdateDeathtrapXInput() {
   if (!poll) {
     return;
   }
+  ApplyControllerLayout();
   XINPUT_STATE state = {};
   const bool connected =
       g_xinput_get_state(g_xinput_controller_index, &state) == ERROR_SUCCESS;
@@ -14700,7 +14865,7 @@ void UpdateDeathtrapXInput() {
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
     if (g_xinput_was_connected) {
       ReleaseInjectedControllerInput();
-      CloseControllerSelector();
+      CloseControllerSelector(true);
     }
     g_xinput_was_connected = connected;
     return;
@@ -14721,6 +14886,9 @@ void UpdateDeathtrapXInput() {
   // only gameplay so engine actions and the native selector never run from a
   // foreign input thread.
   if (!gameplay) {
+    if (g_xinput_ricviper && g_controller_selector.direction_down) {
+      CloseControllerSelector(true);
+    }
     g_camera_recenter.Cancel();
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
     return;
@@ -14746,12 +14914,16 @@ void PollFrontendXInputInternal() {
   if (!poll) {
     return;
   }
+  ApplyControllerLayout();
   XINPUT_STATE state = {};
   const bool connected =
       g_xinput_get_state(g_xinput_controller_index, &state) == ERROR_SUCCESS;
   g_xinput_controller_present.store(connected, std::memory_order_release);
   LogSupportControllerPresence(connected);
   if (!connected || !IsGameForeground()) {
+    if (g_xinput_ricviper && g_controller_selector.direction_down) {
+      CloseControllerSelector(true);
+    }
     SubmitDeathtrapXInputMouseState(0, 0, false, false);
     ClearDeathtrapXInputCombatState();
     return;
@@ -14763,6 +14935,9 @@ void PollFrontendXInputInternal() {
       g_xinput_menu_mode.load(std::memory_order_acquire);
   if (native_gameplay && !menu_mode) {
     return;
+  }
+  if (g_xinput_ricviper && g_controller_selector.direction_down) {
+    CloseControllerSelector(true);
   }
 
   // The frontend consumes the same retail keyboard/mouse actions as a real
@@ -20445,6 +20620,11 @@ void InitializePatchState() {
       ConfiguredInteger(L"XInput", L"Enabled", 1) != 0;
   g_xinput_base_bindings =
       ConfiguredInteger(L"XInput", L"BaseBindings", 1) != 0;
+  g_xinput_ricviper_requested.store(
+      ConfiguredInteger(L"XInput", L"ControllerLayout", 0) == 1,
+      std::memory_order_relaxed);
+  g_xinput_quick_heal_slot = static_cast<uint32_t>(std::clamp(
+      ConfiguredInteger(L"XInput", L"QuickHealSlot", 0), 0, 8));
   g_xinput_controller_index = static_cast<uint32_t>(std::clamp(
       ConfiguredInteger(L"XInput", L"Controller", 0), 0, 3));
   g_xinput_selector_hold_ms = static_cast<uint32_t>(std::clamp(

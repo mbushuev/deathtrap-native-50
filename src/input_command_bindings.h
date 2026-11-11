@@ -28,6 +28,7 @@ enum class Command : uint32_t {
   kMenuSpace = 1u << 17,
   kStepForward = 1u << 18,
   kStepBackward = 1u << 19,
+  kKeepMovementDuringAttack = 1u << 20,
 };
 
 constexpr uint32_t CommandBit(Command command) {
@@ -92,8 +93,8 @@ struct ControllerCastButtonPlan {
   bool blocked_until_release = false;
 };
 
-// B is shared by casting and frontend/selector cancellation. A consumed
-// press stays consumed even if the selector closes while B is still held.
+// A cast press consumed by the frontend or selector stays blocked until the
+// physical button is released.
 constexpr ControllerCastButtonPlan ResolveControllerCastButtonPlan(
     bool down, bool cancel_owner, bool previously_blocked) {
   if (!down) return {};

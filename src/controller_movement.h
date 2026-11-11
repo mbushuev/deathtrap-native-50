@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace deathtrap::input {
 
@@ -47,6 +48,23 @@ inline double ControllerHeadingTurnScale(
   return amount * amount * (3.0 - 2.0 * amount);
 }
 
+enum class TankDirection : uint8_t { kNeutral, kWaiting, kSideways, kForward, kBackward };
+
+inline TankDirection LatchTankDirection(TankDirection previous, bool held,
+                                        double x, double y, double magnitude,
+                                        double threshold) {
+  if (!held) return TankDirection::kNeutral;
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(magnitude) ||
+      magnitude <= threshold) {
+    return TankDirection::kWaiting;
+  }
+  if (previous != TankDirection::kNeutral && previous != TankDirection::kWaiting) {
+    return previous;
+  }
+  if (std::abs(x) > std::abs(y)) return TankDirection::kSideways;
+  return y >= 0.0 ? TankDirection::kForward : TankDirection::kBackward;
+}
+
 struct ControllerMovementContext {
   bool native_joystick_available = false;
   bool camera_relative_available = false;
@@ -56,6 +74,7 @@ struct ControllerMovementContext {
   bool combat_owns_stick = false;
   bool cautious_modifier = false;
   bool cautious_strafe_modifier = false;
+  TankDirection tank_direction = TankDirection::kNeutral;
 };
 
 struct ControllerMovementPlan {
@@ -73,6 +92,7 @@ struct ControllerMovementPlan {
   bool sidestep_right = false;
   bool step_forward = false;
   bool step_backward = false;
+  bool cautious = false;
 };
 
 // Heading intent and translation deliberately have separate gates. Keep a
@@ -94,9 +114,49 @@ inline ControllerMovementPlan ResolveControllerMovementPlan(
   const bool camera_relative = context.native_joystick_available &&
       context.camera_relative_available;
 
-  // RB wins over LB and invokes the original J/K side-step states, not a
-  // forward step with redirected root motion. Keep all heading/axes neutral.
-  if (context.cautious_modifier || context.cautious_strafe_modifier) {
+  const bool turn_requested = magnitude > thresholds.turn;
+  const bool walking_tier = magnitude > thresholds.walk ||
+      (was_walking && magnitude > thresholds.walk_release);
+  if (context.tank_direction != TankDirection::kNeutral) {
+    if (context.tank_direction == TankDirection::kWaiting ||
+        magnitude <= thresholds.action) {
+      return plan;
+    }
+    if (context.tank_direction == TankDirection::kSideways) {
+      plan.sidestep_left = x < -thresholds.action;
+      plan.sidestep_right = x > thresholds.action;
+      return plan;
+    }
+    const bool tank_back = context.tank_direction == TankDirection::kBackward &&
+        !context.immersive_first_person;
+    const double turn_axis = context.native_joystick_available &&
+        turn_requested && !context.first_person ? x : 0.0;
+    if (!walking_tier) {
+      // RicViper's gentle tilt uses the retail cautious step. The walk
+      // hysteresis only applies after entering the faster analog tier.
+      plan.walking = true;
+      plan.cautious = true;
+      plan.heading_active = camera_relative && !tank_back &&
+          (context.immersive_first_person || turn_requested);
+      plan.step_backward = tank_back ||
+          (camera_relative ? context.immersive_first_person && y < -thresholds.action
+                           : y < 0.0);
+      plan.step_forward = !plan.step_backward;
+      plan.joystick_x = plan.heading_active ? 0.0 : turn_axis;
+      return plan;
+    }
+    if (tank_back) {
+      plan.walking = true;
+      plan.joystick_x = turn_axis;
+      plan.joystick_y = y;
+      plan.key_backward = !context.native_joystick_available;
+      plan.run = magnitude >= thresholds.run ||
+          (was_running && magnitude > thresholds.run_release);
+      return plan;
+    }
+    // Forward-latched movement uses the normal route, including the selected
+    // camera-relative movement mode.
+  } else if (context.cautious_modifier || context.cautious_strafe_modifier) {
     if (camera_relative && !context.cautious_strafe_modifier) {
       // Third person keeps exactly the ordinary camera-relative stick course,
       // without quadrant snapping. The native cautious forward step follows
@@ -130,9 +190,7 @@ inline ControllerMovementPlan ResolveControllerMovementPlan(
     return plan;
   }
 
-  plan.walking = magnitude > thresholds.walk ||
-      (was_walking && magnitude > thresholds.walk_release);
-  const bool turn_requested = magnitude > thresholds.turn;
+  plan.walking = walking_tier;
   plan.heading_active = camera_relative &&
       (context.immersive_first_person || turn_requested);
   if (camera_relative) {

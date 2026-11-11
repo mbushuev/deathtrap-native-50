@@ -87,7 +87,8 @@ Controls ReadSaved() {
           GetPrivateProfileIntW(L"Gameplay", L"ShowWounds", 1, ini_path.c_str()) != 0,
           GetPrivateProfileIntW(L"Selector", L"SlowMotion", 1, ini_path.c_str()) != 0,
           int(GetPrivateProfileIntW(L"Selector", L"SlowMotionPercent", 25, ini_path.c_str())),
-          int(GetPrivateProfileIntW(L"Interface", L"ScalePercent", 100, ini_path.c_str()))};
+          int(GetPrivateProfileIntW(L"Interface", L"ScalePercent", 100, ini_path.c_str())),
+          GetPrivateProfileIntW(L"XInput", L"ControllerLayout", 0, ini_path.c_str()) == 1};
 }
 void Reset(bool modern = true) {
   g_keyboard_mouse_camera_relative_movement = g_xinput_camera_relative_movement = modern;
@@ -118,6 +119,20 @@ BOOL WINAPI FailSecond(LPCWSTR section, LPCWSTR key, LPCWSTR value, LPCWSTR path
 }
 
 void CheckPersistence() {
+  Require(!ReadSaved().controller_ricviper, "old settings default to Standard");
+  Require(Change(ControlRow::kControllerLayout, 1) &&
+              ReadSaved().controller_ricviper &&
+              CurrentModernControlSettings().controller_ricviper,
+          "RicViper selection must save before publishing");
+  const auto invalid_layout_path = ini_path / L"settings.ini";
+  Require(!ChangeModernControlSetting(ControlRow::kControllerLayout, 0,
+                                      invalid_layout_path.c_str()) &&
+              CurrentModernControlSettings().controller_ricviper,
+          "failed writes must keep the selected layout");
+  Require(Change(ControlRow::kControllerLayout, -1) &&
+              !ReadSaved().controller_ricviper &&
+              !CurrentModernControlSettings().controller_ricviper,
+          "cycling the layout must restore Standard on disk and in the menu");
   Require(Change(ControlRow::kSelectorSlowMotion,0) && !ReadSaved().selector_slow_motion &&
       !g_selector_slow_motion_enabled,"selector slowdown off persists and applies");
   Require(Change(ControlRow::kSelectorSpeed,1) && ReadSaved().selector_speed==30 &&

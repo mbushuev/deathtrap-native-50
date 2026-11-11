@@ -78,6 +78,177 @@ void __cdecl CombatTestTurn(void* input) {
   PutCombat(reinterpret_cast<void*>(test_heading_node + kPlayerHeadingOffset), NormalizePlayerHeading(heading + delta));
   ++test_turns;
 }
+
+std::array<bool, 30> ricviper_inventory{};
+std::vector<std::pair<int, int>> ricviper_actions;
+void* __cdecl RicViperInventory(int id) {
+  return ricviper_inventory.at(id) ? ricviper_inventory.data() : nullptr;
+}
+void __cdecl RicViperMelee(int action, int) { ricviper_actions.emplace_back(1, action); }
+void __cdecl RicViperRanged(int action, int) { ricviper_actions.emplace_back(2, action); }
+void __cdecl RicViperSpell(int id) { ricviper_actions.emplace_back(3, id); }
+void __cdecl RicViperItem(int id) { ricviper_actions.emplace_back(4, id); }
+void __cdecl RicViperChalk(void*) { ricviper_actions.emplace_back(2, -1); }
+
+template <typename Function>
+void PutSelectorEntry(DungeonCodeRva rva, Function* function) {
+  // A Win32 jump to the test callback replaces this fixture's engine entry.
+  std::array<uint8_t, 7> code{0xB8, 0, 0, 0, 0, 0xFF, 0xE0};
+  const auto destination = reinterpret_cast<uintptr_t>(function);
+  static_assert(sizeof(destination) == 4);
+  std::memcpy(code.data() + 1, &destination, sizeof(destination));
+  auto* entry = g_dungeon_base + rva;
+  DWORD previous = 0;
+  RequireCombat(VirtualProtect(entry, code.size(), PAGE_EXECUTE_READWRITE, &previous) &&
+      SafeWrite(entry, code.data(), code.size()) &&
+      FlushInstructionCache(GetCurrentProcess(), entry, code.size()),
+      "selector fixture entry");
+}
+
+void CheckRicViperSelector() {
+  g_dungeon_base = static_cast<uint8_t*>(VirtualAlloc(
+      nullptr, 0x368000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+  RequireCombat(g_dungeon_base != nullptr, "selector fixture allocation");
+  g_dungeon_image_variant = DungeonImageVariant::kFrenchGog;
+  PutSelectorEntry(kInventoryLookupRva, &RicViperInventory);
+  PutSelectorEntry(kSelectCloseCombatWeaponRva, &RicViperMelee);
+  PutSelectorEntry(kSelectRangedWeaponRva, &RicViperRanged);
+  PutSelectorEntry(kSelectSpellRva, &RicViperSpell);
+  PutSelectorEntry(kUseConsumableRva, &RicViperItem);
+  PutSelectorEntry(kUseChalkRva, &RicViperChalk);
+  std::array<uint8_t, 0x118> game_root{};
+  PutCombat(game_root.data() + 0x114, uintptr_t{1});
+  PutCombat(g_dungeon_base + kGameRootPointerRva,
+            reinterpret_cast<uintptr_t>(game_root.data()));
+  for (int item : {1, 8, 10, 14, 16, 21, 22, 23}) ricviper_inventory[item] = true;
+  const char warding[] = "Amulette";
+  const char healing[] = "Potion de sant\x82";
+  PutCombat(g_dungeon_base + kInventoryNamesRva + 22 * 4,
+            reinterpret_cast<uintptr_t>(warding));
+  PutCombat(g_dungeon_base + kInventoryNamesRva + 23 * 4,
+            reinterpret_cast<uintptr_t>(healing));
+  PutCombat(g_dungeon_base + kActiveSpellRva, int32_t{21});
+  g_xinput_ricviper_requested.store(true);
+  ApplyControllerLayout();
+
+  XINPUT_GAMEPAD pad{};
+  const auto poll = [&](WORD buttons, ULONGLONG elapsed = 0) {
+    test_time += elapsed;
+    pad.wButtons = buttons;
+    UpdateControllerSelector(pad, true);
+  };
+  const auto tap = [&](WORD direction) { poll(direction); poll(0, 20); };
+  const auto hold = [&](WORD direction) {
+    poll(direction);
+    poll(direction, g_xinput_selector_hold_ms);
+    RequireCombat(g_controller_selector.row_open, "RicViper hold opens the radial");
+  };
+  using Action = std::pair<int, int>;
+  hold(XINPUT_GAMEPAD_DPAD_RIGHT);
+  poll(0);
+  RequireCombat(ricviper_actions.empty(), "neutral right stick must not equip on release");
+  hold(XINPUT_GAMEPAD_DPAD_RIGHT);
+  pad.sThumbRX = 32767;
+  poll(XINPUT_GAMEPAD_DPAD_RIGHT | XINPUT_GAMEPAD_DPAD_UP);
+  RequireCombat(g_controller_selector.category == 2 && g_controller_selector.slot == 2,
+      "another direction must not replace the active radial");
+  const int32_t previous_deadzone = g_xinput_right_deadzone;
+  g_xinput_right_deadzone = 0;
+  pad.sThumbRX = 0;
+  poll(XINPUT_GAMEPAD_DPAD_RIGHT);
+  g_xinput_right_deadzone = previous_deadzone;
+  poll(0);
+  RequireCombat(ricviper_actions == std::vector<Action>{{2, 0x0F}},
+      "ranged slot must equip on release after a stick selection");
+  pad.sThumbRX = 0;
+  hold(XINPUT_GAMEPAD_DPAD_UP);
+  pad.sThumbRX = 32767;
+  poll(XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_B);
+  RequireCombat(g_controller_selector.row_open && g_controller_selector.commit_suppressed &&
+                    !g_controller_selector.cancelled,
+      "B must cancel the commit and leave the radial open");
+  poll(0);
+  RequireCombat(ricviper_actions.size() == 1, "release after B must not commit");
+
+  pad.sThumbRX = 0;
+  tap(XINPUT_GAMEPAD_DPAD_UP);
+  tap(XINPUT_GAMEPAD_DPAD_DOWN);
+  tap(XINPUT_GAMEPAD_DPAD_RIGHT);
+  tap(XINPUT_GAMEPAD_DPAD_UP);
+  RequireCombat(ricviper_actions == std::vector<Action>{
+      {2, 0x0F}, {1, 2}, {3, 16}, {2, 0x0F}, {1, 2}},
+      "taps must cycle, skip Firefly and restore weapon memory across categories");
+  PutCombat(g_dungeon_base + kActiveCloseCombatWeaponRva, int32_t{10});
+  g_ricviper_last_weapon_category = 2;
+  ricviper_inventory[10] = false;
+  tap(XINPUT_GAMEPAD_DPAD_RIGHT);
+  RequireCombat(ricviper_actions.back() == Action{2, 0x10},
+      "ranged cycling skips Chalk and wraps to an available weapon");
+  PutCombat(g_dungeon_base + kActiveCloseCombatWeaponRva, int32_t{8});
+  const auto before_wrap = ricviper_actions.size();
+  tap(XINPUT_GAMEPAD_DPAD_RIGHT);
+  RequireCombat(ricviper_actions.size() == before_wrap,
+      "tapping with only the equipped weapon available must not equip it again");
+  hold(XINPUT_GAMEPAD_DPAD_RIGHT);
+  pad.sThumbRX = -32768;
+  pad.sThumbRY = 32767;
+  poll(XINPUT_GAMEPAD_DPAD_RIGHT);
+  poll(0);
+  RequireCombat(ricviper_actions.back() == Action{2, -1} &&
+                    g_controller_selector.remembered_slot[1] == 7u &&
+                    g_ricviper_equipped_slots[1] == 0,
+      "Chalk updates radial memory without replacing the last equipped weapon");
+  pad = {};
+
+  tap(XINPUT_GAMEPAD_DPAD_LEFT);
+  RequireCombat(ricviper_actions.back() == Action{4, 23},
+      "quick heal searches localized item names");
+  const char life[] = "Potion of Life";
+  PutCombat(g_dungeon_base + kInventoryNamesRva + 23 * 4,
+            reinterpret_cast<uintptr_t>(life));
+  const auto before_life = ricviper_actions.size();
+  tap(XINPUT_GAMEPAD_DPAD_LEFT);
+  RequireCombat(ricviper_actions.size() == before_life + 1 &&
+                    ricviper_actions.back() == Action{4, 23},
+      "quick heal recognizes RicViper's life token");
+  g_xinput_quick_heal_slot = 1;
+  tap(XINPUT_GAMEPAD_DPAD_LEFT);
+  RequireCombat(ricviper_actions.back() == Action{4, 22}, "explicit quick-heal slot wins");
+  hold(XINPUT_GAMEPAD_DPAD_LEFT);
+  const auto before = ricviper_actions.size();
+  poll(XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_B);
+  poll(XINPUT_GAMEPAD_DPAD_LEFT);
+  poll(XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_A);
+  poll(XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_A);
+  poll(XINPUT_GAMEPAD_DPAD_LEFT);
+  poll(XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_A);
+  RequireCombat(ricviper_actions.size() == before + 2 && g_controller_selector.row_open,
+      "each new A press uses one item even after B disarms release confirmation");
+  poll(0);
+  hold(XINPUT_GAMEPAD_DPAD_LEFT);
+  const auto before_focus = ricviper_actions.size();
+  test_foreground = false;
+  PollOpenControllerSelectorForPresentation();
+  test_foreground = true;
+  RequireCombat(!g_controller_selector.row_open && g_ricviper_dpad_waiting_for_release,
+      "presentation polling must discard the radial as soon as focus is lost");
+  poll(XINPUT_GAMEPAD_DPAD_LEFT);
+  poll(0, 20);
+  RequireCombat(ricviper_actions.size() == before_focus,
+      "releasing a direction held through focus loss must not quick-heal");
+  tap(XINPUT_GAMEPAD_DPAD_LEFT);
+  RequireCombat(ricviper_actions.size() == before_focus + 1,
+      "a new tap after neutral must quick-heal normally");
+  hold(XINPUT_GAMEPAD_DPAD_LEFT);
+  g_xinput_ricviper_requested.store(false);
+  ApplyControllerLayout();
+  RequireCombat(!g_xinput_ricviper && !g_controller_selector.row_open &&
+      !captured_gameplay && !captured_combat.Consume(),
+      "switching layouts releases pending selector, movement and combat");
+  g_xinput_quick_heal_slot = 0;
+  VirtualFree(g_dungeon_base, 0, MEM_RELEASE);
+  g_dungeon_base = nullptr;
+}
 }
 
 int main() {
@@ -229,5 +400,6 @@ int main() {
     g_xinput_controller_present.store(false);
   }
   RequireCombat(test_turns > 0, "bounded turn writer must be exercised");
+  CheckRicViperSelector();
   std::cout << "Selector combat: F1-F4, all four controller radials, RT direction/taps, independent selection, attack-facing, frontend/focus/disconnect guards and four layouts passed\n";
 }

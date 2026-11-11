@@ -4,6 +4,8 @@
 #define PollDeathtrapFrontendXInput TestPollFrontend
 #define SubmitDeathtrapPhysicalMouseDelta TestSubmitMouse
 #define DeathtrapGameplayAcceptsMouseCombat TestAcceptsCombat
+#define DeathtrapGameplayAcceptsControllerCombat TestAcceptsCombat
+#define DeathtrapRangedWeaponSelected TestRangedWeaponSelected
 #include "../src/dinput_native_proxy.cc"
 #include "../src/controller_vibration.h"
 #include <iostream>
@@ -14,6 +16,7 @@ static bool accepts_combat = false;
 static bool physical_control_down = false;
 bool TestCameraConsumesMouse() { return owns_mouse; }
 bool TestAcceptsCombat() { return accepts_combat; }
+bool TestRangedWeaponSelected() { return true; }
 void TestPollFrontend() {}
 void TestSubmitMouse(int32_t x, int32_t y) {
   received_x += x; received_y += y;
@@ -166,6 +169,24 @@ int main() {
   HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
   if (!(keyboard_state[DIK_LCONTROL] & 0x80u) ||
       !(keyboard_state[native_scan(KeyboardAction::kAttack)] & 0x80u)) return 16;
+  g_physical_left_button_down.store(false);
+  physical_control_down = false;
+  g_xinput_gameplay_commands.store(CommandBit(Command::kStepBackward) |
+      CommandBit(Command::kKeepMovementDuringAttack));
+  SubmitDeathtrapXInputCombatState(true, false, false, false, false);
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if (!(keyboard_state[DIK_LCONTROL] & 0x80u) ||
+      !(keyboard_state[native_scan(KeyboardAction::kMoveBackward)] & 0x80u) ||
+      !(keyboard_state[native_scan(KeyboardAction::kAttack)] & 0x80u)) return 24;
+  g_xinput_gameplay_commands.store(CommandBit(Command::kRightSidestep) |
+      CommandBit(Command::kKeepMovementDuringAttack));
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if (!(keyboard_state[native_scan(KeyboardAction::kSidestepRight)] & 0x80u) ||
+      !(keyboard_state[native_scan(KeyboardAction::kAttack)] & 0x80u) ||
+      (keyboard_state[DIK_LCONTROL] & 0x80u)) return 25;
+  g_xinput_gameplay_commands.store(CommandBit(Command::kRightSidestep));
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if (keyboard_state[native_scan(KeyboardAction::kSidestepRight)] & 0x80u) return 26;
   std::cout << "PASS actual callbacks: keyboard 3 preserved; motion counted once; "
                "peek, buttons and menu axes preserved; vibration gain clamps; "
                "LB/RB step chords, spell release/rebinding and mouse priority preserved\n";

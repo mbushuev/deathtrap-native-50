@@ -851,9 +851,10 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     const bool keyboard_frontend_command =
         (keyboard[DIK_P] & 0x80u) != 0u ||
         (keyboard[DIK_ESCAPE] & 0x80u) != 0u;
+    const uint32_t controller_commands =
+        g_xinput_gameplay_commands.load(std::memory_order_acquire);
     const auto controller_plan =
-        deathtrap::input::ResolveRetailKeyboardPlan(
-            g_xinput_gameplay_commands.load(std::memory_order_acquire));
+        deathtrap::input::ResolveRetailKeyboardPlan(controller_commands);
     const auto merge_controller_key = [keyboard](uint8_t scan, bool down) {
       if (down) {
         keyboard[scan] |= 0x80u;
@@ -902,6 +903,9 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     const bool controller_attack = (controller_combat & 0x01u) != 0u;
     const bool mouse_accepts_combat = DeathtrapGameplayAcceptsMouseCombat();
     const bool physical_attack = physical_left_button && mouse_accepts_combat;
+    const bool keep_controller_movement = controller_attack && !physical_attack &&
+        deathtrap::input::CommandActive(
+            controller_commands, deathtrap::input::Command::kKeepMovementDuringAttack);
     if (!physical_attack && controller_attack) {
       forward = (controller_combat & 0x02u) != 0u;
       backward = (controller_combat & 0x04u) != 0u;
@@ -1029,13 +1033,22 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
       if (combat_plan.key_d) {
         keyboard[DIK_D] |= 0x80u;
       }
+      if (keep_controller_movement) {
+        merge_controller_key(DIK_W, controller_plan.w);
+        merge_controller_key(DIK_S, controller_plan.s);
+        merge_controller_key(DIK_A, controller_plan.a);
+        merge_controller_key(DIK_D, controller_plan.d);
+        merge_controller_key(DIK_J, controller_plan.j);
+        merge_controller_key(DIK_K, controller_plan.k);
+      }
     }
     if (combat_plan.modifier_down) {
       keyboard[DIK_F] |= 0x80u;
       // A physical mouse attack can coincide with LB. Do not let the
       // controller's cautious-step Ctrl compete with its retail F+direction
       // attack. A real keyboard Ctrl retains its original behavior.
-      if (controller_plan.left_control && !keyboard_walk_step) {
+      if (controller_plan.left_control && !keyboard_walk_step &&
+          !keep_controller_movement) {
         keyboard[DIK_LCONTROL] &= static_cast<uint8_t>(~0x80u);
       }
     }

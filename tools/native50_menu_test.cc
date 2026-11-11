@@ -556,6 +556,7 @@ void WritePagePreview(const std::filesystem::path& game,const std::filesystem::p
       navigation.selected=row;
       g_keyboard_mouse_camera_relative_movement=state!=1;
       g_xinput_camera_relative_movement=state==0;
+      g_xinput_ricviper_requested.store(state%2==0);
       g_keep_bodies_enabled.store(state%2==0);
       g_e3_model_available.store(state!=2);
       g_e3_model_requested.store(state%2==0);
@@ -565,6 +566,7 @@ void WritePagePreview(const std::filesystem::path& game,const std::filesystem::p
       DrawNative50Page(navigation);
     }
     g_keyboard_mouse_camera_relative_movement=g_xinput_camera_relative_movement=true;
+    g_xinput_ricviper_requested.store(false);
     g_hardware_save_error_row=-1;navigation.selected=preview_interface ? 8 : 5;g_model_archive_selection.store(2);DrawNative50Page(navigation);
     }
     for (int y=0;y<480;++y) for (int x=0;x<640;++x) {

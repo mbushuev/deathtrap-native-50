@@ -169,6 +169,84 @@ int wmain(int argc, wchar_t** argv) {
   UpdateControllerBaseBindings(pad, true, false);
   Require(!CommandActive(captured_commands, Command::kCastSpell),
           "holding menu Back into gameplay must not cast");
+
+  g_xinput_ricviper_requested.store(true);
+  ApplyControllerLayout();
+  pad = {};
+  UpdateControllerBaseBindings(pad, true, false);
+  pad.wButtons = XINPUT_GAMEPAD_RIGHT_SHOULDER;
+  UpdateControllerBaseBindings(pad, true, false);
+  Require(captured_commands == CommandBit(Command::kCastSpell),
+          "RicViper moves spellcasting to RB");
+  pad.wButtons = XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_LEFT_SHOULDER;
+  pad.bRightTrigger = 255;
+  pad.sThumbLY = -28500;
+  UpdateControllerBaseBindings(pad, true, false);
+  Require(g_xinput_native_joystick_y_milli.load() < 0 &&
+              g_xinput_native_joystick_x_milli.load() == 0 &&
+              captured_commands == CommandBit(Command::kKeepMovementDuringAttack),
+          "B wins over LB and keeps backward movement without turning during RT");
+  pad.sThumbLX = 8000;
+  UpdateControllerBaseBindings(pad, true, false);
+  Require(g_xinput_native_joystick_y_milli.load() < 0 &&
+              g_xinput_native_joystick_x_milli.load() > 0 &&
+              CommandActive(captured_commands, Command::kKeepMovementDuringAttack),
+          "B + RT permits native steering during diagonal retreat");
+  pad.sThumbLY = 0;
+  pad.sThumbLX = 32767;
+  UpdateControllerBaseBindings(pad, true, false);
+  Require(!CommandActive(captured_commands, Command::kRightSidestep),
+          "backward mode remains latched until the stick centers");
+  pad.sThumbLX = 0;
+  UpdateControllerBaseBindings(pad, true, false);
+  pad.sThumbLX = 32767;
+  UpdateControllerBaseBindings(pad, true, false);
+  Require(CommandActive(captured_commands, Command::kRightSidestep),
+          "after centering, a horizontal deflection starts a sidestep");
+  g_controller_selector.row_open = g_controller_selector.direction_down = true;
+  g_controller_selector.category = 4;
+  pad = {};
+  pad.wButtons = XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_A;
+  pad.sThumbLY = 29000;
+  pad.sThumbRX = 32767;
+  UpdateControllerBaseBindings(pad, true, true);
+  Require(g_xinput_native_joystick_y_milli.load() > 0 &&
+              !CommandActive(captured_commands, Command::kJumpClimb),
+          "the RicViper radial retains left-stick locomotion and captures A");
+  pad.bRightTrigger = 255;
+  UpdateControllerBaseBindings(pad, true, true);
+  Require(!g_xinput_native_joystick_y_milli.load() &&
+              !CommandActive(captured_commands, Command::kKeepMovementDuringAttack),
+          "RT can still take the stick for directional attacks in the RicViper radial");
+  pad.wButtons = XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_B;
+  pad.sThumbLY = 0;
+  pad.sThumbLX = 32767;
+  UpdateControllerBaseBindings(pad, true, true);
+  Require(CommandActive(captured_commands, Command::kRightSidestep) &&
+              CommandActive(captured_commands, Command::kKeepMovementDuringAttack),
+          "B must still hold the stick for tank movement when the radial is open");
+  pad = {};
+  pad.wButtons = XINPUT_GAMEPAD_RIGHT_SHOULDER;
+  UpdateControllerSelector(pad, true);
+  UpdateControllerBaseBindings(pad, true, false);
+  Require(!CommandActive(captured_commands, Command::kCastSpell),
+          "RB during radial release must not cast");
+  UpdateControllerBaseBindings({}, true, false);
+  UpdateControllerBaseBindings(pad, true, false);
+  Require(CommandActive(captured_commands, Command::kCastSpell),
+          "fresh RB after radial release must cast");
+  pad.wButtons = XINPUT_GAMEPAD_B;
+  UpdateControllerBaseBindings(pad, false, false);
+  Require(CommandActive(captured_commands, Command::kMenu),
+          "RicViper keeps B as frontend Back");
+  g_xinput_ricviper_requested.store(false);
+  ApplyControllerLayout();
+  UpdateControllerBaseBindings({}, true, false);
+  pad = {};
+  pad.wButtons = XINPUT_GAMEPAD_B;
+  UpdateControllerBaseBindings(pad, true, false);
+  Require(captured_commands == CommandBit(Command::kCastSpell),
+          "returning to Standard restores B to spellcasting");
   ReleaseInjectedControllerInput();
   Require(captured_commands == 0, "focus-loss/disconnect must release commands");
   std::cout << "RB native J/K and Ctrl+W/S, release and B ownership passed\n";

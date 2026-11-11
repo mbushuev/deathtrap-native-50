@@ -10,7 +10,7 @@
 namespace deathtrap::settings {
 
 enum class ControlRow : uint8_t { kMovement, kInvertX, kInvertY, kKeepBodies, kHeroineModel, kBodyWounds,
-  kSelectorSlowMotion, kSelectorSpeed, kInterfaceScale, kCount };
+  kSelectorSlowMotion, kSelectorSpeed, kInterfaceScale, kControllerLayout, kCount };
 
 struct Controls {
   bool keyboard_modern = true;
@@ -23,6 +23,7 @@ struct Controls {
   bool selector_slow_motion = true;
   int selector_speed = 25;
   int interface_scale = 100;
+  bool controller_ricviper = false;
 };
 
 constexpr int kControlLeft = 104;
@@ -53,6 +54,7 @@ constexpr Controls ToggleControl(Controls value, ControlRow row) {
     case ControlRow::kHeroineModel: value.e3_model = !value.e3_model; break;
     case ControlRow::kBodyWounds: value.body_wounds = !value.body_wounds; break;
     case ControlRow::kSelectorSlowMotion: value.selector_slow_motion = !value.selector_slow_motion; break;
+    case ControlRow::kControllerLayout: value.controller_ricviper = !value.controller_ricviper; break;
     case ControlRow::kSelectorSpeed: case ControlRow::kInterfaceScale: break;
     case ControlRow::kCount: break;
   }
@@ -69,6 +71,7 @@ constexpr Controls SetControl(Controls value, ControlRow row, bool enabled) {
     case ControlRow::kHeroineModel: value.e3_model = enabled; break;
     case ControlRow::kBodyWounds: value.body_wounds = enabled; break;
     case ControlRow::kSelectorSlowMotion: value.selector_slow_motion = enabled; break;
+    case ControlRow::kControllerLayout: value.controller_ricviper = enabled; break;
     case ControlRow::kSelectorSpeed: case ControlRow::kInterfaceScale: break;
     case ControlRow::kCount: break;
   }
@@ -89,11 +92,11 @@ inline Controls ChangeControl(Controls value, ControlRow row, int requested) {
 }
 
 inline const char* ControlLabel(text::Language language, ControlRow row) {
-  constexpr const char* labels[4][9] = {
-      {"Movement", "Invert camera X", "Invert camera Y", "Keep bodies", "Heroine model", "Show wounds", "Selector slow motion", "Selection world speed", "Interface scale"},
-      {"D\x82placements", "Inverser cam\x82ra X", "Inverser cam\x82ra Y", "Garder les corps", "Mod\x8Ale h\x82ro\x8Bne", "Afficher blessures", "Ralenti de s\x82lection", "Vitesse du monde", "Taille interface"},
-      {"Bewegung", "Kamera X umkehren", "Kamera Y umkehren", "Leichen behalten", "Heldinnenmodell", "Wunden anzeigen", "Auswahl-Zeitlupe", "Spieltempo bei Auswahl", "Interface-Gr\x94sse"},
-      {"Movimento", "Inverti telecamera X", "Inverti telecamera Y", "Conserva corpi", "Modello eroina", "Mostra ferite", "Rallenta selezione", "Velocit\x85 del mondo", "Scala interfaccia"},
+  constexpr const char* labels[4][10] = {
+      {"Movement", "Invert camera X", "Invert camera Y", "Keep bodies", "Heroine model", "Show wounds", "Selector slow motion", "Selection world speed", "Interface scale", "Gamepad layout"},
+      {"D\x82placements", "Inverser cam\x82ra X", "Inverser cam\x82ra Y", "Garder les corps", "Mod\x8Ale h\x82ro\x8Bne", "Afficher blessures", "Ralenti de s\x82lection", "Vitesse du monde", "Taille interface", "Touches manette"},
+      {"Bewegung", "Kamera X umkehren", "Kamera Y umkehren", "Leichen behalten", "Heldinnenmodell", "Wunden anzeigen", "Auswahl-Zeitlupe", "Spieltempo bei Auswahl", "Interface-Gr\x94sse", "Gamepad-Belegung"},
+      {"Movimento", "Inverti telecamera X", "Inverti telecamera Y", "Conserva corpi", "Modello eroina", "Mostra ferite", "Rallenta selezione", "Velocit\x85 del mondo", "Scala interfaccia", "Comandi gamepad"},
   };
   const auto index = static_cast<size_t>(row);
   const auto lang = static_cast<size_t>(language);
@@ -111,6 +114,7 @@ inline const char* ControlValue(text::Language language, ControlRow row,
   };
   size_t index = 0;
   if (row == ControlRow::kHeroineModel) return value.e3_model ? "E3 1997" : "Original";
+  if (row == ControlRow::kControllerLayout) return value.controller_ricviper ? "RicViper" : "Standard";
   if (row == ControlRow::kSelectorSpeed || row == ControlRow::kInterfaceScale) {
     static thread_local char percent[16];
     std::snprintf(percent,sizeof(percent),"%d%%",row == ControlRow::kSelectorSpeed ? value.selector_speed : value.interface_scale);

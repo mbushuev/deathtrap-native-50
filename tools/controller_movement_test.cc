@@ -246,6 +246,27 @@ int main() {
               !resolve(immersive, -1.0, 0.0, true).run,
           "immersive LB strafe must expose its complete vector without J/K");
 
+  using deathtrap::input::TankDirection;
+  auto ricviper = normal;
+  ricviper.tank_direction = TankDirection::kForward;
+  const auto forward_turn = resolve(ricviper, 0.6, 0.0);
+  Require(forward_turn.walking && forward_turn.heading_active &&
+              forward_turn.joystick_x == 0.0 && forward_turn.joystick_y == 0.6 &&
+              !forward_turn.sidestep_right,
+          "B forward-latch must preserve camera-relative locomotion when the stick turns sideways");
+  ricviper.tank_direction = TankDirection::kBackward;
+  const auto cautious_retreat = resolve(ricviper, 0.12, -0.3);
+  Require(cautious_retreat.cautious && cautious_retreat.step_backward &&
+              !cautious_retreat.heading_active && cautious_retreat.joystick_x == 0.12,
+          "gentle B retreat must issue Ctrl+S with native steering");
+  const auto run_retreat = resolve(ricviper, 0.6, -0.8);
+  Require(run_retreat.run && run_retreat.joystick_x == 0.6 &&
+              run_retreat.joystick_y == -0.8 && !run_retreat.heading_active,
+          "B retreat must use the full stick magnitude for running");
+  Require(resolve(ricviper, 0.2, -0.36).cautious &&
+              !resolve(ricviper, 0.2, -0.36, false, true).cautious,
+          "B retreat must use the full magnitude for walking hysteresis");
+
   ControllerMovementContext fallback;
   const auto fallback_turn = resolve(fallback, 0.25, 0.0);
   Require(fallback_turn.key_right && !fallback_turn.key_forward &&
