@@ -2,11 +2,27 @@
 
 ## Acknowledgements
 
-Thanks to the community members who helped test public builds:
+Thanks to the community members who contributed to the project and tested
+public builds:
 
+- **RicViper** — designed and originally implemented the optional gamepad layout.
 - `dbdk422a`
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
+
+## 0.0.240 — RicViper gamepad controls
+
+- Add **RicViper** as an optional gamepad layout on page 2 of **Setup → Native 50**.
+  **Standard** is the default. The selection saves and takes effect immediately.
+- Cast spells with **RB** and hold **B** for sidesteps, controlled retreats and
+  precise movement. **B + RT** keeps the left stick on movement while attacking.
+- Tap the D-pad to cycle equipment or heal. The layout remembers the last melee
+  and ranged weapons separately. Hold the D-pad for radial selection with the
+  right stick. Release to select weapons and spells, or press **A** to use a
+  potion or charm while keeping the wheel open.
+
+See the [RicViper gamepad guide](docs/RICVIPER-CONTROLS.md) for button mappings,
+movement examples and quick-heal settings.
 
 ## 0.0.239 — Skeleton deaths
 

@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current version: **0.0.239**
+Current version: **0.0.240**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -9,7 +9,7 @@ Current version: **0.0.239**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.239.png" alt="Deathtrap Native 50 v0.0.239" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.240.png" alt="Deathtrap Native 50 v0.0.240: Red Lotus facing the Spire gate" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -53,8 +53,10 @@ Required wrapper runtime files are redistributed under their published terms.
 - Camera-relative Xbox-compatible controller movement with faster, more
   responsive turning while retaining the original animation and collision.
 - Separate left-stick zones for turning in place, walking and running, with
-  cautious camera-relative movement on LB, native side-steps on RB and spell
-  casting on B.
+  cautious camera-relative movement on LB. The default **Standard** layout
+  puts side-steps on RB and spellcasting on B.
+- Optional [RicViper gamepad layout](docs/RICVIPER-CONTROLS.md) with a movement
+  modifier on B, spellcasting on RB, quick healing and weapon recall.
 - Full controller support in gameplay, menus, loading screens and movies,
   including menu navigation and a right-stick pointer.
 - Radial inventory selector with the game's own icons for melee, ranged,
@@ -214,7 +216,7 @@ requires its configuration and additional native bindings in
 
 ## Installation
 
-Download `Deathtrap-Native-50-0.0.239-Setup.exe` for Windows. Close the game,
+Download `Deathtrap-Native-50-0.0.240-Setup.exe` for Windows. Close the game,
 run the installer, select the folder containing `DD_CD.EXE`, and
 choose **Install**. The EXE contains the complete Windows patch, preserves
 current Native 50 preferences by default, and creates a rollback copy before
@@ -473,8 +475,14 @@ slot screens and save-file format.
 
 ### Xbox-compatible controller
 
+The controls below describe **Standard**, the default gamepad layout. To try
+**RicViper**, open **Setup → Native 50 → Page 2 → Gamepad layout**. The game saves
+your choice and applies it immediately. See the
+[RicViper gamepad guide](docs/RICVIPER-CONTROLS.md) for its button mappings and
+radial menu behavior.
+
 > [!IMPORTANT]
-> **Gamepad controls changed in 0.0.233 on Steam Deck and Windows.** Spells
+> **Standard gamepad controls changed in 0.0.233 on Steam Deck and Windows.** Spells
 > moved from **RB to B**. **LB** is now cautious camera-relative movement;
 > **RB** is native side-steps and cautious forward/backward steps without
 > turning. **B** still goes back or cancels in menus and selectors.
@@ -597,8 +605,11 @@ See [Publishing releases](docs/RELEASING.md) for the exact procedure.
 
 ## Acknowledgements
 
-Thanks to the community members who helped test public builds:
+Thanks to the community members who contributed to the project and tested
+public builds:
 
+- **RicViper** — designed and originally implemented the
+  [optional RicViper gamepad layout](docs/RICVIPER-CONTROLS.md).
 - `dbdk422a`
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
