@@ -336,8 +336,9 @@ bool ControllerCursorAxesOwnInput() {
 }
 
 void PublishPhysicalLeftButtonState(bool down) {
-  if (down) {
-    // Combat direction owns W/A/S/D immediately, even if the mouse device is
+  const bool ranged_weapon_selected = down && DeathtrapRangedWeaponSelected();
+  if (down && !ranged_weapon_selected) {
+    // Melee direction owns W/A/S/D immediately, even if the mouse device is
     // sampled after the keyboard device in this engine tick.
     SubmitDeathtrapThirdPersonKeyboardMovement(0, 0);
   }
@@ -349,7 +350,8 @@ void PublishPhysicalLeftButtonState(bool down) {
                                                   std::memory_order_release);
       if (deathtrap::input::ShouldQueueMouseAttackCameraFacing(
               true, DeathtrapGameplayAcceptsMouseCombat(),
-              DeathtrapThirdPersonMouseAttackCameraRelativeAvailable())) {
+              DeathtrapThirdPersonMouseAttackCameraRelativeAvailable(),
+              ranged_weapon_selected)) {
         RequestDeathtrapThirdPersonMouseAttackFacing();
       }
     }
@@ -903,10 +905,11 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     const bool controller_attack = (controller_combat & 0x01u) != 0u;
     const bool mouse_accepts_combat = DeathtrapGameplayAcceptsMouseCombat();
     const bool physical_attack = physical_left_button && mouse_accepts_combat;
+    const bool ranged_weapon_selected = DeathtrapRangedWeaponSelected();
     const bool keep_controller_movement = controller_attack && !physical_attack &&
         deathtrap::input::CommandActive(
             controller_commands, deathtrap::input::Command::kKeepMovementDuringAttack);
-    if (!physical_attack && controller_attack) {
+    if (!physical_attack && controller_attack && !ranged_weapon_selected) {
       forward = (controller_combat & 0x02u) != 0u;
       backward = (controller_combat & 0x04u) != 0u;
       left = (controller_combat & 0x08u) != 0u;
@@ -916,8 +919,6 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     const bool gameplay_accepts_combat =
         physical_attack || (controller_attack
             ? DeathtrapGameplayAcceptsControllerCombat() : mouse_accepts_combat);
-    const bool ranged_weapon_selected =
-        gameplay_accepts_combat && DeathtrapRangedWeaponSelected();
     auto combat_plan =
         deathtrap::input::ResolveMouseCombatKeyboardPlan(
             attack_button, gameplay_accepts_combat, immersive_vector,
@@ -989,7 +990,8 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     keyboard_camera_context.heading_reference_valid =
         keyboard_camera_runtime_available;
     keyboard_camera_context.combat_modifier =
-        keyboard_attack || attack_button || mouse_attack_facing_owns_input;
+        mouse_attack_facing_owns_input ||
+        (!ranged_weapon_selected && (keyboard_attack || attack_button));
     keyboard_camera_context.run_modifier = keyboard_run;
     keyboard_camera_context.jump_climb_modifier = keyboard_jump;
     keyboard_camera_context.walk_step_modifier = keyboard_walk_step;
@@ -1013,7 +1015,7 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
     } else {
       SubmitDeathtrapImmersiveKeyboardMovement(0, 0);
     }
-    if (combat_plan.modifier_down ||
+    if (combat_plan.RewritesAttackMovement() ||
         combat_plan.rewrite_immersive_movement) {
       keyboard[DIK_W] &= static_cast<uint8_t>(~0x80u);
       keyboard[DIK_S] &= static_cast<uint8_t>(~0x80u);
@@ -1047,7 +1049,8 @@ HRESULT STDMETHODCALLTYPE HookDirectInputDeviceGetState(
       // A physical mouse attack can coincide with LB. Do not let the
       // controller's cautious-step Ctrl compete with its retail F+direction
       // attack. A real keyboard Ctrl retains its original behavior.
-      if (controller_plan.left_control && !keyboard_walk_step &&
+      if (combat_plan.RewritesAttackMovement() &&
+          controller_plan.left_control && !keyboard_walk_step &&
           !keep_controller_movement) {
         keyboard[DIK_LCONTROL] &= static_cast<uint8_t>(~0x80u);
       }

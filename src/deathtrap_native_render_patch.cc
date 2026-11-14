@@ -13925,6 +13925,10 @@ void UpdateMouseAttackCameraFacing(void* outer_player) {
       phase == DeathtrapMouseAttackFacingPhase::kCanceled) {
     return;
   }
+  if (DeathtrapRangedWeaponSelected()) {
+    CancelMouseAttackCameraFacing("ranged_weapon");
+    return;
+  }
 
   const uint64_t now_ms = GetTickCount64();
   const uint64_t started_ms =
@@ -14588,17 +14592,19 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         pad.bRightTrigger >= g_xinput_trigger_threshold;
     const auto mouse_facing = GetDeathtrapThirdPersonMouseAttackFacingPhase();
     const bool controller_combat_owns_stick =
-        (controller_attack && !tank_modifier) ||
-        ((cautious_strafe_modifier || tank_modifier) &&
-         (DeathtrapPhysicalMouseCombatActive() ||
-          (mouse_facing != DeathtrapMouseAttackFacingPhase::kIdle &&
-           mouse_facing != DeathtrapMouseAttackFacingPhase::kCanceled)));
+        !DeathtrapRangedWeaponSelected() &&
+        ((controller_attack && !tank_modifier) ||
+         ((cautious_strafe_modifier || tank_modifier) &&
+          (DeathtrapPhysicalMouseCombatActive() ||
+           (mouse_facing != DeathtrapMouseAttackFacingPhase::kIdle &&
+            mouse_facing != DeathtrapMouseAttackFacingPhase::kCanceled))));
     int32_t desired_heading = 0;
     int32_t current_heading = 0;
     uintptr_t current_controller = 0;
     const bool native_joystick_available =
         g_native_joystick_hooks_installed.load(std::memory_order_acquire);
-    // RT selects attack direction unless RicViper's B modifier owns movement.
+    // RT selects melee direction. Ranged weapons and RicViper's B modifier
+    // keep the normal movement path.
     bool desired_heading_valid = false;
     if (custom_head_movement) {
       desired_heading_valid = DeathtrapImmersiveVectorLocomotionActive();
