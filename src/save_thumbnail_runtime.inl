@@ -2,7 +2,10 @@
 // writer and give it a full frame at the logical size it already expects.
 constexpr DungeonCodeRva kSaveThumbnailCaptureRva{0x97D10u};
 constexpr DungeonCodeRva kSaveThumbnailConvertRva{0x97DB0u};
+static_assert(sizeof(DDSURFACEDESC) == 0x6c);
 using SaveThumbnailCaptureFn = int(__cdecl*)(uint8_t*);
+// The native converter receives width first. Its caller reads this RGB buffer
+// back as tightly packed rows at the logical render width.
 using SaveThumbnailConvertFn = void(__cdecl*)(uint8_t*, int, int, DDSURFACEDESC);
 SaveThumbnailCaptureFn g_original_save_thumbnail_capture = nullptr;
 SaveThumbnailConvertFn g_original_save_thumbnail_convert = nullptr;
@@ -20,13 +23,15 @@ int __cdecl HookSaveThumbnailCapture(uint8_t* rgb) {
   return result;
 }
 
-bool ResizeSaveThumbnailFrame(uint8_t* output, int height, int width,
+bool ResizeSaveThumbnailFrame(uint8_t* output, int width, int height,
                               const DDSURFACEDESC& surface) {
   const auto& format = surface.ddpfPixelFormat;
   if (!output || !surface.lpSurface || width <= 0 || height <= 0 ||
       static_cast<int64_t>(width) * height > 0x240000 / 3 ||
-      surface.dwWidth <= static_cast<DWORD>(width) ||
-      surface.dwHeight <= static_cast<DWORD>(height) ||
+      surface.dwWidth < static_cast<DWORD>(width) ||
+      surface.dwHeight < static_cast<DWORD>(height) ||
+      (surface.dwWidth == static_cast<DWORD>(width) &&
+       surface.dwHeight == static_cast<DWORD>(height)) ||
       surface.dwWidth > 8192 || surface.dwHeight > 8192 ||
       format.dwRGBBitCount != 16 || format.dwRBitMask != 0xf800 ||
       format.dwGBitMask != 0x07e0 || format.dwBBitMask != 0x001f ||
@@ -54,15 +59,15 @@ bool ResizeSaveThumbnailFrame(uint8_t* output, int height, int width,
   return true;
 }
 
-void __cdecl HookSaveThumbnailConvert(uint8_t* output, int height, int width,
+void __cdecl HookSaveThumbnailConvert(uint8_t* output, int width, int height,
                                       DDSURFACEDESC surface) {
   if (g_save_thumbnail_capture &&
-      ResizeSaveThumbnailFrame(output, height, width, surface)) {
+      ResizeSaveThumbnailFrame(output, width, height, surface)) {
     AppendDeathtrapSupportLog("support_save thumbnail=%lux%lu logical=%dx%d",
                               surface.dwWidth, surface.dwHeight, width, height);
     return;
   }
-  g_original_save_thumbnail_convert(output, height, width, surface);
+  g_original_save_thumbnail_convert(output, width, height, surface);
 }
 
 bool InstallSaveThumbnailHooks() {

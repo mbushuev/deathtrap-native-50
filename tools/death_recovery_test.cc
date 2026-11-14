@@ -188,6 +188,77 @@ void StubNative(uintptr_t rva, void* replacement) {
   Require(MH_CreateHook(target,replacement,&trampoline)==MH_OK &&
       MH_EnableHook(target)==MH_OK,"isolate native resource work in mapped lifecycle test");
 }
+
+DDSURFACEDESC thumbnail_surface{};
+bool thumbnail_unlocked = false;
+
+void* __cdecl LockThumbnailFixture(DDSURFACEDESC* surface) {
+  Require(DeathtrapSaveThumbnailCaptureActive(), "save capture must own the surface lock");
+  *surface = thumbnail_surface;
+  return surface->lpSurface;
+}
+
+HRESULT __stdcall UnlockThumbnailFixture(void*, void*) {
+  thumbnail_unlocked = true;
+  return S_OK;
+}
+
+void NativeSaveThumbnail() {
+  constexpr int kLogicalWidth = 800;
+  constexpr int kLogicalHeight = 600;
+  constexpr int kPhysicalWidth = 2880;
+  constexpr int kPhysicalHeight = 1800;
+  constexpr int kPitchPixels = 2944;
+  std::vector<uint16_t> pixels(kPitchPixels * kPhysicalHeight, 0x001f);
+  for (int y = 0; y < kPhysicalHeight; ++y) {
+    auto row = pixels.begin() + y * kPitchPixels;
+    std::fill(row + 240, row + 1440, y < 900 ? 0xf800 : 0x001f);
+    std::fill(row + 1440, row + 2640, y < 900 ? 0x07e0 : 0xffff);
+  }
+  thumbnail_surface = {};
+  thumbnail_surface.dwSize = sizeof(DDSURFACEDESC);
+  thumbnail_surface.dwWidth = kPhysicalWidth;
+  thumbnail_surface.dwHeight = kPhysicalHeight;
+  thumbnail_surface.lPitch = kPitchPixels * sizeof(uint16_t);
+  thumbnail_surface.lpSurface = pixels.data();
+  thumbnail_surface.ddpfPixelFormat.dwRGBBitCount = 16;
+  thumbnail_surface.ddpfPixelFormat.dwRBitMask = 0xf800;
+  thumbnail_surface.ddpfPixelFormat.dwGBitMask = 0x07e0;
+  thumbnail_surface.ddpfPixelFormat.dwBBitMask = 0x001f;
+  thumbnail_unlocked = false;
+
+  std::array<void*, 33> methods{};
+  methods[32] = reinterpret_cast<void*>(&UnlockThumbnailFixture);
+  void** fake_surface = methods.data();
+  const auto set_native_operand = [](size_t offset, auto value) {
+    uintptr_t address = 0;
+    Require(SafeReadValue(g_dungeon_base + kSaveThumbnailCaptureRva + offset, &address) &&
+                SafeWrite(reinterpret_cast<void*>(address), &value, sizeof(value)),
+            "initialize the actual game's save capture operands");
+  };
+  set_native_operand(0x27, int32_t{kLogicalHeight});
+  set_native_operand(0x2D, int32_t{kLogicalWidth});
+  set_native_operand(0x45, &fake_surface);
+  StubNative(0x97D80u, reinterpret_cast<void*>(&LockThumbnailFixture));
+
+  std::vector<uint8_t> rgb(kLogicalWidth * kLogicalHeight * 3, 0xcc);
+  const auto capture = reinterpret_cast<SaveThumbnailCaptureFn>(
+      g_dungeon_base + kSaveThumbnailCaptureRva);
+  Require(capture(rgb.data()) == 1 && thumbnail_unlocked &&
+              !DeathtrapSaveThumbnailCaptureActive(),
+          "native capture must convert and unlock the physical frame");
+  const auto at = [&](int x, int y) {
+    const auto* pixel = rgb.data() + (y * kLogicalWidth + x) * 3;
+    return std::array<uint8_t, 3>{pixel[0], pixel[1], pixel[2]};
+  };
+  Require(at(0, 0) == std::array<uint8_t, 3>{0, 0, 248} &&
+              at(799, 0) == std::array<uint8_t, 3>{0, 252, 0} &&
+              at(0, 1) == at(0, 0) && at(799, 299) == at(799, 0) &&
+              at(0, 300) == std::array<uint8_t, 3>{248, 0, 0} &&
+              at(799, 599) == std::array<uint8_t, 3>{248, 252, 248},
+          "native thumbnail conversion must write 800 distinct pixels per row");
+}
+
 void NativeLifecycle() {
   const auto native_play=g_original_recovery_play;
   const auto native_prepare=g_original_recovery_prepare;
@@ -243,6 +314,7 @@ void OriginalImages(int argc,wchar_t** argv) {
         "native hooks and menu transaction signatures work in every localization");
     Require(InstallSaveThumbnailHooks() && InstallSaveThumbnailHooks(),
             "save capture hooks must work in every localization");
+    NativeSaveThumbnail();
     NativeLifecycle();
     Require(MH_Uninitialize()==MH_OK,"remove mapped test hooks");FreeLibrary(module);
   }
