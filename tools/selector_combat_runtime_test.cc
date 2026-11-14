@@ -79,6 +79,10 @@ void __cdecl CombatTestTurn(void* input) {
   ++test_turns;
 }
 
+uintptr_t __cdecl CombatTestSpecialMovementStage() {
+  return test_turns;
+}
+
 void CheckInverseHeadJoint() {
   SceneSnapshot scene;
   scene.player = 1;
@@ -307,6 +311,58 @@ int main() {
   PutCombat(controller.data() + kPlayerTurnSourcePointerOffset, turn_source);
   PutCombat(controller.data() + kPlayerTurnLimitOffset, int32_t{321});
   PutCombat(controller.data() + kPlayerIdleTurnOffset, int32_t{-37});
+
+  // Selecting head view alone must leave the third-person input route
+  // usable. A successful publication also has to survive the interval
+  // between source ticks, but must expire if the camera stops updating.
+  PutCombat(g_dungeon_base + kGameRootPointerRva,
+            reinterpret_cast<uintptr_t>(root.data()));
+  PutCombat(g_dungeon_base + kUiOwnerPointerRva,
+            reinterpret_cast<uintptr_t>(player.data()));
+  PutCombat(controller.data() + 0x2EC,
+            reinterpret_cast<uintptr_t>(g_dungeon_base + kPlayerStateDispatcherRva));
+  PutCombat(g_dungeon_base + kCameraControllerRva +
+                kCameraControllerActiveModeOffset, uint8_t{3});
+  g_last_mode3_source_tick_ms.store(test_time);
+  g_custom_camera_view_mode.store(static_cast<uint32_t>(CustomCameraViewMode::kHead));
+  RequireCombat(!DeathtrapImmersiveFirstPersonActive() &&
+                    DeathtrapThirdPersonKeyboardCameraRelativeAvailable(),
+                "head request without a published view must retain third-person controls");
+
+  g_custom_head_last_publication_ms.store(test_time);
+  g_immersive_body_heading.store(200);
+  g_original_player_movement_stage = &CombatTestSpecialMovementStage;
+  g_immersive_root_motion_hooks_installed.store(true);
+  // A special weapon callback need not run the ordinary ground dispatcher.
+  // It should still see the updated aim without a strafe/root transaction.
+  PutCombat(controller.data() + 0x2EC, uintptr_t{1});
+  PutCombat(controller.data() + kPlayerTurnSourcePointerOffset, uintptr_t{0});
+  const auto special_controller = controller;
+  RequireCombat(DeathtrapImmersiveFirstPersonActive() &&
+                    !DeathtrapImmersiveVectorLocomotionActive() &&
+                    !DeathtrapThirdPersonKeyboardCameraRelativeAvailable(),
+                "a special action owns its native movement while head view is visible");
+  const unsigned turns_before = test_turns;
+  RequireCombat(HookImmersivePlayerMovementStage() == turns_before + 1 &&
+                    controller == special_controller,
+                "special movement callback must see eye steering with temporary fields restored");
+
+  g_scripted_camera_override_active.store(true);
+  RequireCombat(HookImmersivePlayerMovementStage() == turns_before + 1,
+                "scripted takeover must release immersive aim immediately");
+  g_scripted_camera_override_active.store(false);
+  test_time += g_camera_source_watchdog_ms.load() + 1;
+  g_last_mode3_source_tick_ms.store(test_time);
+  PutCombat(controller.data() + 0x2EC,
+            reinterpret_cast<uintptr_t>(g_dungeon_base + kPlayerStateDispatcherRva));
+  RequireCombat(!DeathtrapImmersiveFirstPersonActive() &&
+                    DeathtrapThirdPersonKeyboardCameraRelativeAvailable() &&
+                    HookImmersivePlayerMovementStage() == turns_before + 1,
+                "expired head publication must restore third-person controls and release aim");
+  SetCustomHeadViewSelected(false, "test");
+  g_original_player_movement_stage = nullptr;
+  g_immersive_root_motion_hooks_installed.store(false);
+  PutCombat(controller.data() + kPlayerTurnSourcePointerOffset, turn_source);
 
   for (const auto variant : {DungeonImageVariant::kEnglish, DungeonImageVariant::kFrenchGog,
                             DungeonImageVariant::kGermanGog, DungeonImageVariant::kItalianGog}) {

@@ -1100,7 +1100,6 @@ enum class CustomCameraViewMode : uint32_t {
 
 std::atomic<uint32_t> g_custom_camera_view_mode{
     static_cast<uint32_t>(CustomCameraViewMode::kModernThirdPerson)};
-std::atomic<bool> g_custom_head_publication_active{false};
 std::atomic<uint64_t> g_custom_head_last_publication_ms{0};
 std::atomic<bool> g_scripted_camera_override_active{false};
 std::atomic<bool> g_owned_camera_player_fade_requested{false};
@@ -1188,6 +1187,22 @@ const char* CustomCameraViewModeName(CustomCameraViewMode mode) {
 bool CustomHeadViewSelected() {
   return g_immersive_first_person_enabled &&
       CurrentCustomCameraViewMode() == CustomCameraViewMode::kHead;
+}
+
+bool CustomHeadViewPublished(uint64_t now_ms) {
+  const uint64_t published_ms =
+      g_custom_head_last_publication_ms.load(std::memory_order_acquire);
+  return CustomHeadViewSelected() && published_ms &&
+      now_ms >= published_ms && now_ms - published_ms <=
+          g_camera_source_watchdog_ms.load(std::memory_order_acquire);
+}
+
+CustomCameraViewMode PresentedCustomCameraViewMode() {
+  const auto requested = CurrentCustomCameraViewMode();
+  return requested == CustomCameraViewMode::kHead &&
+                 !CustomHeadViewPublished(GetTickCount64())
+             ? CustomCameraViewMode::kModernThirdPerson
+             : requested;
 }
 
 bool CustomCameraOwnsMode3() {
@@ -4453,6 +4468,18 @@ void InjectRelativeMouseMove(double normalized_x, double normalized_y,
 
 bool ReadLivePlayerHeading(int32_t* heading, uintptr_t* live_controller);
 
+void ClearImmersiveCameraPublication() {
+  if (g_custom_head_last_publication_ms.exchange(
+          0, std::memory_order_acq_rel)) {
+    g_owned_camera_presentation_cut_pending.store(
+        true, std::memory_order_release);
+  }
+  g_immersive_keyboard_movement_x.store(0, std::memory_order_release);
+  g_immersive_keyboard_movement_y.store(0, std::memory_order_release);
+  g_immersive_xinput_movement_x_milli.store(0, std::memory_order_release);
+  g_immersive_xinput_movement_y_milli.store(0, std::memory_order_release);
+}
+
 double CurvedStick(double value, double exponent) {
   if (value == 0.0) {
     return 0.0;
@@ -4472,6 +4499,12 @@ void SetCustomHeadViewSelected(bool enabled, const char* source) {
     return;
   }
   g_camera_recenter.Cancel();
+  ClearImmersiveCameraPublication();
+  g_xinput_camera_relative_intent.store(false, std::memory_order_release);
+  g_xinput_movement_magnitude_milli.store(0, std::memory_order_release);
+  g_xinput_movement_controller.store(0, std::memory_order_release);
+  g_xinput_camera_relative_started_ms.store(0, std::memory_order_release);
+  g_xinput_camera_relative_was_active = false;
   g_custom_camera_view_mode.store(static_cast<uint32_t>(next),
                                   std::memory_order_release);
   if (!enabled) {
@@ -4490,25 +4523,6 @@ void SetCustomHeadViewSelected(bool enabled, const char* source) {
           immersive_yaw * 180.0 / kOrbitPi,
           g_third_person_orbit_state.yaw * 180.0 / kOrbitPi);
     }
-    // Immersive view aligns the rendered body with the eye yaw through the
-    // shared camera-relative heading writer, including during mouse/keyboard
-    // play.  That ownership is independent of DirectInput's fresh key state,
-    // so it must be released explicitly when F10/SELECT/R3 leaves the view.
-    // Otherwise the stale target continues fighting native A/D steering and
-    // makes keyboard movement appear locked to one direction.
-    g_xinput_camera_relative_intent.store(false,
-                                           std::memory_order_release);
-    g_xinput_movement_magnitude_milli.store(0,
-                                             std::memory_order_release);
-    g_xinput_movement_controller.store(0, std::memory_order_release);
-    g_xinput_camera_relative_started_ms.store(0,
-                                               std::memory_order_release);
-    g_immersive_keyboard_movement_x.store(0, std::memory_order_release);
-    g_immersive_keyboard_movement_y.store(0, std::memory_order_release);
-    g_immersive_xinput_movement_x_milli.store(
-        0, std::memory_order_release);
-    g_immersive_xinput_movement_y_milli.store(
-        0, std::memory_order_release);
   }
   if (enabled) {
     // The overlay-owned view never borrows retail mode 4. Release a controller
@@ -5339,9 +5353,7 @@ void ResetThirdPersonOrbit(const char* reason) {
     g_owned_camera_presentation_cut_pending.store(
         true, std::memory_order_release);
   }
-  g_custom_head_publication_active.store(false,
-                                          std::memory_order_release);
-  g_custom_head_last_publication_ms.store(0, std::memory_order_release);
+  ClearImmersiveCameraPublication();
   g_owned_camera_player_fade_requested.store(
       false, std::memory_order_release);
   g_selector_presentation_yaw_offset = 0.0;
@@ -5370,7 +5382,7 @@ deathtrap::camera::RecenterContext CameraRecenterContext(bool manual_look) {
       g_controller_selector.direction_down || g_controller_selector.row_open;
   context.scripted = g_scripted_camera_override_active.load(
       std::memory_order_acquire);
-  context.first_person = CustomHeadViewSelected() || RetailFirstPersonActive() ||
+  context.first_person = DeathtrapImmersiveFirstPersonActive() || RetailFirstPersonActive() ||
       g_xinput_first_person_toggled.load(std::memory_order_acquire);
   context.manual_look = manual_look;
   return context;
@@ -5632,9 +5644,13 @@ bool BuildThirdPersonOrbitPosition(void* controller,
   const bool recenter_moved = AdvanceCameraRecenterSourceTick(
       fresh_input, stick_moved || mouse_moved || presentation_mouse_moved);
 
+  // The head and third-person arm face opposite ways for the same control
+  // angle. Keep the fallback arm and its movement reference behind the view.
+  const double orbit_yaw = custom_head_view
+      ? ThirdPersonOrbitYawFromImmersiveYaw(g_third_person_orbit_state.yaw)
+      : g_third_person_orbit_state.yaw;
   g_third_person_heading_reference_microradians.store(
-      static_cast<int32_t>(std::lround(
-          g_third_person_orbit_state.yaw * 1000000.0)),
+      static_cast<int32_t>(std::lround(orbit_yaw * 1000000.0)),
       std::memory_order_release);
   g_third_person_heading_reference_valid.store(true,
                                                 std::memory_order_release);
@@ -5686,15 +5702,17 @@ bool BuildThirdPersonOrbitPosition(void* controller,
   // versions tested only the already-contracted arm and extended it before
   // every query, producing an artificial extend->hit->retract oscillation.
   const double active_radius = g_third_person_orbit_state.radius;
-  const double horizontal = active_radius *
-                            std::cos(g_third_person_orbit_state.pitch);
+  const double orbit_pitch = std::clamp(g_third_person_orbit_state.pitch,
+      g_third_person_orbit_min_pitch_radians,
+      g_third_person_orbit_max_pitch_radians);
+  const double horizontal = active_radius * std::cos(orbit_pitch);
   const int32_t orbit_x = static_cast<int32_t>(std::lround(
       g_third_person_orbit_state.chase_focus[0] +
-      std::sin(g_third_person_orbit_state.yaw) * horizontal));
+      std::sin(orbit_yaw) * horizontal));
   const int32_t requested_orbit_y =
       static_cast<int32_t>(std::lround(
           g_third_person_orbit_state.chase_focus[1] +
-          std::sin(g_third_person_orbit_state.pitch) * active_radius));
+      std::sin(orbit_pitch) * active_radius));
   const CameraFloorLimit floor_limit = ResolveCameraFloorLimit(
       focus, g_previous_snapshot.player_position,
       g_previous_snapshot.player_position_valid);
@@ -5702,7 +5720,7 @@ bool BuildThirdPersonOrbitPosition(void* controller,
       std::max(requested_orbit_y, floor_limit.minimum_y);
   const int32_t orbit_z = static_cast<int32_t>(std::lround(
       g_third_person_orbit_state.chase_focus[2] +
-      std::cos(g_third_person_orbit_state.yaw) * horizontal));
+      std::cos(orbit_yaw) * horizontal));
   if (g_debug_log && orbit_y != requested_orbit_y) {
     AppendNativeLog(
         "camera_floor_guard requested_y=%d safe_y=%d focus_y=%d "
@@ -10465,12 +10483,13 @@ bool ConfigureCameraWithSceneMeshPushout(
   return true;
 }
 
-void PublishImmersiveFirstPersonHeadingIntent();
+std::atomic<int32_t> g_immersive_body_heading{0};
 
 void __cdecl HookMode3Camera(void* controller) {
   if (!g_original_mode3_camera || !g_configure_camera ||
       !g_resolve_camera_sector ||
       !g_camera_volume_visible || !controller) {
+    ClearImmersiveCameraPublication();
     if (g_original_mode3_camera) {
       g_original_mode3_camera(controller);
     }
@@ -10516,10 +10535,7 @@ void __cdecl HookMode3Camera(void* controller) {
                                            std::memory_order_release);
   if (scripted) {
     g_camera_recenter.Cancel();
-    g_custom_head_publication_active.store(false,
-                                            std::memory_order_release);
-    g_custom_head_last_publication_ms.store(0,
-                                             std::memory_order_release);
+    ClearImmersiveCameraPublication();
     if (g_third_person_orbit_state.owned_publication_active) {
       g_third_person_orbit_state.owned_publication_active = false;
       g_owned_camera_presentation_cut_pending.store(
@@ -10548,7 +10564,10 @@ void __cdecl HookMode3Camera(void* controller) {
     return;
   }
 
+  const bool previous_head_sample =
+      g_custom_head_last_publication_ms.load(std::memory_order_acquire) != 0;
   const bool previous_modern_sample_valid =
+      !previous_head_sample &&
       before_original_valid &&
       g_third_person_orbit_state.engaged &&
       g_third_person_orbit_state.controller == controller;
@@ -10558,6 +10577,7 @@ void __cdecl HookMode3Camera(void* controller) {
   const double previous_orbit_pitch = g_third_person_orbit_state.pitch;
   std::array<int32_t, 3> orbit{};
   if (!BuildThirdPersonOrbitPosition(controller, native, &orbit)) {
+    ClearImmersiveCameraPublication();
     return;
   }
   std::array<int32_t, 3> camera_focus{};
@@ -10585,25 +10605,23 @@ void __cdecl HookMode3Camera(void* controller) {
   LogCameraRoomSectorSnapshot(camera_focus, room_or_sector);
   if (CustomHeadViewSelected()) {
     const uint64_t head_now_ms = GetTickCount64();
-    const uint64_t previous_head_ms =
-        g_custom_head_last_publication_ms.load(std::memory_order_acquire);
-    const uint64_t publication_watchdog_ms =
-        g_camera_source_watchdog_ms.load(std::memory_order_acquire);
-    const bool transition_cut =
-        !g_custom_head_publication_active.load(std::memory_order_acquire) ||
-        !previous_head_ms ||
-        head_now_ms - previous_head_ms > publication_watchdog_ms;
-    if (PublishImmersiveFirstPersonEndpoint(
-            controller, camera_focus, room_or_sector, transition_cut)) {
-      // The body-course writer belongs to a successfully published head view,
-      // not merely to the requested mode.  This prevents a missing skeleton
-      // joint from locking keyboard steering while the fail-closed third-
-      // person endpoint is visible.
-      PublishImmersiveFirstPersonHeadingIntent();
-      g_custom_head_publication_active.store(true,
-                                              std::memory_order_release);
+    const bool was_head = CustomHeadViewPublished(head_now_ms);
+    const auto heading = CameraRelativeHeadingFromOrbit(
+        g_third_person_orbit_state.yaw, 0.0, 1.0,
+        kPlayerHeadingUnitsPerTurn, false);
+    if (!g_xinput_first_person_toggled.load(std::memory_order_acquire) &&
+        !RetailFirstPersonActive() && heading.valid &&
+        PublishImmersiveFirstPersonEndpoint(
+            controller, camera_focus, room_or_sector, !was_head)) {
+      g_immersive_body_heading.store(heading.heading,
+                                     std::memory_order_release);
       g_custom_head_last_publication_ms.store(head_now_ms,
                                                std::memory_order_release);
+      if (!was_head) {
+        g_xinput_camera_relative_intent.store(false,
+                                               std::memory_order_release);
+        g_xinput_movement_controller.store(0, std::memory_order_release);
+      }
       g_third_person_orbit_state.owned_publication_active = true;
       g_third_person_orbit_state.collision_constrained_this_tick = false;
       return;
@@ -10611,28 +10629,15 @@ void __cdecl HookMode3Camera(void* controller) {
     // Keep the normal fully-owned third-person transaction as a fail-closed
     // fallback for a missing room graph/snapshot instead of exposing the
     // untouched retail fixed camera for one frame.
-    if (g_custom_head_publication_active.exchange(
-            false, std::memory_order_acq_rel)) {
-      g_owned_camera_presentation_cut_pending.store(
-          true, std::memory_order_release);
+    ClearImmersiveCameraPublication();
+    if (previous_head_sample) {
+      g_third_person_orbit_state.owned_publication_active = false;
+      AppendDeathtrapSupportLog(
+          "camera_immersive_first_person fallback=MODERN_THIRD_PERSON");
+    } else {
+      AppendNativeLog(
+          "camera_immersive_first_person fallback=MODERN_THIRD_PERSON");
     }
-    g_custom_head_last_publication_ms.store(0,
-                                             std::memory_order_release);
-    g_xinput_camera_relative_intent.store(false,
-                                           std::memory_order_release);
-    g_xinput_movement_magnitude_milli.store(0,
-                                             std::memory_order_release);
-    g_xinput_movement_controller.store(0, std::memory_order_release);
-    g_xinput_camera_relative_started_ms.store(0,
-                                               std::memory_order_release);
-    AppendNativeLog(
-        "camera_immersive_first_person fallback=MODERN_THIRD_PERSON");
-  } else if (g_custom_head_publication_active.exchange(
-                 false, std::memory_order_acq_rel)) {
-    g_custom_head_last_publication_ms.store(0,
-                                             std::memory_order_release);
-    g_owned_camera_presentation_cut_pending.store(
-        true, std::memory_order_release);
   }
   deathtrap_camera::RoomSweepResult owned_room_sweep;
   deathtrap_camera::RoomSweepResult owned_room_applied_sweep;
@@ -13504,9 +13509,9 @@ bool CameraRelativeDesiredHeading(const NormalizedStick2& stick,
 bool KeyboardCameraRelativeRuntimeAvailable(bool mouse_attack = false) {
   return g_keyboard_mouse_camera_relative_movement &&
       g_third_person_orbit_enabled && IsGameForeground() &&
-      CurrentCustomCameraViewMode() ==
+      PresentedCustomCameraViewMode() ==
           CustomCameraViewMode::kModernThirdPerson &&
-      !CustomHeadViewSelected() && !RetailFirstPersonActive() &&
+      !RetailFirstPersonActive() &&
       !g_scripted_camera_override_active.load(std::memory_order_acquire) &&
       g_player_state_dispatcher_hook_installed.load(
           std::memory_order_acquire) &&
@@ -13600,27 +13605,6 @@ void PublishCameraRelativeMovementIntent(bool active, int32_t heading,
   g_xinput_camera_relative_was_active = active;
 }
 
-void PublishImmersiveFirstPersonHeadingIntent() {
-  int32_t current_heading = 0;
-  uintptr_t controller = 0;
-  if (!ReadLivePlayerHeading(&current_heading, &controller) || !controller) {
-    return;
-  }
-  const CameraRelativeHeadingTarget target = CameraRelativeHeadingFromOrbit(
-      g_third_person_orbit_state.yaw, 0.0, 1.0,
-      kPlayerHeadingUnitsPerTurn, false);
-  if (!target.valid) {
-    return;
-  }
-  g_xinput_movement_controller.store(controller,
-                                      std::memory_order_release);
-  // Keep the body and equipped weapon aligned with the eye yaw even while
-  // stationary. The existing dispatcher applies the bounded canonical heading
-  // writer on the next player tick; movement, animation and collision remain
-  // fully retail-owned.
-  PublishCameraRelativeMovementIntent(true, target.heading, 1.0);
-}
-
 void PublishNativeJoystickMovement(bool active, double x, double y) {
   g_xinput_native_joystick_x_milli.store(
       static_cast<int32_t>(std::lround(std::clamp(x, -1.0, 1.0) * 1000.0)),
@@ -13686,7 +13670,6 @@ bool ApplyCanonicalPlayerHeadingDelta(uintptr_t controller,
   if (!SafeReadValue(reinterpret_cast<const void*>(
                          controller + kPlayerTurnSourcePointerOffset),
                      &original_source) ||
-      !original_source ||
       !SafeReadValue(reinterpret_cast<const void*>(
                          controller + kPlayerTurnLimitOffset),
                      &original_limit) ||
@@ -13914,7 +13897,8 @@ void UpdateMouseAttackCameraFacing(void* outer_player) {
 }
 
 bool ResolveImmersiveLocomotionPlan(ImmersiveLocomotionPlan* plan) {
-  if (!plan || !CustomHeadViewSelected()) {
+  if (!plan || !DeathtrapImmersiveFirstPersonActive() ||
+      !DeathtrapImmersiveVectorLocomotionActive()) {
     return false;
   }
   double lateral = 0.0;
@@ -14046,20 +14030,38 @@ struct ImmersiveLocomotionTransaction {
 ImmersiveLocomotionTransaction BeginImmersiveLocomotionTransaction() {
   ImmersiveLocomotionTransaction transaction;
   if (g_immersive_locomotion_transaction_active) return transaction;
-  const uintptr_t expected_controller =
-      g_xinput_movement_controller.load(std::memory_order_acquire);
   transaction.active =
-      expected_controller &&
-      g_xinput_camera_relative_intent.load(std::memory_order_acquire) &&
       ResolveImmersiveLocomotionPlan(&transaction.plan) &&
       ReadLivePlayerHeading(&transaction.preserved_body_heading,
                             &transaction.controller) &&
-      transaction.controller == expected_controller &&
-      ApplyCanonicalPlayerHeading(expected_controller,
-                                  transaction.plan.transaction_heading);
+      ApplyCanonicalPlayerHeadingDelta(
+          transaction.controller, PlayerHeadingDelta(
+              transaction.plan.transaction_heading,
+              transaction.preserved_body_heading));
   g_immersive_locomotion_transaction_plan = transaction.plan;
   g_immersive_locomotion_transaction_active = transaction.active;
   return transaction;
+}
+
+void SteerImmersiveBodyBeforeMovement() {
+  if (!DeathtrapImmersiveFirstPersonActive() || !IsGameForeground()) {
+    return;
+  }
+  uintptr_t controller = 0;
+  int32_t current = 0;
+  if (!ReadLivePlayerHeading(&current, &controller)) return;
+
+  // The movement stage visits weapon-specific callbacks too. Steering here
+  // works even when a sustained attack bypasses the ground dispatcher or RT
+  // owns the left stick. Keep native attack actions and root motion intact.
+  const int32_t target =
+      g_immersive_body_heading.load(std::memory_order_acquire);
+  const int32_t max_step = std::max(1, static_cast<int32_t>(std::lround(
+      g_xinput_movement_turn_degrees_per_tick *
+      kPlayerHeadingUnitsPerTurn / 360.0)));
+  const auto step = StepCameraRelativeHeading(
+      target, current, kPlayerHeadingUnitsPerTurn, max_step);
+  ApplyCanonicalPlayerHeadingDelta(controller, step.heading_delta);
 }
 
 void EndImmersiveLocomotionTransaction(
@@ -14067,10 +14069,8 @@ void EndImmersiveLocomotionTransaction(
   if (!transaction.active) return;
   g_immersive_locomotion_transaction_active = false;
   g_immersive_locomotion_transaction_plan = {};
-  if (transaction.active) {
-    ApplyCanonicalPlayerHeading(transaction.controller,
-                                transaction.preserved_body_heading);
-  }
+  ApplyCanonicalPlayerHeading(transaction.controller,
+                              transaction.preserved_body_heading);
 }
 
 uintptr_t __cdecl HookImmersivePlayerMovementStage() {
@@ -14081,6 +14081,7 @@ uintptr_t __cdecl HookImmersivePlayerMovementStage() {
   MaintainRetainedCorpses();
   BeginCorpseFadeUpdate();
   ++g_corpse_dispatch_depth;
+  SteerImmersiveBodyBeforeMovement();
   const ImmersiveLocomotionTransaction transaction =
       BeginImmersiveLocomotionTransaction();
   const uintptr_t result = g_original_player_movement_stage();
@@ -14123,9 +14124,8 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
   const bool keyboard_camera_relative =
       KeyboardCameraRelativeDesiredHeading(&keyboard_target,
                                            &keyboard_magnitude);
-  const bool xinput_camera_relative =
+  const bool xinput_camera_relative = !DeathtrapImmersiveFirstPersonActive() &&
       g_xinput_camera_relative_intent.load(std::memory_order_acquire);
-  uintptr_t validated_controller = 0;
   if (outer_player && g_player_turn_writer &&
       (keyboard_camera_relative || xinput_camera_relative)) {
     uintptr_t expected_outer = 0;
@@ -14143,7 +14143,6 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
                            std::memory_order_acquire)) &&
         ReadLivePlayerHeading(&current_heading, &live_controller) &&
         live_controller == controller) {
-      validated_controller = controller;
       const int32_t target = keyboard_camera_relative
           ? keyboard_target
           : g_xinput_desired_heading.load(std::memory_order_acquire);
@@ -14181,43 +14180,17 @@ void __cdecl HookPlayerStateDispatcher(void* outer_player) {
     }
   }
 
-  // The native actor/collision course is resolved at the start of 0x82750,
-  // before the animation root is published. Redirecting only the later root
-  // vector leaves collision on the old forward course, so the following
-  // native cycle pulls nominal A/D motion forward again. Publish both halves
-  // as one transaction: temporarily set the canonical actor/collision course,
-  // route all verified root contributions to the requested world course, then
-  // restore the visible eye-facing body heading before presentation.
-  ImmersiveLocomotionPlan locomotion_plan;
-  int32_t preserved_body_heading = 0;
-  uintptr_t heading_controller = 0;
-  const bool route_immersive_motion =
-      validated_controller &&
-      ResolveImmersiveLocomotionPlan(&locomotion_plan) &&
-      ReadLivePlayerHeading(&preserved_body_heading, &heading_controller) &&
-      heading_controller == validated_controller &&
-      ApplyCanonicalPlayerHeading(validated_controller,
-                                  locomotion_plan.transaction_heading);
-  g_immersive_locomotion_transaction_plan = locomotion_plan;
-  g_immersive_locomotion_transaction_active = route_immersive_motion;
+  // Some states reach the ground dispatcher outside the enclosing movement
+  // stage. Use the same transaction only for the live player.
+  uintptr_t live_player = 0;
+  const bool is_live_player = outer_player &&
+      SafeReadValue(g_dungeon_base + kUiOwnerPointerRva, &live_player) &&
+      live_player == reinterpret_cast<uintptr_t>(outer_player);
+  const auto transaction = is_live_player
+      ? BeginImmersiveLocomotionTransaction()
+      : ImmersiveLocomotionTransaction{};
   g_original_player_state_dispatcher(outer_player);
-  g_immersive_locomotion_transaction_active = false;
-  g_immersive_locomotion_transaction_plan = {};
-  if (route_immersive_motion) {
-    ApplyCanonicalPlayerHeading(validated_controller,
-                                preserved_body_heading);
-    if (g_debug_log &&
-        (g_source_ticks.load(std::memory_order_relaxed) % 60u) == 1u) {
-      AppendNativeLog(
-          "immersive locomotion transaction motion_heading=%d "
-          "collision_heading=%d restored_heading=%d native_axis=%d "
-          "controller=%p",
-          locomotion_plan.motion_heading,
-          locomotion_plan.transaction_heading, preserved_body_heading,
-          locomotion_plan.native_axis_milli,
-          reinterpret_cast<void*>(validated_controller));
-    }
-  }
+  EndImmersiveLocomotionTransaction(transaction);
 }
 
 void __cdecl HookPlayerLocomotion(void* controller) {
@@ -14483,7 +14456,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     g_ricviper_tank_direction = deathtrap::input::LatchTankDirection(
         g_ricviper_tank_direction, tank_modifier, movement_stick.x,
         movement_stick.y, movement_stick.magnitude, g_xinput_action_threshold);
-    const bool custom_head_movement = CustomHeadViewSelected();
+    const bool custom_head_movement = DeathtrapImmersiveFirstPersonActive();
     const bool first_person_movement =
         g_xinput_first_person_toggled.load(std::memory_order_acquire) ||
         RetailFirstPersonActive() || custom_head_movement;
@@ -14504,14 +14477,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
     // RT selects attack direction unless RicViper's B modifier owns movement.
     bool desired_heading_valid = false;
     if (custom_head_movement) {
-      const CameraRelativeHeadingTarget view_heading =
-          CameraRelativeHeadingFromOrbit(
-              g_third_person_orbit_state.yaw, 0.0, 1.0,
-              kPlayerHeadingUnitsPerTurn, false);
-      if (view_heading.valid) {
-        desired_heading = view_heading.heading;
-        desired_heading_valid = true;
-      }
+      desired_heading_valid = DeathtrapImmersiveVectorLocomotionActive();
     } else {
       desired_heading_valid =
           CameraRelativeDesiredHeading(movement_stick, &desired_heading);
@@ -14521,15 +14487,13 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         native_joystick_available &&
         g_player_state_dispatcher_hook_installed.load(
             std::memory_order_acquire) &&
-        (!custom_head_movement ||
-         g_immersive_root_motion_hooks_installed.load(
-             std::memory_order_acquire)) &&
         !controller_combat_owns_stick &&
         !selector_blocks_movement &&
         (!first_person_movement || custom_head_movement) &&
         CustomCameraOwnsMode3() &&
         desired_heading_valid &&
-        ReadLivePlayerHeading(&current_heading, &current_controller);
+        (custom_head_movement ||
+         ReadLivePlayerHeading(&current_heading, &current_controller));
     const deathtrap::input::ControllerMovementContext movement_context{
         native_joystick_available, camera_relative_available,
         first_person_movement, custom_head_movement,
@@ -14563,17 +14527,19 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         movement_context, movement_thresholds, movement_x, movement_y,
         g_xinput_filtered_movement_magnitude, g_xinput_run_active,
         g_xinput_walk_active);
+    const bool immersive_vector = custom_head_movement &&
+        movement_plan.heading_active && movement_plan.walking;
     g_immersive_xinput_movement_x_milli.store(
-        custom_head_movement && movement_plan.walking
+        immersive_vector
             ? static_cast<int32_t>(std::lround(movement_x * 1000.0))
             : 0,
         std::memory_order_release);
     g_immersive_xinput_movement_y_milli.store(
-        custom_head_movement && movement_plan.walking
+        immersive_vector
             ? static_cast<int32_t>(std::lround(movement_y * 1000.0))
             : 0,
         std::memory_order_release);
-    if (movement_plan.heading_active) {
+    if (movement_plan.heading_active && !custom_head_movement) {
       if (g_debug_log && !g_xinput_camera_relative_was_active) {
         AppendNativeLog(
             "xinput movement stick raw=%d/%d normalized=%.3f/%.3f "
@@ -14586,8 +14552,7 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
       g_xinput_movement_controller.store(current_controller,
                                           std::memory_order_release);
       PublishCameraRelativeMovementIntent(
-          true, desired_heading,
-          custom_head_movement ? 1.0 : g_xinput_filtered_movement_magnitude);
+          true, desired_heading, g_xinput_filtered_movement_magnitude);
       if (g_debug_log &&
           (!g_xinput_direct_heading_steering_was_active ||
            (g_source_ticks.load(std::memory_order_relaxed) % 60u) == 1u)) {
@@ -17321,7 +17286,7 @@ bool ApplyCustomCameraTransition(SceneSnapshot* current) {
     return false;
   }
 
-  const CustomCameraViewMode mode = CurrentCustomCameraViewMode();
+  const CustomCameraViewMode mode = PresentedCustomCameraViewMode();
   if (!g_custom_camera_transition.initialized) {
     g_custom_camera_transition.initialized = true;
     g_custom_camera_transition.previous_mode = mode;
@@ -18080,8 +18045,7 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
       // distance for the complete slowed source interval. Head view has no
       // third-person arm and must never enter this interpolation.
       const auto old_camera = previous.nodes.find(current.camera);
-      if (CustomHeadViewSelected() &&
-          g_custom_head_publication_active.load(std::memory_order_acquire) &&
+      if (CustomHeadViewPublished(GetTickCount64()) &&
           previous.camera == current.camera &&
           old_camera != previous.nodes.end() &&
           old_camera->second.parent == entry.second.parent) {
@@ -18109,7 +18073,9 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
           }
         }
       }
-      if (!CustomHeadViewSelected() && current.camera_focus_valid &&
+      if (PresentedCustomCameraViewMode() ==
+              CustomCameraViewMode::kModernThirdPerson &&
+          current.camera_focus_valid &&
           previous.camera_focus_valid && previous.camera == current.camera &&
           old_camera != previous.nodes.end() &&
           g_third_person_orbit_state.owned_publication_active &&
@@ -18255,7 +18221,7 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
   bool pivot_relative_camera_handled = false;
   if (current.camera && previous.camera == current.camera &&
       current.camera_focus_valid && previous.camera_focus_valid &&
-      CurrentCustomCameraViewMode() ==
+      PresentedCustomCameraViewMode() ==
           CustomCameraViewMode::kModernThirdPerson &&
        !RetailFirstPersonActive() &&
        g_third_person_orbit_state.engaged &&
@@ -18914,9 +18880,9 @@ struct PlayerRenderFlagRollback {
 bool ThirdPersonCharacterFadeVisible() {
   return g_owned_camera_player_fade_requested.load(
              std::memory_order_acquire) &&
-      g_custom_camera_view_mode.load(std::memory_order_acquire) ==
-          static_cast<uint32_t>(CustomCameraViewMode::kModernThirdPerson) &&
-      !CustomHeadViewSelected() && !RetailFirstPersonActive() &&
+      PresentedCustomCameraViewMode() ==
+          CustomCameraViewMode::kModernThirdPerson &&
+      !RetailFirstPersonActive() &&
       !g_scripted_camera_override_active.load(std::memory_order_acquire);
 }
 
@@ -19203,9 +19169,7 @@ bool StationaryOrbitRenderBasisEligible() {
   const bool presentation_look = SelectorPresentationLookActive();
   if (CustomHeadViewSelected()) {
     return presentation_look &&
-        g_custom_head_publication_active.load(std::memory_order_acquire) &&
-        !RetailFirstPersonActive() &&
-        !g_scripted_camera_override_active.load(std::memory_order_acquire);
+        DeathtrapImmersiveFirstPersonActive();
   }
   return g_third_person_orbit_state.owned_publication_active &&
       deathtrap::selector_time::UseContinuousOrbitBasis(
@@ -19629,6 +19593,7 @@ void ObservePlayerLanding(const SceneSnapshot& current) {
 
 void ResetSceneHistory() {
   FlushPresentationTraceBuffer();
+  ClearImmersiveCameraPublication();
   g_active_presentation_trace = {};
   g_older_snapshot = {};
   g_previous_snapshot = {};
@@ -21641,13 +21606,16 @@ const wchar_t* GetDeathtrapSessionLogPath() {
 }
 
 bool DeathtrapImmersiveFirstPersonActive() {
-  return CustomHeadViewSelected() && DeathtrapGameplayReady(false) &&
-      !RetailFirstPersonActive();
+  return CustomHeadViewPublished(GetTickCount64()) &&
+      !g_scripted_camera_override_active.load(std::memory_order_acquire) &&
+      !g_xinput_first_person_toggled.load(std::memory_order_acquire) &&
+      !RetailFirstPersonActive() && DeathtrapGameplayReady(false);
 }
 
 bool DeathtrapImmersiveVectorLocomotionActive() {
   return g_immersive_root_motion_hooks_installed.load(
-      std::memory_order_acquire);
+             std::memory_order_acquire) &&
+      LivePlayerUsesGroundStateDispatcher();
 }
 
 bool DeathtrapThirdPersonKeyboardCameraRelativeAvailable() {
