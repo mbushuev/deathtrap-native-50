@@ -85,6 +85,7 @@ uintptr_t __cdecl CombatTestSpecialMovementStage() {
 
 void CheckInverseHeadJoint() {
   SceneSnapshot scene;
+  scene.root = 11;
   scene.player = 1;
   // Topology and flag values observed in the Inverse 1 save. The head is
   // joint 6. The chest also has two arm children and a resource-free neck.
@@ -112,6 +113,24 @@ void CheckInverseHeadJoint() {
   scene.nodes.at(8).flags = 0xED8;
   RequireCombat(ResolvePlayerHeadJoint(scene) == 6,
                 "Flame Lance firing arm must retain the same head joint");
+
+  ImmersiveHeadMountSample known_head;
+  known_head.scene_root=scene.root;
+  known_head.player=scene.player;
+  known_head.head_node=6;
+  known_head.neck_node=5;
+  known_head.head_resource=1;
+  scene.nodes.erase(8);
+  RequireCombat(!ResolvePlayerHeadJoint(scene) &&
+                    ResolveKnownImmersiveHeadJoint(scene, known_head)==6,
+                "an incomplete firing skeleton must keep the previously verified head");
+  scene.nodes.at(6).render_resource_handle=2;
+  RequireCombat(!ResolveKnownImmersiveHeadJoint(scene, known_head),
+                "a recycled render node must not keep the previous head identity");
+  scene.nodes.at(6).render_resource_handle=1;
+  scene.root=12;
+  RequireCombat(!ResolveKnownImmersiveHeadJoint(scene, known_head),
+                "a different scene must resolve its own head identity");
 }
 
 std::array<bool, 30> ricviper_inventory{};

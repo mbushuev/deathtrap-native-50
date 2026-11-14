@@ -8707,12 +8707,33 @@ uintptr_t ResolveLivePlayerRenderRoot();
 struct ImmersiveHeadMountSample {
   uintptr_t scene_root = 0;
   uintptr_t player = 0;
+  uintptr_t head_node = 0;
+  uintptr_t neck_node = 0;
+  uintptr_t head_resource = 0;
   std::array<int32_t, 3> focus{};
   std::array<int32_t, 3> head{};
   uint64_t measured_ms = 0;
 };
 
 ImmersiveHeadMountSample g_immersive_head_mount_sample;
+
+uintptr_t ResolveKnownImmersiveHeadJoint(
+    const SceneSnapshot& scene, const ImmersiveHeadMountSample& sample) {
+  if (sample.scene_root != scene.root || sample.player != scene.player ||
+      !sample.head_node || !sample.head_resource) {
+    return 0;
+  }
+  const auto head = scene.nodes.find(sample.head_node);
+  const auto neck = scene.nodes.find(sample.neck_node);
+  if (head == scene.nodes.end() || neck == scene.nodes.end() ||
+      head->second.parent != sample.neck_node ||
+      head->second.render_resource_handle != sample.head_resource ||
+      !head->second.bounds_valid || neck->second.render_resource_handle != 0 ||
+      !SceneNodeDescendsFrom(scene, sample.head_node, scene.player)) {
+    return 0;
+  }
+  return sample.head_node;
+}
 
 const char* TryPublishImmersiveHeadMount(
     void* controller, const std::array<int32_t, 3>& camera_focus,
@@ -8800,17 +8821,24 @@ const char* PublishImmersiveFirstPersonEndpoint(
     return "PLAYER";
   }
 
+  const auto& sample = g_immersive_head_mount_sample;
   std::array<int32_t, 3> head_center{};
-  uintptr_t head_node = 0;
+  uintptr_t head_node = ResolvePlayerHeadJoint(scene);
+  if (!head_node) {
+    // Weapon and effect callbacks can change the count of visible joints.
+    // Follow a previously identified joint only while its identity is intact.
+    head_node = ResolveKnownImmersiveHeadJoint(scene, sample);
+  }
   const char* failure = "HEAD_JOINT";
-  if (ResolveLivePlayerHeadMount(
-          scene, camera_focus, &head_center, &head_node)) {
+  if (ReadPlayerHeadMount(scene, head_node, camera_focus, &head_center)) {
     failure = TryPublishImmersiveHeadMount(
         controller, camera_focus, room_or_sector, head_center, head_node,
         transition_cut);
     if (!failure) {
+      const auto& head = scene.nodes.at(head_node);
       g_immersive_head_mount_sample = {
-          scene.root, scene.player, camera_focus, head_center, now_ms};
+          scene.root, scene.player, head_node, head.parent,
+          head.render_resource_handle, camera_focus, head_center, now_ms};
       return nullptr;
     }
   } else {
@@ -8821,7 +8849,6 @@ const char* PublishImmersiveFirstPersonEndpoint(
   // An attack frame can have a valid joint but move its camera mount into a
   // place we cannot publish. Retry the last accepted mount, following the
   // current player focus and rerunning the same collision checks.
-  const auto& sample = g_immersive_head_mount_sample;
   std::array<int32_t, 3> previous_mount{};
   if (CustomHeadViewPublished(now_ms) &&
       sample.scene_root == scene.root && sample.player == scene.player &&
@@ -10722,15 +10749,17 @@ void __cdecl HookMode3Camera(void* controller) {
     // fallback for a missing room graph/snapshot instead of exposing the
     // untouched retail fixed camera for one frame.
     ClearImmersiveCameraPublication();
+    int32_t weapon_id = -1;
+    SafeReadValue(g_dungeon_base + kActiveCloseCombatWeaponRva, &weapon_id);
     if (previous_head_sample) {
       g_third_person_orbit_state.owned_publication_active = false;
       AppendDeathtrapSupportLog(
-          "camera_immersive_first_person fallback=MODERN_THIRD_PERSON reason=%s",
-          failure);
+          "camera_immersive_first_person fallback=MODERN_THIRD_PERSON reason=%s weapon=%d",
+          failure, weapon_id);
     } else {
       AppendNativeLog(
-          "camera_immersive_first_person fallback=MODERN_THIRD_PERSON reason=%s",
-          failure);
+          "camera_immersive_first_person fallback=MODERN_THIRD_PERSON reason=%s weapon=%d",
+          failure, weapon_id);
     }
   }
   deathtrap_camera::RoomSweepResult owned_room_sweep;
