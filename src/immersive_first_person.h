@@ -172,12 +172,11 @@ inline bool MatchesImmersiveHeadJoint(
 
 // Embedded projectiles and other temporary attachments become ordinary scene
 // children of the struck body joint.  They do not belong to the animated
-// skeleton: unlike a real joint child, their scene-node flags differ from the
-// parent.  Exclude them before applying the stable head-topology predicate so
-// an arrow lodged in the head cannot turn first person into third person.
+// skeleton. A real neck can differ from its chest by 0x100. Preserve that
+// relationship while excluding attachments with other flag differences.
 inline bool CountsTowardImmersiveJointTopology(uint32_t parent_flags,
                                                 uint32_t child_flags) {
-  return parent_flags == child_flags;
+  return ((parent_flags ^ child_flags) & ~0x100u) == 0u;
 }
 
 // Physical DirectInput mouse Y needs the opposite sign at Dungeon's

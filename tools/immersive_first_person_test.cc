@@ -34,6 +34,9 @@ int main() {
           "branching hand or equipment node must not resolve as a head");
   Require(CountsTowardImmersiveJointTopology(0xE58u, 0xE58u),
           "female braid child must count toward head topology");
+  Require(CountsTowardImmersiveJointTopology(0xE58u, 0xF58u) &&
+              CountsTowardImmersiveJointTopology(0xF58u, 0xE58u),
+          "a real neck joint must survive the flag change measured in Inverse 1");
   Require(!CountsTowardImmersiveJointTopology(0xE58u, 0xE00u),
           "embedded arrow attachment must not count as a head child");
   Require(!MatchesImmersiveHeadJoint(0, 1, 3, 76, 5),

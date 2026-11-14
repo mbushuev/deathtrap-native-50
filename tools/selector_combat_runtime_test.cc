@@ -79,6 +79,34 @@ void __cdecl CombatTestTurn(void* input) {
   ++test_turns;
 }
 
+void CheckInverseHeadJoint() {
+  SceneSnapshot scene;
+  scene.player = 1;
+  // Topology and flag values observed in the Inverse 1 save. The head is
+  // joint 6. The chest also has two arm children and a resource-free neck.
+  const auto add = [&](uintptr_t node, uintptr_t parent, uint32_t flags,
+                       uintptr_t resource, int32_t radius) {
+    auto& transform = scene.nodes[node];
+    transform.parent = parent;
+    transform.flags = flags;
+    transform.render_resource_handle = resource;
+    transform.bounds_radius = radius;
+    transform.bounds_valid = radius > 0;
+  };
+  add(1, 0, 0xE50, 0, 0);
+  add(2, 1, 0xE50, 1, 80);
+  add(3, 2, 0xE58, 0, 0);
+  add(4, 3, 0xE58, 1, 93);
+  add(5, 4, 0xF58, 0, 0);
+  add(6, 5, 0xE58, 1, 76);
+  add(7, 6, 0xE58, 1, 9);
+  add(8, 4, 0xE58, 1, 74);
+  add(9, 4, 0xE58, 1, 74);
+  add(10, 6, 0xE00, 1, 50);
+  RequireCombat(ResolvePlayerHeadJoint(scene) == 6,
+                "Inverse 1 neck and embedded arrow must retain the head joint");
+}
+
 std::array<bool, 30> ricviper_inventory{};
 std::vector<std::pair<int, int>> ricviper_actions;
 void* __cdecl RicViperInventory(int id) {
@@ -252,6 +280,7 @@ void CheckRicViperSelector() {
 }
 
 int main() {
+  CheckInverseHeadJoint();
   std::vector<uint8_t> image(0x368000);
   std::array<uint8_t, 0x120> root{}, player{};
   std::array<uint8_t, 0x1100> context{};
