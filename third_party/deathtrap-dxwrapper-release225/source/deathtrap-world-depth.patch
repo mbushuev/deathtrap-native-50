@@ -1,0 +1,279 @@
+--- a/ddraw/IDirect3DDeviceX.cpp
++++ b/ddraw/IDirect3DDeviceX.cpp
+@@ -1460,6 +1460,7 @@
+ 		if (SUCCEEDED(hr))
+ 		{
+ 			IsInScene = true;
++			DeathtrapDepthNeedsClear = true;
+ 
+ #ifdef ENABLE_PROFILING
+ 			Logging::Log() << __FUNCTION__ << " (" << this << ") hr = " << (D3DERR)hr;
+@@ -3082,8 +3083,12 @@
+ 		SetDrawStates(dwVertexTypeDesc, dwFlags, DirectXVersion);
+ 		TraceAlphaDraw("DrawPrimitive", dptPrimitiveType, dwVertexTypeDesc, dwVertexCount, lpVertices);
+ 
+-		// Draw primitive UP
+-		HRESULT hr = (*d3d9Device)->DrawPrimitiveUP(dptPrimitiveType, GetNumberOfPrimitives(dptPrimitiveType, dwVertexCount), lpVertices, GetVertexStride(dwVertexTypeDesc));
++		HRESULT hr;
++		{
++			DeathtrapDepthDraw Depth(*d3d9Device);
++			PrepareDeathtrapDepthDraw(Depth, dwVertexTypeDesc, lpVertices, dwVertexCount);
++			hr = (*d3d9Device)->DrawPrimitiveUP(dptPrimitiveType, GetNumberOfPrimitives(dptPrimitiveType, dwVertexCount), lpVertices, GetVertexStride(dwVertexTypeDesc));
++		}
+ 
+ 		// Handle dwFlags
+ 		RestoreDrawStates(hr, dwFlags, DirectXVersion);
+@@ -3176,8 +3181,12 @@
+ 		SetDrawStates(dwVertexTypeDesc, dwFlags, DirectXVersion);
+ 		TraceAlphaDraw("DrawIndexedPrimitive", dptPrimitiveType, dwVertexTypeDesc, dwVertexCount, lpVertices);
+ 
+-		// Draw indexed primitive UP
+-		HRESULT hr = (*d3d9Device)->DrawIndexedPrimitiveUP(dptPrimitiveType, 0, dwVertexCount, GetNumberOfPrimitives(dptPrimitiveType, dwIndexCount), lpwIndices, D3DFMT_INDEX16, lpVertices, GetVertexStride(dwVertexTypeDesc));
++		HRESULT hr;
++		{
++			DeathtrapDepthDraw Depth(*d3d9Device);
++			PrepareDeathtrapDepthDraw(Depth, dwVertexTypeDesc, lpVertices, dwVertexCount);
++			hr = (*d3d9Device)->DrawIndexedPrimitiveUP(dptPrimitiveType, 0, dwVertexCount, GetNumberOfPrimitives(dptPrimitiveType, dwIndexCount), lpwIndices, D3DFMT_INDEX16, lpVertices, GetVertexStride(dwVertexTypeDesc));
++		}
+ 
+ 		// Handle dwFlags
+ 		RestoreDrawStates(hr, dwFlags, DirectXVersion);
+@@ -6682,6 +6691,7 @@
+ 
+ void m_IDirect3DDeviceX::ClearDdraw()
+ {
++	ResetDeathtrapDepth();
+ 	ddrawParent = nullptr;
+ 	colorkeyPixelShader = nullptr;
+ 	fixupVertexShader = nullptr;
+@@ -6779,6 +6789,7 @@
+ 
+ void m_IDirect3DDeviceX::ClearDeviceState()
+ {
++	ResetDeathtrapDepth();
+ 	// Mark as reset
+ 	bSetDefaults = true;
+ 	RequiresStateRestore = true;
+@@ -7579,6 +7590,118 @@
+ 	return GetReturnResult(hr);
+ }
+ 
++
++m_IDirect3DDeviceX::DeathtrapDepthDraw::~DeathtrapDepthDraw()
++{
++	if (!Active)
++	{
++		return;
++	}
++	Device->SetRenderState(D3DRS_ZENABLE, D3DZB_FALSE);
++	Device->SetRenderState(D3DRS_ZWRITEENABLE, PreviousWrite);
++	Device->SetRenderState(D3DRS_ZFUNC, PreviousFunc);
++	Device->SetDepthStencilSurface(PreviousSurface.Get());
++}
++
++void m_IDirect3DDeviceX::ResetDeathtrapDepth()
++{
++	DeathtrapDepthSurface.Reset();
++	DeathtrapDepthTarget = nullptr;
++	DeathtrapDepthWidth = DeathtrapDepthHeight = 0;
++	DeathtrapDepthNeedsClear = true;
++	DeathtrapDepthUnavailable = false;
++}
++
++void m_IDirect3DDeviceX::PrepareDeathtrapDepthDraw(DeathtrapDepthDraw& Depth, DWORD VertexType, LPVOID Vertices, DWORD Count)
++{
++	if (!IsInScene ||
++		!lpCurrentRenderTargetX || !Count || Vertices != VertexCache.data() || VertexType != D3DFVF_TLVERTEX ||
++		DeviceStates.RenderState[D3DRS_ZENABLE].State != D3DZB_FALSE ||
++		!IsDeathtrapWidescreenWorldRenderActive())
++	{
++		return;
++	}
++
++	// Retail supplies positive camera-space depth as 1/RHW on its 3D draws.
++	// Pre-projected screen quads use a common 1.0 W and keep their retail order.
++	constexpr float NearZ = 32.0f;
++	const auto* Input = static_cast<const D3DTLVERTEX*>(Vertices);
++	for (DWORD i = 0; i < Count; ++i)
++	{
++		const float RHW = Input[i].rhw;
++		if (!std::isfinite(RHW) || RHW <= 0.0f || RHW > 1.0f / NearZ)
++		{
++			return;
++		}
++	}
++
++	const DWORD Width = lpCurrentRenderTargetX->GetD9Width();
++	const DWORD Height = lpCurrentRenderTargetX->GetD9Height();
++	if (DeathtrapDepthTarget != lpCurrentRenderTargetX || DeathtrapDepthWidth != Width || DeathtrapDepthHeight != Height)
++	{
++		ResetDeathtrapDepth();
++		DeathtrapDepthTarget = lpCurrentRenderTargetX;
++		DeathtrapDepthWidth = Width;
++		DeathtrapDepthHeight = Height;
++	}
++	if (DeathtrapDepthUnavailable)
++	{
++		return;
++	}
++
++	const auto Device = Depth.Device;
++	if (!DeathtrapDepthSurface.Get())
++	{
++		ComPtr<IDirect3DSurface9> Target;
++		D3DSURFACE_DESC Desc = {};
++		if (FAILED(Device->GetRenderTarget(0, Target.GetAddressOf())) ||
++			FAILED(Target->GetDesc(&Desc)) ||
++			FAILED(Device->CreateDepthStencilSurface(Desc.Width, Desc.Height, D3DFMT_D24X8,
++				Desc.MultiSampleType, Desc.MultiSampleQuality, FALSE, DeathtrapDepthSurface.GetAddressOf(), nullptr)))
++		{
++			DeathtrapDepthUnavailable = true;
++			LOG_LIMIT(5, "DeathtrapWorldDepth depth surface unavailable");
++			return;
++		}
++		LOG_LIMIT(10, "DeathtrapWorldDepth ready " << Desc.Width << "x" << Desc.Height);
++	}
++
++	Device->GetDepthStencilSurface(Depth.PreviousSurface.GetAddressOf());
++	Device->GetRenderState(D3DRS_ZWRITEENABLE, &Depth.PreviousWrite);
++	Device->GetRenderState(D3DRS_ZFUNC, &Depth.PreviousFunc);
++	if (FAILED(Device->SetDepthStencilSurface(DeathtrapDepthSurface.Get())))
++	{
++		DeathtrapDepthUnavailable = true;
++		LOG_LIMIT(5, "DeathtrapWorldDepth depth surface bind failed");
++		return;
++	}
++	Depth.Active = true;
++	if (DeathtrapDepthNeedsClear)
++	{
++		if (FAILED(Device->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, 1.0f, 0)))
++		{
++			DeathtrapDepthUnavailable = true;
++			LOG_LIMIT(5, "DeathtrapWorldDepth depth clear failed");
++			return;
++		}
++		DeathtrapDepthNeedsClear = false;
++	}
++
++	const bool Blending = DeviceStates.RenderState[D3DRS_ALPHABLENDENABLE].State != FALSE;
++	if (FAILED(Device->SetRenderState(D3DRS_ZFUNC, D3DCMP_LESSEQUAL)) ||
++		FAILED(Device->SetRenderState(D3DRS_ZWRITEENABLE, !Blending)) ||
++		FAILED(Device->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE)))
++	{
++		DeathtrapDepthUnavailable = true;
++		return;
++	}
++	auto* Output = static_cast<D3DTLVERTEX*>(Vertices);
++	for (DWORD i = 0; i < Count; ++i)
++	{
++		Output[i].sz = 1.0f - NearZ * Output[i].rhw;
++	}
++}
++
+ void m_IDirect3DDeviceX::UpdateVertices(DWORD& dwVertexTypeDesc, LPVOID& lpVertices, DWORD dwVertexStart, DWORD dwNumVertices)
+ {
+ 	if (dwVertexTypeDesc == D3DFVF_LVERTEX)
+@@ -7597,7 +7720,9 @@
+ 			lpCurrentRenderTargetX->GetLogicalWidth() == 800 && lpCurrentRenderTargetX->GetLogicalHeight() == 600 &&
+ 			lpCurrentRenderTargetX->GetD9Width() > lpCurrentRenderTargetX->GetLogicalWidth() &&
+ 			lpCurrentRenderTargetX->GetD9Height() > lpCurrentRenderTargetX->GetLogicalHeight();
+-		if (Config.DdrawClampVertexZDepth || ScaleVertices)
++		const bool WorldDepthGuard = IsDeathtrapWidescreenWorldRenderActive() &&
++			DeviceStates.RenderState[D3DRS_ZENABLE].State == D3DZB_FALSE;
++		if (Config.DdrawClampVertexZDepth || ScaleVertices || WorldDepthGuard)
+ 		{
+ 			DWORD Stride = GetVertexStride(dwVertexTypeDesc);
+ 			VertexCache.resize((dwVertexStart + dwNumVertices) * Stride);
+@@ -7608,6 +7733,17 @@
+ 			if (Config.DdrawClampVertexZDepth)
+ 			{
+ 				ClampVertices(VertexCache.data(), Stride, dwNumVertices);
++			}
++
++			// Retail submits camera-space Z even when depth testing is off.
++			// Keep the fallback in D3D9's viewport range at every resolution.
++			if (WorldDepthGuard)
++			{
++				for (DWORD i = 0; i < dwNumVertices; ++i)
++				{
++					float* Position = reinterpret_cast<float*>(VertexCache.data() + (dwVertexStart + i) * Stride);
++					Position[2] = 0.5f;
++				}
+ 			}
+ 
+ 			if (ScaleVertices)
+@@ -7631,15 +7767,6 @@
+ 				for (DWORD i = 0; i < dwNumVertices; ++i)
+ 				{
+ 					float* Position = reinterpret_cast<float*>(VertexCache.data() + ((dwVertexStart + i) * Stride));
+-					// Deathtrap sorts world polygons in software and passes camera-space
+-					// Z with hardware depth disabled. D3D9 still clips XYZRHW Z to [0,1].
+-					// Keep RHW intact for perspective textures; scope to the world pass,
+-					// including 4:3, never the UI. No external probe flag is required.
+-					if (IsDeathtrapWidescreenWorldRenderActive() &&
+-						DeviceStates.RenderState[D3DRS_ZENABLE].State == D3DZB_FALSE)
+-					{
+-						Position[2] = 0.5f;
+-					}
+ 					Position[0] = (Position[0] + 0.5f) * ScaleX + OffsetX - 0.5f;
+ 					Position[1] = (Position[1] + 0.5f) * ScaleY - 0.5f;
+ 				}
+--- a/ddraw/IDirect3DDeviceX.h
++++ b/ddraw/IDirect3DDeviceX.h
+@@ -229,6 +229,12 @@
+ 	bool bSetDefaults = true;
+ 	bool RequiresStateRestore = false;
+ 	bool IsInScene = false;
++	ComPtr<IDirect3DSurface9> DeathtrapDepthSurface;
++	m_IDirectDrawSurfaceX* DeathtrapDepthTarget = nullptr;
++	DWORD DeathtrapDepthWidth = 0;
++	DWORD DeathtrapDepthHeight = 0;
++	bool DeathtrapDepthNeedsClear = true;
++	bool DeathtrapDepthUnavailable = false;
+ 
+ 	// Default clip status
+ 	D3DCLIPSTATUS D3DClipStatus = DefaultClipStatus;
+@@ -362,6 +368,17 @@
+ 	void DumpTexture(UINT Stage, m_IDirectDrawSurfaceX* TextureSurface, IDirect3DTexture9* DrawTexture, bool ColorKey);
+ 	void TraceAlphaDraw(const char* DrawKind, D3DPRIMITIVETYPE PrimitiveType, DWORD VertexTypeDesc, DWORD VertexCount, const void* Vertices);
+ 	void RestoreDrawStates(HRESULT hr, DWORD dwFlags, DWORD DirectXVersion);
++	struct DeathtrapDepthDraw
++	{
++		LPDIRECT3DDEVICE9 Device;
++		ComPtr<IDirect3DSurface9> PreviousSurface;
++		DWORD PreviousWrite = FALSE;
++		DWORD PreviousFunc = D3DCMP_ALWAYS;
++		bool Active = false;
++		explicit DeathtrapDepthDraw(LPDIRECT3DDEVICE9 Device) : Device(Device) {}
++		~DeathtrapDepthDraw();
++	};
++	void PrepareDeathtrapDepthDraw(DeathtrapDepthDraw& Depth, DWORD VertexType, LPVOID Vertices, DWORD Count);
+ 	void UpdateVertices(DWORD& dwVertexTypeDesc, LPVOID& lpVertices, DWORD dwVertexStart, DWORD dwNumVertices);
+ 
+ 	D3DMATRIX* GetMatrix(D3DMATRIXHANDLE MatrixHandle)
+@@ -632,4 +649,5 @@
+ 	void ClearDdraw();
+ 	void AfterResetDevice();
+ 	void ClearDeviceState();
++	void ResetDeathtrapDepth();
+ };
+--- a/ddraw/IDirectDrawX.cpp
++++ b/ddraw/IDirectDrawX.cpp
+@@ -4523,6 +4523,17 @@
+ 
+ void m_IDirectDrawX::ReleaseAllD9Resources(bool BackupData, bool ResetInterface)
+ {
++	for (const auto& pDDraw : DDrawVector)
++	{
++		if (pDDraw->D3DInterface)
++		{
++			for (DWORD i = 0; m_IDirect3DDeviceX* D3DDevice = pDDraw->D3DInterface->GetNextD3DDevice(i); ++i)
++			{
++				D3DDevice->ResetDeathtrapDepth();
++			}
++		}
++	}
++
+ 	// Remove render target and depth stencil surfaces
+ 	if (d3d9Device && ResetInterface && (RenderTargetSurface || DepthStencilSurface))
+ 	{

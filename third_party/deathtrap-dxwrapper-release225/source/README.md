@@ -1,8 +1,8 @@
 # Reproducing the Deathtrap dxwrapper build
 
 The bundled binaries are built from the public dxwrapper repository with the
-adjacent `deathtrap-dxwrapper.patch` and
-`deathtrap-page-restore-present.patch` applied in that order.
+adjacent `deathtrap-dxwrapper.patch`, `deathtrap-page-restore-present.patch`,
+and `deathtrap-world-depth.patch` applied in that order.
 
 - Upstream: https://github.com/elishacloud/dxwrapper
 - Exact upstream base: `576c8f28aefc595e98b98fad64f379b151b2896f`
@@ -16,6 +16,7 @@ Set-Location dxwrapper
 git checkout 576c8f28aefc595e98b98fad64f379b151b2896f
 git apply path\to\deathtrap-dxwrapper.patch
 git apply path\to\deathtrap-page-restore-present.patch
+git apply --ignore-space-change path\to\deathtrap-world-depth.patch
 git submodule update --init --recursive
 msbuild dxwrapper.sln /t:Rebuild /m:1 /p:Configuration=Release /p:Platform=Win32 /p:PreBuildEventUseInBuild=false
 ```
@@ -25,7 +26,7 @@ Expected outputs and SHA-256 hashes:
 - `bin/Release/stub.dll` (packaged as `DDraw.dll`):
   `8BAE794EB7506711F57B690CFB8660A5F008B0185E764F8CB56D5972E01A9F33`
 - `bin/Release/dxwrapper.dll`:
-  `A2A2161F81E9736C137528C5BF66B3D94252AA2F319AC1236213C65163AE2386`
+  `0912A606587CEBB80E76C2429FAF5811B283B17D2FD9275F8B341359FFE72A42`
 
 dxwrapper is licensed under the Mozilla Public License 2.0. The complete
 license is included in the repository as
