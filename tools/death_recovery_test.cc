@@ -8,6 +8,33 @@ namespace {
 void Require(bool ok, const char* message) {
   if (!ok) { std::cerr << "death recovery: " << message << '\n'; std::exit(1); }
 }
+void SaveThumbnailCases() {
+  // The marker in the far corner is outside the old logical capture rect.
+  std::array<uint16_t, 24> pixels = {
+      0,0,0,0,0,0xffff, 0,0xf800,0,0x07e0,0,0xffff,
+      0,0,0,0,0,0xffff, 0,0x001f,0,0xffff,0,0xffff};
+  DDSURFACEDESC surface{};
+  surface.dwWidth=4;surface.dwHeight=4;surface.lPitch=12;
+  surface.lpSurface=pixels.data();
+  surface.ddpfPixelFormat.dwRGBBitCount=16;
+  surface.ddpfPixelFormat.dwRBitMask=0xf800;
+  surface.ddpfPixelFormat.dwGBitMask=0x07e0;
+  surface.ddpfPixelFormat.dwBBitMask=0x001f;
+  std::array<uint8_t, 12> rgb{};
+  Require(ResizeSaveThumbnailFrame(rgb.data(),2,2,surface) &&
+              rgb==std::array<uint8_t,12>{0,0,248, 0,252,0, 248,0,0, 248,252,248},
+          "preview must sample all four corners in native BGR order with padded pitch");
+  surface.dwWidth=6;
+  pixels[8]=0x07e0; pixels[10]=0xf800;
+  Require(ResizeSaveThumbnailFrame(rgb.data(),2,2,surface) && rgb[1]==252 && rgb[5]==248,
+          "wide captures must center on the scene at the native preview aspect");
+  surface.dwWidth=4;
+  Require(!ResizeSaveThumbnailFrame(rgb.data(),4,4,surface),
+          "logical-size captures must retain the native converter");
+  surface.lPitch=6;
+  Require(!ResizeSaveThumbnailFrame(rgb.data(),2,2,surface),
+          "invalid source pitch must be rejected");
+}
 std::array<uint8_t,0x9EC> context{};
 std::array<WIN32_FILE_ATTRIBUTE_DATA,10> files{};
 std::array<uint8_t,10> saved_levels{};
@@ -209,15 +236,20 @@ void OriginalImages(int argc,wchar_t** argv) {
     g_dungeon_base=reinterpret_cast<uint8_t*>(module);
     g_dungeon_image_variant=IdentifyDungeonImage(g_dungeon_base);
     g_native50_menu_hooks_installed=false;g_death_recovery_hooks_installed=false;
+    g_original_save_thumbnail_capture=nullptr;
+    g_original_save_thumbnail_convert=nullptr;
     Require(g_dungeon_image_variant!=DungeonImageVariant::kUnsupported &&
         InstallNative50MenuHooks() && InstallDeathRecoveryHooks() && InstallDeathRecoveryHooks(),
         "native hooks and menu transaction signatures work in every localization");
+    Require(InstallSaveThumbnailHooks() && InstallSaveThumbnailHooks(),
+            "save capture hooks must work in every localization");
     NativeLifecycle();
     Require(MH_Uninitialize()==MH_OK,"remove mapped test hooks");FreeLibrary(module);
   }
 }
 }
 int wmain(int argc,wchar_t** argv) {
+  SaveThumbnailCases();
   NavigationCases();
   auto* image=static_cast<uint8_t*>(VirtualAlloc(nullptr,0x380000,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE));
   Require(image!=nullptr,"allocate fixture");

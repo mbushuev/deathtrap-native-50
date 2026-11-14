@@ -9,6 +9,7 @@ EXPORTS
     DllUnregisterServer=Proxy_DllUnregisterServer @7 PRIVATE
     DeathtrapWidescreenWorldRenderActive=Proxy_DeathtrapWidescreenWorldRenderActive
     DeathtrapWidescreenAspectX1000=Proxy_DeathtrapWidescreenAspectX1000
+    DeathtrapSaveThumbnailCaptureActive=Proxy_DeathtrapSaveThumbnailCaptureActive
     DeathtrapDisplayMode=Proxy_DeathtrapDisplayMode
     DeathtrapWindowWidth=Proxy_DeathtrapWindowWidth
     DeathtrapWindowHeight=Proxy_DeathtrapWindowHeight

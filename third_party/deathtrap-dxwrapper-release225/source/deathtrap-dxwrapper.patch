@@ -919,6 +919,47 @@ index 0ebaa3ca..0ed63432 100644
  		}
  
  		return DD_OK;
+@@ -2600,6 +2622,28 @@ HRESULT m_IDirectDrawSurfaceX::Lock2(LPRECT lpDestRect, LPDDSURFACEDESC2 lpDDSur
+ 				SetRenderTargetShadow();
+ 			}
+ 
++			// Only the game's save capture consumes physical dimensions. Ordinary
++			// DirectDraw callers must continue to see the logical mode.
++			bool SaveThumbnail = false;
++			if (!lpDestRect && MipMapLevel == 0 && IsRenderTarget() &&
++				!IsUsingEmulation() && !surface.UsingSurfaceMemory &&
++				surface.Width > lpDDSurfaceDesc2->dwWidth && surface.Height > lpDDSurfaceDesc2->dwHeight &&
++				surface.Format == D3DFMT_R5G6B5)
++			{
++				using CaptureActiveFn = BOOL(WINAPI*)();
++				if (const HMODULE Input = GetModuleHandleW(L"DINPUT.dll"))
++				{
++					const auto CaptureActive = reinterpret_cast<CaptureActiveFn>(
++						GetProcAddress(Input, "DeathtrapSaveThumbnailCaptureActive"));
++					SaveThumbnail = CaptureActive && CaptureActive();
++				}
++			}
++			if (SaveThumbnail)
++			{
++				DestRect.right = static_cast<LONG>(surface.Width);
++				DestRect.bottom = static_cast<LONG>(surface.Height);
++			}
++
+ 			// Emulated surface
+ 			D3DLOCKED_RECT LockedRect = {};
+ 			if (IsUsingEmulation())
+@@ -2680,6 +2724,11 @@ HRESULT m_IDirectDrawSurfaceX::Lock2(LPRECT lpDestRect, LPDDSURFACEDESC2 lpDDSur
+ 				LockedRect.Pitch;
+ 			lpDDSurfaceDesc2->lPitch = LockedRect.Pitch;
+ 			lpDDSurfaceDesc2->dwFlags |= DDSD_PITCH;
++			if (SaveThumbnail)
++			{
++				lpDDSurfaceDesc2->dwWidth = surface.Width;
++				lpDDSurfaceDesc2->dwHeight = surface.Height;
++			}
+ 
+ 			// Set surface pitch
+ 			if (MipMapLevel && MipMaps.size())
 @@ -4681,9 +4700,29 @@ HRESULT m_IDirectDrawSurfaceX::CreateD9Surface()
  	// Default usage
  	surface.Usage = 0;

@@ -2147,6 +2147,10 @@ extern "C" DWORD WINAPI Proxy_DeathtrapWidescreenAspectX1000() {
   return DeathtrapWidescreenAspectX1000();
 }
 
+extern "C" BOOL WINAPI Proxy_DeathtrapSaveThumbnailCaptureActive() {
+  return DeathtrapSaveThumbnailCaptureActive() ? TRUE : FALSE;
+}
+
 extern "C" DWORD WINAPI Proxy_DeathtrapDisplayMode() {
   InitializeThread(nullptr);
   return DeathtrapDisplayMode();

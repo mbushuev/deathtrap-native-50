@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include <Xinput.h>
+#include <ddraw.h>
 #include <mmsystem.h>
 
 #include <MinHook.h>
@@ -21263,6 +21264,7 @@ bool InstallGameTextFix() {
 #include "corpse_retention_runtime.inl"
 #include "native50_menu_runtime.inl"
 #include "death_recovery_runtime.inl"
+#include "save_thumbnail_runtime.inl"
 
 bool InstallRootMenuEscapeHook() {
   if (!g_dungeon_base) {
@@ -21929,6 +21931,10 @@ bool DeathtrapWidescreenWorldRenderActive() {
   return g_widescreen_world_render_active;
 }
 
+bool DeathtrapSaveThumbnailCaptureActive() {
+  return g_save_thumbnail_capture;
+}
+
 uint32_t DeathtrapWidescreenAspectX1000() {
   if (g_widescreen_aspect_x1000 == 0u) {
     return 0u;
@@ -22063,6 +22069,7 @@ bool InstallDeathtrapNativeRenderHooks() {
   InstallInterfaceScaleHooks();
   InstallNative50MenuHooks();
   InstallDeathRecoveryHooks();
+  InstallSaveThumbnailHooks();
 
   // Preserve the retail serializer, slots, screenshots and loader. The hook
   // replaces only the Savetrig eligibility leaf and only after the exact

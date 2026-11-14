@@ -26,7 +26,7 @@ FILES = {
 }
 PINNED = {
     'DDraw.dll': '8bae794eb7506711f57b690cfb8660a5f008b0185e764f8cb56d5972e01a9f33',
-    'dxwrapper.dll': '304c3a528ad1ab4b25bbee48da0371a9db435df1cdf733cd1be13c2ff27bcc8e',
+    'dxwrapper.dll': 'a2a2161f81e9736c137528c5bf66b3d94252aa2f319ac1236213c65163ae2386',
     'D3D9.dll': 'd8d2e15bf5d0e01c89317a733492997de8f7f562a972fe564fd17d194ee5d1f3',
     'D3DImm.dll': '8b2850d0af5f07cf2928ac9666192c3adcb0290f10ed8f942f1594f3a4f51c73',
 }

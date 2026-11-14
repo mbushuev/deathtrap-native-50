@@ -25,7 +25,7 @@ Expected outputs and SHA-256 hashes:
 - `bin/Release/stub.dll` (packaged as `DDraw.dll`):
   `8BAE794EB7506711F57B690CFB8660A5F008B0185E764F8CB56D5972E01A9F33`
 - `bin/Release/dxwrapper.dll`:
-  `304C3A528AD1AB4B25BBEE48DA0371A9DB435DF1CDF733CD1BE13C2FF27BCC8E`
+  `A2A2161F81E9736C137528C5BF66B3D94252AA2F319AC1236213C65163AE2386`
 
 dxwrapper is licensed under the Mozilla Public License 2.0. The complete
 license is included in the repository as

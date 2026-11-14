@@ -17,7 +17,7 @@ window presentation without an exclusive display-mode switch.
 - DDraw.dll (proxy stub):
   `8BAE794EB7506711F57B690CFB8660A5F008B0185E764F8CB56D5972E01A9F33`
 - dxwrapper.dll:
-  `304C3A528AD1AB4B25BBEE48DA0371A9DB435DF1CDF733CD1BE13C2FF27BCC8E`
+  `A2A2161F81E9736C137528C5BF66B3D94252AA2F319AC1236213C65163AE2386`
 
 The final backend remains unmodified dgVoodoo 2.86.2 D3D9 to D3D11.
 On Steam Deck the same Dd7to9 layer hands D3D9 directly to Proton/DXVK and
