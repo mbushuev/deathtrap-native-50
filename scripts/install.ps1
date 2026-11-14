@@ -170,7 +170,7 @@ $dxWrapperPayload = @(
     },
     @{
         Name = 'dxwrapper.dll'
-        Sha256 = 'A2A2161F81E9736C137528C5BF66B3D94252AA2F319AC1236213C65163AE2386'
+        Sha256 = 'C135D1B3434DD421F9CC3ED6826FD4DB7A50D528E2D8C7E6F18059DB7C2B5189'
     }
 )
 foreach ($wrapper in $dxWrapperPayload) {

@@ -171,7 +171,8 @@ const std::set<std::wstring> allowed = {L"DINPUT.dll", L"native50-e3-model.n50p"
   L"DDraw.dll", L"dxwrapper.dll", L"dxwrapper.ini", L"D3D9.dll", L"D3DImm.dll", L"dgVoodoo.conf",
   L"Native50/README.txt", L"Native50/CHANGELOG.txt", L"Native50/LICENSE.txt", L"Native50/THIRD_PARTY_NOTICES.txt",
   L"Native50/licenses/dxwrapper.txt", L"Native50/source/dxwrapper/README.md", L"Native50/source/dxwrapper/deathtrap-dxwrapper.patch",
-  L"Native50/source/dxwrapper/deathtrap-page-restore-present.patch"};
+  L"Native50/source/dxwrapper/deathtrap-page-restore-present.patch", L"Native50/source/dxwrapper/deathtrap-world-depth.patch",
+  L"Native50/source/dxwrapper/deathtrap-door-texture.patch"};
 constexpr const char* musicOriginal = "cc7e8d381b21049175ff25f2f628347718df7c8070661dfb31ec4c71fc47ab85";
 constexpr const char* musicFixed = "43c879a24ff746674a959b85c0223c73f92ccbd4bb7e81d81100beec232fb410";
 }

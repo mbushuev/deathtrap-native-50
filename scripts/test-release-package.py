@@ -22,6 +22,8 @@ EXPECTED_FILES = REQUIRED_FILES | {
     "licenses/dxwrapper.txt", "source/dxwrapper/README.md",
     "source/dxwrapper/deathtrap-dxwrapper.patch",
     "source/dxwrapper/deathtrap-page-restore-present.patch",
+    "source/dxwrapper/deathtrap-world-depth.patch",
+    "source/dxwrapper/deathtrap-door-texture.patch",
 }
 
 
