@@ -25,6 +25,37 @@ struct ImmersiveRootMotionInput {
   bool active = false;
 };
 
+// An animation can briefly omit or duplicate the head mesh. Carry the last
+// measured head offset with the current actor focus for at most one watchdog
+// interval. A large focus discontinuity must start with a new measurement.
+inline bool TranslateRecentImmersiveHeadMount(
+    const std::array<int32_t, 3>& head,
+    const std::array<int32_t, 3>& measured_focus,
+    const std::array<int32_t, 3>& current_focus, uint64_t measured_ms,
+    uint64_t now_ms, uint64_t max_age_ms,
+    std::array<int32_t, 3>* translated_head) {
+  if (!translated_head || !measured_ms || now_ms < measured_ms ||
+      now_ms - measured_ms > max_age_ms) {
+    return false;
+  }
+  std::array<int32_t, 3> translated{};
+  double distance_squared = 0.0;
+  for (size_t axis = 0; axis < translated.size(); ++axis) {
+    const int64_t delta =
+        static_cast<int64_t>(current_focus[axis]) - measured_focus[axis];
+    const int64_t position = head[axis] + delta;
+    if (position < std::numeric_limits<int32_t>::min() ||
+        position > std::numeric_limits<int32_t>::max()) {
+      return false;
+    }
+    translated[axis] = static_cast<int32_t>(position);
+    distance_squared += static_cast<double>(delta) * delta;
+  }
+  if (distance_squared > 800.0 * 800.0) return false;
+  *translated_head = translated;
+  return true;
+}
+
 // Straight forward/back movement needs no vector redirection: Dungeon's own
 // W/S path already owns animation root motion, step-up and airborne collision.
 // Keep a small longitudinal cone for real controller sticks so harmless axial

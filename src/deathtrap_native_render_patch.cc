@@ -5845,14 +5845,11 @@ uintptr_t ResolvePlayerHeadJoint(const SceneSnapshot& scene) {
   return selected;
 }
 
-bool ResolveLivePlayerHeadMount(
+bool ReadPlayerHeadMount(
     const SceneSnapshot& scene,
+    uintptr_t node,
     const std::array<int32_t, 3>& current_camera_focus,
-    std::array<int32_t, 3>* head_center, uintptr_t* head_node) {
-  if (!head_center) {
-    return false;
-  }
-  const uintptr_t node = ResolvePlayerHeadJoint(scene);
+    std::array<int32_t, 3>* head_center) {
   const auto player = scene.nodes.find(scene.player);
   const auto head = scene.nodes.find(node);
   if (!node || player == scene.nodes.end() || head == scene.nodes.end()) {
@@ -5864,10 +5861,17 @@ bool ResolveLivePlayerHeadMount(
   // The source camera hook runs after animation/cache preparation in the
   // supported renderer. Read the live matrices so the new endpoint and the
   // body rendered for that endpoint belong to the same animation sample.
-  SafeRead(reinterpret_cast<const void*>(scene.player + kMatrixOffset),
-           &live_player, sizeof(live_player));
-  SafeRead(reinterpret_cast<const void*>(node + kMatrixOffset),
-           &live_head, sizeof(live_head));
+  const bool live_player_read = SafeRead(
+      reinterpret_cast<const void*>(scene.player + kMatrixOffset),
+      &live_player, sizeof(live_player));
+  const bool live_head_read = SafeRead(
+      reinterpret_cast<const void*>(node + kMatrixOffset),
+      &live_head, sizeof(live_head));
+  // Never compute a relative offset from matrices of different ticks.
+  if (!live_player_read || !live_head_read) {
+    live_player = player->second.world;
+    live_head = head->second.world;
+  }
 
   std::array<int32_t, 3> focus_from_snapshot_root = {0, 400, 0};
   if (scene.camera_focus_valid) {
@@ -5887,9 +5891,19 @@ bool ResolveLivePlayerHeadMount(
         current_root + animated_offset, std::numeric_limits<int32_t>::min(),
         std::numeric_limits<int32_t>::max()));
   }
-  if (head_node) {
-    *head_node = node;
+  return true;
+}
+
+bool ResolveLivePlayerHeadMount(
+    const SceneSnapshot& scene,
+    const std::array<int32_t, 3>& current_camera_focus,
+    std::array<int32_t, 3>* head_center, uintptr_t* head_node) {
+  const uintptr_t node = ResolvePlayerHeadJoint(scene);
+  if (!head_center ||
+      !ReadPlayerHeadMount(scene, node, current_camera_focus, head_center)) {
+    return false;
   }
+  if (head_node) *head_node = node;
   return true;
 }
 
@@ -8393,7 +8407,8 @@ bool PublishOwnedCameraEndpoint(
     const std::array<int32_t, 3>& look_target,
     const std::array<double, 3>* fixed_view_forward,
     const std::array<int32_t, 3>& combined_position,
-    size_t start_sector_index, bool transition_cut) {
+    size_t start_sector_index, bool transition_cut,
+    bool verify_live_baseline = false) {
   if (!controller || !g_original_camera_look_at ||
       !g_camera_node_local_update || !g_camera_node_world_update ||
       !g_runtime_room_graph.valid ||
@@ -8572,12 +8587,24 @@ bool PublishOwnedCameraEndpoint(
       ? previous_camera->second.local : live_local;
   const Matrix3x4& expected_world = previous_pose_valid
       ? previous_camera->second.world : live_world;
-  const bool baseline_local_exact = baseline_built &&
+  bool baseline_local_exact = baseline_built &&
       std::memcmp(&baseline_local, &expected_local,
                   sizeof(expected_local)) == 0;
-  const bool baseline_world_exact = baseline_built &&
+  bool baseline_world_exact = baseline_built &&
       std::memcmp(&baseline_world, &expected_world,
                   sizeof(expected_world)) == 0;
+  if (verify_live_baseline && !(baseline_local_exact && baseline_world_exact)) {
+    // During an effect or animation update the previous snapshot can no
+    // longer be reproduced through the current parent transform. Verify
+    // the actual live pose instead, which is also the rollback source.
+    const bool live_built = BuildDetachedCameraMatrices(
+        camera_before, current_position, current_angles, nullptr,
+        &baseline_local, &baseline_world);
+    baseline_local_exact = live_built &&
+        std::memcmp(&baseline_local, &live_local, sizeof(live_local)) == 0;
+    baseline_world_exact = live_built &&
+        std::memcmp(&baseline_world, &live_world, sizeof(live_world)) == 0;
+  }
   const bool published_exact =
       std::memcmp(&published_before, &live_world, sizeof(live_world)) == 0;
   const bool owned_translation_exact = owned_built &&
@@ -8674,35 +8701,30 @@ bool PublishOwnedCameraEndpoint(
   return committed;
 }
 
-bool PublishImmersiveFirstPersonEndpoint(
-    void* controller, const std::array<int32_t, 3>& camera_focus,
-    uintptr_t room_or_sector, bool transition_cut) {
-  if (!controller) {
-    return false;
-  }
+uintptr_t ResolveLivePlayerRenderRoot();
 
+struct ImmersiveHeadMountSample {
+  uintptr_t scene_root = 0;
+  uintptr_t player = 0;
+  std::array<int32_t, 3> focus{};
+  std::array<int32_t, 3> head{};
+  uint64_t measured_ms = 0;
+};
+
+ImmersiveHeadMountSample g_immersive_head_mount_sample;
+
+const char* TryPublishImmersiveHeadMount(
+    void* controller, const std::array<int32_t, 3>& camera_focus,
+    uintptr_t room_or_sector, const std::array<int32_t, 3>& head_center,
+    uintptr_t head_node, bool transition_cut) {
+  const auto& scene = g_previous_snapshot;
   const double yaw = g_third_person_orbit_state.yaw;
   const double pitch = g_third_person_orbit_state.pitch;
-  std::array<int32_t, 3> head_center{};
-  uintptr_t head_node = 0;
-  if (!ResolveLivePlayerHeadMount(g_previous_snapshot, camera_focus,
-                                  &head_center, &head_node)) {
-    ProbePlayerHeadJoints(
-        g_previous_snapshot,
-        g_source_ticks.load(std::memory_order_relaxed), true);
-    AppendNativeLog(
-        "camera_immersive_first_person valid=0 reason=HEAD_JOINT");
-    return false;
-  }
   const ImmersiveFirstPersonPose pose = BuildImmersiveHeadMountedPose(
       head_center, yaw, pitch, g_custom_head_height,
       g_custom_head_forward_offset);
   if (!pose.valid) {
-    AppendNativeLog(
-        "camera_immersive_first_person valid=0 reason=POSE yaw=%.2f "
-        "pitch=%.2f",
-        yaw * 180.0 / kOrbitPi, pitch * 180.0 / kOrbitPi);
-    return false;
+    return "POSE";
   }
   const std::array<double, 3> look_at_forward =
       ImmersiveFirstPersonLookAtVector(pose.forward);
@@ -8710,25 +8732,42 @@ bool PublishImmersiveFirstPersonEndpoint(
 
   deathtrap_camera::RoomSweepResult room_sweep;
   std::array<int32_t, 3> safe_eye = requested_eye;
+  std::array<int32_t, 3> collision_origin = head_center;
   size_t start_sector_index = std::numeric_limits<size_t>::max();
   if (!SweepOwnedCameraAgainstRooms(
-          head_center, requested_eye, room_or_sector, &room_sweep, &safe_eye,
+          collision_origin, requested_eye, room_or_sector, &room_sweep, &safe_eye,
           nullptr, std::numeric_limits<size_t>::max(), &start_sector_index)) {
-    AppendNativeLog("camera_immersive_first_person valid=0 reason=ROOM");
-    return false;
+    // A head can straddle a floor or portal while the player's native focus
+    // is still in a valid sector. Sweep from that focus, never publish an
+    // unchecked eye point or reuse the sector index from another room.
+    collision_origin = camera_focus;
+    if (CameraPositionDistance(camera_focus, head_center) > 800.0 ||
+        !SweepOwnedCameraAgainstRooms(
+            collision_origin, requested_eye, room_or_sector, &room_sweep,
+            &safe_eye, nullptr, std::numeric_limits<size_t>::max(),
+            &start_sector_index) ||
+        CameraPositionDistance(safe_eye, requested_eye) >
+            CameraPositionDistance(head_center, requested_eye)) {
+      return "ROOM";
+    }
   }
 
   OwnedCameraSceneSweepResult scene_sweep;
   const bool scene_valid = SweepOwnedCameraAgainstSceneMeshesInSnapshots(
-      g_previous_snapshot, g_older_snapshot, head_center, safe_eye,
+      scene, g_older_snapshot, collision_origin, safe_eye,
       &scene_sweep, false);
   if (scene_valid && scene_sweep.blocked) {
     safe_eye = scene_sweep.position;
   }
+  if (collision_origin != head_center &&
+      CameraPositionDistance(safe_eye, requested_eye) >
+          CameraPositionDistance(head_center, requested_eye)) {
+    return "SCENE";
+  }
 
   const bool committed = PublishOwnedCameraEndpoint(
-      controller, head_center, head_center, &look_at_forward, safe_eye,
-      start_sector_index, transition_cut);
+      controller, collision_origin, head_center, &look_at_forward, safe_eye,
+      start_sector_index, transition_cut, true);
   static uint64_t head_sequence = 0;
   ++head_sequence;
   if (!committed || transition_cut || room_sweep.blocked ||
@@ -8737,7 +8776,7 @@ bool PublishImmersiveFirstPersonEndpoint(
     AppendNativeLog(
         "camera_immersive_first_person valid=%u eye=%d/%d/%d safe=%d/%d/%d "
         "head=%d/%d/%d node=%08llX yaw=%.2f pitch=%.2f "
-        "room=%u scene=%u/%u cut=%u",
+        "room=%u scene=%u/%u cut=%u cached_head=%u focus_seed=%u",
         committed ? 1u : 0u, requested_eye[0], requested_eye[1],
         requested_eye[2], safe_eye[0], safe_eye[1], safe_eye[2],
         head_center[0], head_center[1], head_center[2],
@@ -8745,9 +8784,58 @@ bool PublishImmersiveFirstPersonEndpoint(
         yaw * 180.0 / kOrbitPi, pitch * 180.0 / kOrbitPi,
         room_sweep.blocked ? 1u : 0u, scene_valid ? 1u : 0u,
         scene_valid && scene_sweep.blocked ? 1u : 0u,
-        transition_cut ? 1u : 0u);
+        transition_cut ? 1u : 0u, head_node ? 0u : 1u,
+        collision_origin != head_center ? 1u : 0u);
   }
-  return committed;
+  return committed ? nullptr : "PUBLISH";
+}
+
+const char* PublishImmersiveFirstPersonEndpoint(
+    void* controller, const std::array<int32_t, 3>& camera_focus,
+    uintptr_t room_or_sector, uint64_t now_ms, bool transition_cut) {
+  const auto& scene = g_previous_snapshot;
+  if (!controller || !scene.root || !scene.player ||
+      scene.player != ResolveLivePlayerRenderRoot()) {
+    return "PLAYER";
+  }
+
+  std::array<int32_t, 3> head_center{};
+  uintptr_t head_node = 0;
+  const char* failure = "HEAD_JOINT";
+  if (ResolveLivePlayerHeadMount(
+          scene, camera_focus, &head_center, &head_node)) {
+    failure = TryPublishImmersiveHeadMount(
+        controller, camera_focus, room_or_sector, head_center, head_node,
+        transition_cut);
+    if (!failure) {
+      g_immersive_head_mount_sample = {
+          scene.root, scene.player, camera_focus, head_center, now_ms};
+      return nullptr;
+    }
+  } else {
+    ProbePlayerHeadJoints(
+        scene, g_source_ticks.load(std::memory_order_relaxed), true);
+  }
+
+  // An attack frame can have a valid joint but move its camera mount into a
+  // place we cannot publish. Retry the last accepted mount, following the
+  // current player focus and rerunning the same collision checks.
+  const auto& sample = g_immersive_head_mount_sample;
+  std::array<int32_t, 3> previous_mount{};
+  if (CustomHeadViewPublished(now_ms) &&
+      sample.scene_root == scene.root && sample.player == scene.player &&
+      TranslateRecentImmersiveHeadMount(
+          sample.head, sample.focus, camera_focus, sample.measured_ms, now_ms,
+          g_camera_source_watchdog_ms.load(std::memory_order_acquire),
+          &previous_mount) &&
+      (!head_node || previous_mount != head_center) &&
+      !TryPublishImmersiveHeadMount(
+          controller, camera_focus, room_or_sector, previous_mount, 0,
+          transition_cut)) {
+    AppendNativeLog("camera_immersive_first_person recovery=%s", failure);
+    return nullptr;
+  }
+  return failure;
 }
 
 // Source camera endpoints are collision-resolved independently, but the 50 Hz
@@ -10609,10 +10697,13 @@ void __cdecl HookMode3Camera(void* controller) {
     const auto heading = CameraRelativeHeadingFromOrbit(
         g_third_person_orbit_state.yaw, 0.0, 1.0,
         kPlayerHeadingUnitsPerTurn, false);
+    const char* failure = "CONTEXT";
     if (!g_xinput_first_person_toggled.load(std::memory_order_acquire) &&
-        !RetailFirstPersonActive() && heading.valid &&
-        PublishImmersiveFirstPersonEndpoint(
-            controller, camera_focus, room_or_sector, !was_head)) {
+        !RetailFirstPersonActive() && heading.valid) {
+      failure = PublishImmersiveFirstPersonEndpoint(
+          controller, camera_focus, room_or_sector, head_now_ms, !was_head);
+    }
+    if (!failure) {
       g_immersive_body_heading.store(heading.heading,
                                      std::memory_order_release);
       g_custom_head_last_publication_ms.store(head_now_ms,
@@ -10633,10 +10724,12 @@ void __cdecl HookMode3Camera(void* controller) {
     if (previous_head_sample) {
       g_third_person_orbit_state.owned_publication_active = false;
       AppendDeathtrapSupportLog(
-          "camera_immersive_first_person fallback=MODERN_THIRD_PERSON");
+          "camera_immersive_first_person fallback=MODERN_THIRD_PERSON reason=%s",
+          failure);
     } else {
       AppendNativeLog(
-          "camera_immersive_first_person fallback=MODERN_THIRD_PERSON");
+          "camera_immersive_first_person fallback=MODERN_THIRD_PERSON reason=%s",
+          failure);
     }
   }
   deathtrap_camera::RoomSweepResult owned_room_sweep;
@@ -19594,6 +19687,7 @@ void ObservePlayerLanding(const SceneSnapshot& current) {
 void ResetSceneHistory() {
   FlushPresentationTraceBuffer();
   ClearImmersiveCameraPublication();
+  g_immersive_head_mount_sample = {};
   g_active_presentation_trace = {};
   g_older_snapshot = {};
   g_previous_snapshot = {};

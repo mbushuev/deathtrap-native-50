@@ -23,6 +23,20 @@ int main() {
   constexpr double kPi = 3.14159265358979323846;
   const std::array<int32_t, 3> root = {100, 200, 300};
 
+  std::array<int32_t, 3> carried_head{};
+  const std::array<int32_t, 3> head = {110, 420, 280};
+  const std::array<int32_t, 3> moved_focus = {140, 190, 315};
+  Require(TranslateRecentImmersiveHeadMount(
+              head, root, moved_focus, 1000, 1060, 200, &carried_head) &&
+              carried_head == std::array<int32_t, 3>{150, 410, 295},
+          "an animation gap must preserve the last head-to-focus offset");
+  Require(!TranslateRecentImmersiveHeadMount(
+              head, root, moved_focus, 1000, 1201, 200, &carried_head) &&
+              !TranslateRecentImmersiveHeadMount(
+                  head, root, {100, 200, 1500}, 1000, 1060, 200,
+                  &carried_head),
+          "a stale mount or a teleport must require a new measurement");
+
   Require(MatchesImmersiveHeadJoint(1, 0, 3, 76, 5),
           "female head with one braid child must resolve");
   Require(MatchesImmersiveHeadJoint(0, 0, 3, 90, 5),
