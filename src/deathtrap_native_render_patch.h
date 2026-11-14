@@ -199,6 +199,8 @@ uint64_t GetDeathtrapNativePresentationTick();
 // Exact world-render boundary consumed by the DirectDraw presentation proxy.
 // HUD, menus and movies are deliberately outside it.
 bool DeathtrapWidescreenWorldRenderActive();
+uint32_t DeathtrapWorldDepthGroup();
+bool DeathtrapProjectWorldQuad(const void* vertices, uint32_t count, float* uvq);
 bool DeathtrapSaveThumbnailCaptureActive();
 
 // Output aspect * 1000. 0 disables, 1 selects the current monitor, and a

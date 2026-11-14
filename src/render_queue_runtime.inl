@@ -32,6 +32,242 @@ constexpr uintptr_t kRenderQueueOriginalOffsets[]={0,0x4000,0x8000,0x10000,0x140
 std::array<uint8_t*,6> g_render_queue_arrays{};
 bool g_render_queue_expanded=false;
 
+constexpr DungeonDataRva kRenderQueueCallbacksRva{
+    0x107B50u, 0x1085B0u, 0x108020u, 0x108200u};
+using RenderQueueCallback = void(__cdecl*)(void*);
+const RenderQueueCallback* g_render_queue_callbacks = nullptr;
+using RenderQueueFlush = void(__cdecl*)();
+RenderQueueFlush g_render_queue_flush = nullptr;
+
+struct WorldQueueScope {
+  uint32_t sort_layer = 0;
+  uint32_t depth_group = 0;
+};
+thread_local WorldQueueScope* g_world_queue_scope = nullptr;
+thread_local uint32_t g_next_world_depth_group = 0;
+thread_local uint32_t g_world_depth_group = 0;
+thread_local std::unordered_map<const void*, deathtrap::projective_quad::Mapping>
+    g_world_quad_mappings;
+thread_local const deathtrap::projective_quad::Mapping* g_current_world_quad = nullptr;
+
+constexpr DungeonDataRva kRoomProjectionRva{
+    0x104B58u, 0x1055B8u, 0x105028u, 0x105208u};
+uintptr_t* g_render_queue_next_cursor = nullptr;
+RenderQueueFlush g_render_queue_reset = nullptr;
+
+void __cdecl ResetWorldRenderQueue() {
+  g_world_quad_mappings.clear();
+  g_render_queue_reset();
+}
+
+void __cdecl RecordWorldQuad(const uint8_t* face, const uint8_t* command) {
+  using namespace deathtrap::projective_quad;
+  if (!g_widescreen_world_render_active || !(command[0] & 1) ||
+      *reinterpret_cast<const uint32_t*>(face + 0x28) != 4) {
+    return;
+  }
+  const auto* corners = *reinterpret_cast<const uint8_t* const*>(face + 0x2C);
+  const auto* projection = reinterpret_cast<const float*>(g_dungeon_base + kRoomProjectionRva);
+  const double width = command[0x10] + 1, height = command[0x11] + 1;
+  std::array<Point, 4> positions;
+  std::array<UV, 4> coordinates;
+  for (size_t i = 0; i < positions.size(); ++i) {
+    const auto* corner = corners + i * 16;
+    const auto* vertex = *reinterpret_cast<const uint8_t* const*>(corner + 8);
+    const auto* camera = *reinterpret_cast<const float* const*>(vertex + 0x1C);
+    positions[i] = {camera[0], camera[1], camera[2]};
+    const auto* uv = reinterpret_cast<const int16_t*>(corner);
+    coordinates[i] = {uv[0] / width, uv[1] / height};
+  }
+  Mapping mapping;
+  if (Build(positions, coordinates, projection[0], projection[5],
+            projection[8], projection[28], mapping)) {
+    g_world_quad_mappings.emplace(command, mapping);
+  }
+}
+
+// Both paths commit the polygon after clipping but still have the original
+// face descriptor and all four camera-space corners. The overwritten MOV
+// loads the next free command address.
+__declspec(naked) void RecordRoomQuadBridge() {
+  __asm {
+    pushfd
+    pushad
+    push edx
+    push dword ptr [ebp-4]
+    call RecordWorldQuad
+    add esp, 8
+    popad
+    popfd
+    mov eax, g_render_queue_next_cursor
+    mov eax, [eax]
+    ret
+  }
+}
+
+__declspec(naked) void RecordNearClippedRoomQuadBridge() {
+  __asm {
+    pushfd
+    pushad
+    push ebx
+    push dword ptr [esp+84]
+    call RecordWorldQuad
+    add esp, 8
+    popad
+    popfd
+    mov eax, g_render_queue_next_cursor
+    mov eax, [eax]
+    ret
+  }
+}
+
+void __cdecl FlushWorldRenderQueue() {
+  WorldQueueScope scope;
+  auto* previous_scope = g_world_queue_scope;
+  const uint32_t previous_group = g_world_depth_group;
+  g_world_queue_scope = g_widescreen_world_render_active ? &scope : nullptr;
+  g_world_depth_group = 0;
+  g_render_queue_flush();
+  g_world_depth_group = previous_group;
+  g_world_queue_scope = previous_scope;
+}
+
+void __cdecl DispatchRenderQueue(uint32_t type, const void* entry, void* command) {
+  const uint32_t previous_group = g_world_depth_group;
+  const auto* previous_quad = g_current_world_quad;
+  g_current_world_quad = nullptr;
+  if (auto* scope = g_world_queue_scope) {
+    const auto* keys = g_dungeon_base + kRenderQueueKeysRva;
+    const auto* pointers = g_render_queue_expanded ? g_render_queue_arrays[2]
+        : keys + kRenderQueueOriginalOffsets[2];
+    const auto* layers = g_render_queue_expanded ? g_render_queue_arrays[1]
+        : keys + kRenderQueueOriginalOffsets[1];
+    const auto index = (static_cast<const uint8_t*>(entry) - pointers) / sizeof(void*);
+    const auto layer = reinterpret_cast<const uint16_t*>(layers)[index];
+    if (scope->depth_group == 0 || scope->sort_layer != layer) {
+      scope->sort_layer = layer;
+      if (++g_next_world_depth_group == 0) ++g_next_world_depth_group;
+      scope->depth_group = g_next_world_depth_group;
+    }
+    g_world_depth_group = scope->depth_group;
+    if (type == 0 && !g_world_quad_mappings.empty()) {
+      const auto mapping = g_world_quad_mappings.find(command);
+      if (mapping != g_world_quad_mappings.end()) g_current_world_quad = &mapping->second;
+    }
+  }
+  g_render_queue_callbacks[type](command);
+  g_current_world_quad = previous_quad;
+  g_world_depth_group = previous_group;
+}
+
+// Retail has already validated ECX and pushed the command. EDI points to the
+// corresponding entry in the sorted pointer array.
+__declspec(naked) void RenderQueueDispatchBridge() {
+  __asm {
+    push dword ptr [esp+4]
+    push edi
+    push ecx
+    call DispatchRenderQueue
+    add esp, 12
+    ret
+  }
+}
+
+template <size_t Size>
+std::array<uint8_t, Size> RenderQueueCall(uintptr_t site, uintptr_t target) {
+  static_assert(Size >= 5);
+  std::array<uint8_t, Size> bytes;
+  bytes.fill(0x90);
+  bytes[0] = 0xE8;
+  const auto relative = static_cast<uint32_t>(target - site - 5);
+  std::memcpy(bytes.data() + 1, &relative, sizeof(relative));
+  return bytes;
+}
+
+bool InstallWorldRenderQueueDepth() {
+  if (g_render_queue_flush) return true;
+  if (!g_dungeon_base || g_dungeon_image_variant == DungeonImageVariant::kUnsupported) {
+    return false;
+  }
+  const auto dispatch = ActiveDungeonCodeRva(0x6531A);
+  const auto flush = ActiveDungeonCodeRva(0x1B452);
+  const auto base = reinterpret_cast<uintptr_t>(g_dungeon_base);
+  const auto native_flush = base + ActiveDungeonCodeRva(0x652D0);
+  const auto* callbacks = reinterpret_cast<const RenderQueueCallback*>(
+      g_dungeon_base + kRenderQueueCallbacksRva);
+  const auto table = reinterpret_cast<uintptr_t>(callbacks);
+  std::array<uint8_t, 7> original_dispatch{0xFF, 0x14, 0x8D};
+  std::memcpy(original_dispatch.data() + 3, &table, sizeof(uint32_t));
+  const auto original_flush = RenderQueueCall<5>(base + flush, native_flush);
+  if (!MatchesDungeonCode(dispatch, original_dispatch) ||
+      !MatchesDungeonCode(flush, original_flush)) {
+    AppendDeathtrapSupportLog("support_world_depth state=skipped reason=queue_signature");
+    return false;
+  }
+  const auto replacement_dispatch = RenderQueueCall<7>(base + dispatch,
+      reinterpret_cast<uintptr_t>(&RenderQueueDispatchBridge));
+  const auto replacement_flush = RenderQueueCall<5>(base + flush,
+      reinterpret_cast<uintptr_t>(&FlushWorldRenderQueue));
+  g_render_queue_callbacks = callbacks;
+  if (!PatchDungeonCode(dispatch, original_dispatch, replacement_dispatch)) return false;
+  g_render_queue_flush = reinterpret_cast<RenderQueueFlush>(native_flush);
+  if (!PatchDungeonCode(flush, original_flush, replacement_flush)) {
+    g_render_queue_flush = nullptr;
+    PatchDungeonCode(dispatch, replacement_dispatch, original_dispatch);
+    return false;
+  }
+  AppendDeathtrapSupportLog("support_world_depth state=queue_layers");
+  return true;
+}
+
+bool InstallWorldQuadProjection() {
+  if (g_render_queue_reset) return true;
+  if (!g_render_queue_flush) return false;
+
+  const auto base = reinterpret_cast<uintptr_t>(g_dungeon_base);
+  const auto reset = ActiveDungeonCodeRva(0x1B34F);
+  const auto native_reset = base + ActiveDungeonCodeRva(0x652B0);
+  g_render_queue_next_cursor = reinterpret_cast<uintptr_t*>(
+      g_dungeon_base + kRenderQueueBaseRva + 4);
+  std::array<uint8_t, 5> native_load{0xA1};
+  const auto cursor = reinterpret_cast<uintptr_t>(g_render_queue_next_cursor);
+  std::memcpy(native_load.data() + 1, &cursor, sizeof(uint32_t));
+  struct Change {
+    uintptr_t rva;
+    std::array<uint8_t, 5> before;
+    uintptr_t target;
+  };
+  const Change changes[] = {
+      {reset, RenderQueueCall<5>(base + reset, native_reset),
+       reinterpret_cast<uintptr_t>(&ResetWorldRenderQueue)},
+      {ActiveDungeonCodeRva(0x3C4FB), native_load,
+       reinterpret_cast<uintptr_t>(&RecordRoomQuadBridge)},
+      {ActiveDungeonCodeRva(0x3CD9C), native_load,
+       reinterpret_cast<uintptr_t>(&RecordNearClippedRoomQuadBridge)}};
+  for (const auto& change : changes) {
+    if (!MatchesDungeonCode(change.rva, change.before)) {
+      AppendDeathtrapSupportLog("support_world_uv state=skipped reason=queue_signature");
+      return false;
+    }
+  }
+  g_render_queue_reset = reinterpret_cast<RenderQueueFlush>(native_reset);
+  for (size_t i = 0; i < std::size(changes); ++i) {
+    const auto& change = changes[i];
+    if (PatchDungeonCode(change.rva, change.before,
+                         RenderQueueCall<5>(base + change.rva, change.target))) continue;
+    while (i) {
+      const auto& installed = changes[--i];
+      PatchDungeonCode(installed.rva,
+                       RenderQueueCall<5>(base + installed.rva, installed.target),
+                       installed.before);
+    }
+    g_render_queue_reset = nullptr;
+    return false;
+  }
+  AppendDeathtrapSupportLog("support_world_uv state=projective_quads");
+  return true;
+}
+
 void LogRenderQueueUsage() {
   if (!g_render_queue_expanded || !g_extended_log_enabled.load(std::memory_order_relaxed)) return;
   uint32_t count=0;uintptr_t base=0,cursor=0,end=0;

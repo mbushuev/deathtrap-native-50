@@ -1,4 +1,5 @@
 #include "deathtrap_native_render_patch.h"
+#include "projective_quad.h"
 
 #ifndef DEATHTRAP_NATIVE_VERSION
 #define DEATHTRAP_NATIVE_VERSION "development"
@@ -21960,6 +21961,29 @@ bool DeathtrapWidescreenWorldRenderActive() {
   return g_widescreen_world_render_active;
 }
 
+uint32_t DeathtrapWorldDepthGroup() {
+  return g_world_depth_group;
+}
+
+bool DeathtrapProjectWorldQuad(const void* vertices, uint32_t count, float* uvq) {
+  if (!g_current_world_quad || count < 3 || count > 9) return false;
+  struct Vertex {
+    float x, y, z, rhw;
+    uint32_t diffuse, specular;
+    float u, v;
+  };
+  const auto* input = static_cast<const Vertex*>(vertices);
+  for (uint32_t i = 0; i < count; ++i) {
+    deathtrap::projective_quad::TexturePoint result;
+    if (!g_current_world_quad->Project(input[i].x, input[i].y, input[i].rhw,
+                                      result)) return false;
+    uvq[i*3] = result.u;
+    uvq[i*3+1] = result.v;
+    uvq[i*3+2] = result.q;
+  }
+  return true;
+}
+
 bool DeathtrapSaveThumbnailCaptureActive() {
   return g_save_thumbnail_capture;
 }
@@ -22068,6 +22092,8 @@ bool InstallDeathtrapNativeRenderHooks() {
   // Optional and fail-closed: only the exact 25 KiB Steam MP3 wrapper is
   // accepted. Music failure must never disable rendering, input or camera.
   InstallRenderQueueExpansion();
+  InstallWorldRenderQueueDepth();
+  InstallWorldQuadProjection();
   InstallTexturePoolExpansion();
   InstallDeathtrapMusicTrackFix();
   g_e3_model_requested.store(ConfiguredInteger(L"Models",L"E3Heroine",0)!=0);

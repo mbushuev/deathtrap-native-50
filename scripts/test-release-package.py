@@ -23,7 +23,7 @@ EXPECTED_FILES = REQUIRED_FILES | {
     "source/dxwrapper/deathtrap-dxwrapper.patch",
     "source/dxwrapper/deathtrap-page-restore-present.patch",
     "source/dxwrapper/deathtrap-world-depth.patch",
-    "source/dxwrapper/deathtrap-door-texture.patch",
+    "source/dxwrapper/deathtrap-world-depth-order.patch",
 }
 
 

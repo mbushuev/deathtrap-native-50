@@ -81,7 +81,7 @@ $dxWrapperFiles = @(
     },
     @{
         Path = 'third_party\deathtrap-dxwrapper-release225\x86\dxwrapper.dll'
-        Sha256 = 'C135D1B3434DD421F9CC3ED6826FD4DB7A50D528E2D8C7E6F18059DB7C2B5189'
+        Sha256 = '1D5937E71987F23AB342B3FB7867EACD32AE2CABC5E6C6CE346CDC84BFC3DB60'
     }
 )
 foreach ($dxWrapperFile in $dxWrapperFiles) {
@@ -175,7 +175,7 @@ $releaseFiles = @(
     @{ Source = 'third_party\deathtrap-dxwrapper-release225\source\deathtrap-dxwrapper.patch'; Destination = 'source\dxwrapper\deathtrap-dxwrapper.patch' },
     @{ Source = 'third_party\deathtrap-dxwrapper-release225\source\deathtrap-page-restore-present.patch'; Destination = 'source\dxwrapper\deathtrap-page-restore-present.patch' },
     @{ Source = 'third_party\deathtrap-dxwrapper-release225\source\deathtrap-world-depth.patch'; Destination = 'source\dxwrapper\deathtrap-world-depth.patch' },
-    @{ Source = 'third_party\deathtrap-dxwrapper-release225\source\deathtrap-door-texture.patch'; Destination = 'source\dxwrapper\deathtrap-door-texture.patch' }
+    @{ Source = 'third_party\deathtrap-dxwrapper-release225\source\deathtrap-world-depth-order.patch'; Destination = 'source\dxwrapper\deathtrap-world-depth-order.patch' }
 )
 
 foreach ($file in $releaseFiles) {

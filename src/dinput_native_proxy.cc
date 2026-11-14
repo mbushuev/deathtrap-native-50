@@ -2142,6 +2142,15 @@ extern "C" BOOL WINAPI Proxy_DeathtrapWidescreenWorldRenderActive() {
   return DeathtrapWidescreenWorldRenderActive() ? TRUE : FALSE;
 }
 
+extern "C" DWORD WINAPI Proxy_DeathtrapWorldDepthGroup() {
+  return DeathtrapWorldDepthGroup();
+}
+
+extern "C" BOOL WINAPI Proxy_DeathtrapProjectWorldQuad(
+    const void* vertices, DWORD count, float* uvq) {
+  return DeathtrapProjectWorldQuad(vertices, count, uvq);
+}
+
 extern "C" DWORD WINAPI Proxy_DeathtrapWidescreenAspectX1000() {
   InitializeThread(nullptr);
   return DeathtrapWidescreenAspectX1000();

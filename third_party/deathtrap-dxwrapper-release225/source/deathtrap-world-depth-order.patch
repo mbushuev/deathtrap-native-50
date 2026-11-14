@@ -1,0 +1,181 @@
+--- a/ddraw/IDirect3DDeviceX.cpp
++++ b/ddraw/IDirect3DDeviceX.cpp
+@@ -40,6 +40,20 @@
+ 			}
+ 		}
+ 		return Query && Query();
++	}
++
++	DWORD GetDeathtrapWorldDepthGroup()
++	{
++		using QueryGroup = DWORD(WINAPI*)();
++		static QueryGroup Query = nullptr;
++		if (!Query)
++		{
++			if (HMODULE Dinput = GetModuleHandleW(L"DINPUT.dll"))
++			{
++				Query = reinterpret_cast<QueryGroup>(GetProcAddress(Dinput, "DeathtrapWorldDepthGroup"));
++			}
++		}
++		return Query ? Query() : 0;
+ 	}
+ 
+ 	DWORD GetDeathtrapWidescreenAspectX1000()
+@@ -1460,7 +1474,7 @@
+ 		if (SUCCEEDED(hr))
+ 		{
+ 			IsInScene = true;
+-			DeathtrapDepthNeedsClear = true;
++			DeathtrapDepthGroup = 0;
+ 
+ #ifdef ENABLE_PROFILING
+ 			Logging::Log() << __FUNCTION__ << " (" << this << ") hr = " << (D3DERR)hr;
+@@ -3024,6 +3038,59 @@
+ }
+ 
+ 
++
++static bool DrawDeathtrapWorldQuad(IDirect3DDevice9* Device, DWORD FVF,
++	const D3DTLVERTEX* Input, const float (*UVQ)[3], DWORD Count, HRESULT& Result)
++{
++	DWORD Transform = 0, Wrap = 0, TexCoordIndex = 0;
++	if (FAILED(Device->GetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, &Transform)) ||
++		FAILED(Device->GetTextureStageState(0, D3DTSS_TEXCOORDINDEX, &TexCoordIndex)) ||
++		FAILED(Device->GetRenderState(D3DRS_WRAP0, &Wrap)) || Transform || TexCoordIndex || Wrap)
++	{
++		return false;
++	}
++
++	struct ProjectedVertex
++	{
++		D3DTLVERTEX Base;
++		float Q;
++	};
++	ProjectedVertex Output[9];
++	for (DWORD i = 0; i < Count; ++i)
++	{
++		Output[i] = {Input[i], UVQ[i][2]};
++		Output[i].Base.tu = UVQ[i][0];
++		Output[i].Base.tv = UVQ[i][1];
++	}
++	if (FAILED(Device->SetFVF(FVF | D3DFVF_TEXCOORDSIZE3(0))))
++	{
++		return false;
++	}
++	if (FAILED(Device->SetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_COUNT3 | D3DTTFF_PROJECTED)))
++	{
++		Device->SetFVF(FVF);
++		return false;
++	}
++	Result = Device->DrawPrimitiveUP(D3DPT_TRIANGLEFAN, Count - 2, Output, sizeof(ProjectedVertex));
++	Device->SetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, Transform);
++	Device->SetFVF(FVF);
++	return SUCCEEDED(Result);
++}
++
++static bool GetDeathtrapWorldQuad(const void* Vertices, DWORD Count, float* UVQ)
++{
++	using ProjectQuad = BOOL(WINAPI*)(const void*, DWORD, float*);
++	static ProjectQuad Project = nullptr;
++	if (!Project)
++	{
++		if (HMODULE Dinput = GetModuleHandleW(L"DINPUT.dll"))
++		{
++			Project = reinterpret_cast<ProjectQuad>(GetProcAddress(Dinput, "DeathtrapProjectWorldQuad"));
++		}
++	}
++	return Project && Project(Vertices, Count, UVQ);
++}
++
+ HRESULT m_IDirect3DDeviceX::DrawPrimitive(D3DPRIMITIVETYPE dptPrimitiveType, DWORD dwVertexTypeDesc, LPVOID lpVertices, DWORD dwVertexCount, DWORD dwFlags, DWORD DirectXVersion)
+ {
+ 	Logging::LogDebug() << __FUNCTION__ << " (" << this << ")" <<
+@@ -3070,6 +3137,11 @@
+ 
+ 		dwFlags = (dwFlags & D3DDP_FORCE_DWORD);
+ 
++		// Evaluate the original face before scaling the logical viewport.
++		float UVQ[9][3];
++		const bool ProjectQuad = dptPrimitiveType == D3DPT_TRIANGLEFAN && dwVertexTypeDesc == D3DFVF_TLVERTEX &&
++			dwVertexCount >= 3 && dwVertexCount <= 9 && GetDeathtrapWorldQuad(lpVertices, dwVertexCount, UVQ[0]);
++
+ 		// Update vertices for Direct3D9 (needs to be first)
+ 		UpdateVertices(dwVertexTypeDesc, lpVertices, 0, dwVertexCount);
+ 
+@@ -3088,7 +3160,11 @@
+ 		{
+ 			DeathtrapDepthDraw Depth(*d3d9Device);
+ 			PrepareDeathtrapDepthDraw(Depth, dwVertexTypeDesc, lpVertices, dwVertexCount);
+-			hr = (*d3d9Device)->DrawPrimitiveUP(dptPrimitiveType, GetNumberOfPrimitives(dptPrimitiveType, dwVertexCount), lpVertices, GetVertexStride(dwVertexTypeDesc));
++			if (!ProjectQuad || !DrawDeathtrapWorldQuad(*d3d9Device, dwVertexTypeDesc,
++				static_cast<const D3DTLVERTEX*>(lpVertices), UVQ, dwVertexCount, hr))
++			{
++				hr = (*d3d9Device)->DrawPrimitiveUP(dptPrimitiveType, GetNumberOfPrimitives(dptPrimitiveType, dwVertexCount), lpVertices, GetVertexStride(dwVertexTypeDesc));
++			}
+ 		}
+ 
+ 		// Handle dwFlags
+@@ -7609,7 +7685,7 @@
+ 	DeathtrapDepthSurface.Reset();
+ 	DeathtrapDepthTarget = nullptr;
+ 	DeathtrapDepthWidth = DeathtrapDepthHeight = 0;
+-	DeathtrapDepthNeedsClear = true;
++	DeathtrapDepthGroup = 0;
+ 	DeathtrapDepthUnavailable = false;
+ }
+ 
+@@ -7617,8 +7693,13 @@
+ {
+ 	if (!IsInScene ||
+ 		!lpCurrentRenderTargetX || !Count || Vertices != VertexCache.data() || VertexType != D3DFVF_TLVERTEX ||
+-		DeviceStates.RenderState[D3DRS_ZENABLE].State != D3DZB_FALSE ||
+-		!IsDeathtrapWidescreenWorldRenderActive())
++		DeviceStates.RenderState[D3DRS_ZENABLE].State != D3DZB_FALSE)
++	{
++		return;
++	}
++
++	const DWORD Group = GetDeathtrapWorldDepthGroup();
++	if (!Group)
+ 	{
+ 		return;
+ 	}
+@@ -7677,7 +7758,9 @@
+ 		return;
+ 	}
+ 	Depth.Active = true;
+-	if (DeathtrapDepthNeedsClear)
++	// A queue layer's order takes precedence over physical depth. Reuse the
++	// surface, retaining the color already drawn by earlier layers.
++	if (DeathtrapDepthGroup != Group)
+ 	{
+ 		if (FAILED(Device->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, 1.0f, 0)))
+ 		{
+@@ -7685,7 +7768,7 @@
+ 			LOG_LIMIT(5, "DeathtrapWorldDepth depth clear failed");
+ 			return;
+ 		}
+-		DeathtrapDepthNeedsClear = false;
++		DeathtrapDepthGroup = Group;
+ 	}
+ 
+ 	const bool Blending = DeviceStates.RenderState[D3DRS_ALPHABLENDENABLE].State != FALSE;
+@@ -7702,6 +7785,7 @@
+ 		Output[i].sz = 1.0f - NearZ * Output[i].rhw;
+ 	}
+ }
++
+ 
+ void m_IDirect3DDeviceX::UpdateVertices(DWORD& dwVertexTypeDesc, LPVOID& lpVertices, DWORD dwVertexStart, DWORD dwNumVertices)
+ {
+--- a/ddraw/IDirect3DDeviceX.h
++++ b/ddraw/IDirect3DDeviceX.h
+@@ -233,7 +233,7 @@
+ 	m_IDirectDrawSurfaceX* DeathtrapDepthTarget = nullptr;
+ 	DWORD DeathtrapDepthWidth = 0;
+ 	DWORD DeathtrapDepthHeight = 0;
+-	bool DeathtrapDepthNeedsClear = true;
++	DWORD DeathtrapDepthGroup = 0;
+ 	bool DeathtrapDepthUnavailable = false;
+ 
+ 	// Default clip status

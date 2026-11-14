@@ -24,11 +24,11 @@ FILES = {
         'source/dxwrapper/deathtrap-dxwrapper.patch',
         'source/dxwrapper/deathtrap-page-restore-present.patch',
         'source/dxwrapper/deathtrap-world-depth.patch',
-        'source/dxwrapper/deathtrap-door-texture.patch')},
+        'source/dxwrapper/deathtrap-world-depth-order.patch')},
 }
 PINNED = {
     'DDraw.dll': '8bae794eb7506711f57b690cfb8660a5f008b0185e764f8cb56d5972e01a9f33',
-    'dxwrapper.dll': 'c135d1b3434dd421f9cc3ed6826fd4db7a50d528e2d8c7e6f18059db7c2b5189',
+    'dxwrapper.dll': '1d5937e71987f23ab342b3fb7867eacd32ae2cabc5e6c6ce346cdc84bfc3db60',
     'D3D9.dll': 'd8d2e15bf5d0e01c89317a733492997de8f7f562a972fe564fd17d194ee5d1f3',
     'D3DImm.dll': '8b2850d0af5f07cf2928ac9666192c3adcb0290f10ed8f942f1594f3a4f51c73',
 }
