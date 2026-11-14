@@ -161,6 +161,16 @@ int __cdecl FragmentVisible(uintptr_t start_sector,const int32_t* start,uintptr_
 }
 void __cdecl IgnoreSound(uintptr_t,uintptr_t) {}
 void __cdecl ResetFixtureBackend() { ++reset_calls; }
+void __cdecl ReplaceActorsFixture() {
+  Require(g_retained_corpses.empty() && destroyed.size()==1,
+          "actor replacement must start after retained geometry is released");
+  ++reset_calls;
+}
+int __cdecl LoadActorsFixture(void* save) {
+  Require(save==&reset_calls,"save stream must reach the native actor loader");
+  ReplaceActorsFixture();
+  return 17;
+}
 void PatchBytes(uintptr_t rva,const void* data,size_t size) {
   auto* p=g_dungeon_base+rva;DWORD old=0,ignored=0;
   Require(VirtualProtect(p,size,PAGE_EXECUTE_READWRITE,&old)!=FALSE,"code fixture protection");
@@ -181,7 +191,7 @@ void ResetFixture(size_t count=1) {
   fragment_validate_world=false;fragment_world_offset={};
   if (effect_active_list) for (size_t offset=0;offset<16;offset+=4)
     Put(effect_active_list-8,offset,uintptr_t{0});
-  fixture_count=count;animation_done=1;items=ai_unlinks=create_calls=0;
+  fixture_count=count;animation_done=1;items=ai_unlinks=create_calls=reset_calls=0;
   destroyed.clear();drops.clear();free_inner={};node_pool={};
   caught_scene_fault=0;scene_callback_calls=0;
   rendered_static_frames=0;
@@ -552,6 +562,20 @@ void CheckLifecycle() {
   const auto old_reset=g_original_corpse_reset;g_original_corpse_reset=&ResetFixtureBackend;
   HookCorpseReset();g_original_corpse_reset=old_reset;
   Require(g_retained_corpses.empty() && reset_calls>0 && destroyed.size()==1,"level reset must release visual ownership");
+
+  ResetFixture();Finish(true);
+  const auto old_restart=g_original_corpse_restart_actors;
+  g_original_corpse_restart_actors=&ReplaceActorsFixture;
+  HookCorpseRestartActors();
+  g_original_corpse_restart_actors=old_restart;
+  Require(reset_calls==1,"restart must call the native actor reset once");
+
+  ResetFixture();Finish(true);
+  const auto old_load=g_original_corpse_load_actors;
+  g_original_corpse_load_actors=&LoadActorsFixture;
+  Require(HookCorpseLoadActors(&reset_calls)==17 && reset_calls==1,
+          "same-level load must clear detached bodies and preserve native result");
+  g_original_corpse_load_actors=old_load;
 
   for (const uint16_t flags:{uint16_t{0x40},uint16_t{0x8000},uint16_t{4},uint16_t{0x12}}) {
     ResetFixture();actors[0].Init(flags);ObserveCorpseDeath(actors[0].address());

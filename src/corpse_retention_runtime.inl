@@ -3,6 +3,8 @@
 constexpr DungeonCodeRva kCorpseDecisionRva{0x5C969u};
 constexpr DungeonCodeRva kCorpseDeleteRva{0xC130u};
 constexpr DungeonCodeRva kCorpseResetRva{0xAD70u};
+constexpr DungeonCodeRva kCorpseRestartActorsRva{0xAFE0u};
+constexpr DungeonCodeRva kCorpseLoadActorsRva{0x6AE70u};
 constexpr DungeonCodeRva kCorpseDeathUpdateRva{0x5C8E0u};
 constexpr DungeonCodeRva kCorpseDamageRva{0x5C050u};
 constexpr DungeonCodeRva kCorpseModelDestroyRva{0x3A8F0u};
@@ -50,6 +52,8 @@ std::vector<RetainedCorpse> g_retained_corpses;
 using CorpseActorFn=void(__cdecl*)(uintptr_t);
 CorpseActorFn g_original_corpse_delete=nullptr,g_original_corpse_model_destroy=nullptr;
 void(__cdecl* g_original_corpse_reset)()=nullptr;
+void(__cdecl* g_original_corpse_restart_actors)()=nullptr;
+int(__cdecl* g_original_corpse_load_actors)(void*)=nullptr;
 uintptr_t(__cdecl* g_original_corpse_model_create)(uintptr_t)=nullptr;
 uintptr_t(__cdecl* g_original_corpse_mesh_detach)(uintptr_t)=nullptr;
 int(__cdecl* g_original_corpse_melee_contacts)(uintptr_t)=nullptr;
@@ -427,6 +431,28 @@ void __cdecl HookCorpseReset() {
   while (ReleaseOldestCorpseVisual()) {}
   g_retained_corpses.clear();g_original_corpse_reset();
 }
+void ClearCorpsesBeforeActorReplacement(const char* transition) {
+  if (g_retained_corpses.empty()) return;
+  const size_t retained = g_retained_corpses.size();
+  while (ReleaseOldestCorpseVisual()) {}
+  for (auto& corpse : g_retained_corpses) if (corpse.actor) {
+    RestoreSkeletonAnimation(corpse);
+    for (const auto& node : corpse.nodes)
+      WriteCorpseAppearance(node.node, node.fade, false);
+  }
+  // The upcoming native actor teardown must destroy pending models normally.
+  g_retained_corpses.clear();
+  AppendDeathtrapSupportLog("support_bodies transition=%s cleared=%zu",
+                            transition, retained);
+}
+void __cdecl HookCorpseRestartActors() {
+  ClearCorpsesBeforeActorReplacement("restart");
+  g_original_corpse_restart_actors();
+}
+int __cdecl HookCorpseLoadActors(void* save) {
+  ClearCorpsesBeforeActorReplacement("load");
+  return g_original_corpse_load_actors(save);
+}
 uintptr_t __cdecl HookCorpseModelCreate(uintptr_t resource) {
   uintptr_t pool=0;int32_t last_free=0;
   if (g_corpse_retention_hooks_installed && !g_corpse_releasing &&
@@ -608,6 +634,9 @@ bool InstallCorpseRetentionHooks() {
       MatchesDungeonCode(kCorpseDecisionRva,std::array<uint8_t,8>{{0xA8,0x40,0x74,0x20,0x6A,1,0x8B,0x46}}) &&
       MatchesDungeonCode(kCorpseDeleteRva,std::array<uint8_t,6>{{0x56,0x57,0x8B,0x7C,0x24,0x0C}}) &&
       MatchesDungeonCode(kCorpseResetRva,std::array<uint8_t,5>{{0x53,0x33,0xC9,0x66,0x89}}) &&
+      MatchesDungeonCode(kCorpseRestartActorsRva,std::array<uint8_t,2>{{0x56,0xA1}}) &&
+      MatchesDungeonCode(kCorpseRestartActorsRva+6,std::array<uint8_t,4>{{0x85,0xC0,0x74,0x19}}) &&
+      MatchesDungeonCode(kCorpseLoadActorsRva,std::array<uint8_t,8>{{0x83,0xEC,0x38,0x53,0x56,0x57,0x55,0xE8}}) &&
       MatchesDungeonCode(kCorpseModelDestroyRva,std::array<uint8_t,6>{{0x56,0x57,0x8B,0x7C,0x24,0x0C}}) &&
       MatchesDungeonCode(kCorpseModelCreateRva,std::array<uint8_t,4>{{0x83,0xEC,0x24,0xA1}}) &&
       MatchesDungeonCode(kCorpseMeshDetachRva,std::array<uint8_t,6>{{0x53,0x56,0x8B,0x74,0x24,0x0C}}) &&
@@ -641,10 +670,12 @@ bool InstallCorpseRetentionHooks() {
     AppendDeathtrapSupportLog("support_bodies state=signature_mismatch fallback=native");return false;
   }
   struct Hook { uintptr_t rva;void* detour;void** original;bool made=false,enabled=false; };
-  std::array<Hook,8> hooks{{
+  std::array<Hook,10> hooks{{
     {kCorpseDecisionRva,reinterpret_cast<void*>(&HookCorpseDecision),&g_original_corpse_decision},
     {kCorpseDeleteRva,reinterpret_cast<void*>(&HookCorpseDelete),reinterpret_cast<void**>(&g_original_corpse_delete)},
     {kCorpseResetRva,reinterpret_cast<void*>(&HookCorpseReset),reinterpret_cast<void**>(&g_original_corpse_reset)},
+    {kCorpseRestartActorsRva,reinterpret_cast<void*>(&HookCorpseRestartActors),reinterpret_cast<void**>(&g_original_corpse_restart_actors)},
+    {kCorpseLoadActorsRva,reinterpret_cast<void*>(&HookCorpseLoadActors),reinterpret_cast<void**>(&g_original_corpse_load_actors)},
     {kCorpseModelDestroyRva,reinterpret_cast<void*>(&HookCorpseModelDestroy),reinterpret_cast<void**>(&g_original_corpse_model_destroy)},
     {kCorpseModelCreateRva,reinterpret_cast<void*>(&HookCorpseModelCreate),reinterpret_cast<void**>(&g_original_corpse_model_create)},
     {kCorpseMeshDetachRva,reinterpret_cast<void*>(&HookCorpseMeshDetach),reinterpret_cast<void**>(&g_original_corpse_mesh_detach)},
