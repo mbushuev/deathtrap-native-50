@@ -10,6 +10,18 @@ public builds:
 - `517342` — for testing and identifying the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.241 — World rendering and immersive camera fixes
+
+- Fix world geometry drawing in front of nearer surfaces, including the first
+  level's lift. Nearly coincident surfaces retain the game's draw order,
+  including the panel above the open door in Inversion.
+- Keep textures on planar room surfaces stable as the camera turns and as
+  surfaces move across the edge of the screen.
+- Keep immersive first-person view stable during Flame Lance shots and recover
+  it after temporary interruptions to the character's head animation.
+- Capture the complete scene in save thumbnails, including in widescreen.
+- Clear retained enemy bodies when restarting or loading a level.
+
 ## 0.0.240 — RicViper gamepad controls
 
 - Add **RicViper** as an optional gamepad layout on page 2 of **Setup → Native 50**.
