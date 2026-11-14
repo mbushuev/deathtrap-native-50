@@ -102,20 +102,38 @@
  		// Update vertices for Direct3D9 (needs to be first)
  		UpdateVertices(dwVertexTypeDesc, lpVertices, 0, dwVertexCount);
  
-@@ -3088,7 +3160,11 @@
+@@ -3088,7 +3160,16 @@
  		{
  			DeathtrapDepthDraw Depth(*d3d9Device);
  			PrepareDeathtrapDepthDraw(Depth, dwVertexTypeDesc, lpVertices, dwVertexCount);
 -			hr = (*d3d9Device)->DrawPrimitiveUP(dptPrimitiveType, GetNumberOfPrimitives(dptPrimitiveType, dwVertexCount), lpVertices, GetVertexStride(dwVertexTypeDesc));
-+			if (!ProjectQuad || !DrawDeathtrapWorldQuad(*d3d9Device, dwVertexTypeDesc,
-+				static_cast<const D3DTLVERTEX*>(lpVertices), UVQ, dwVertexCount, hr))
-+			{
-+				hr = (*d3d9Device)->DrawPrimitiveUP(dptPrimitiveType, GetNumberOfPrimitives(dptPrimitiveType, dwVertexCount), lpVertices, GetVertexStride(dwVertexTypeDesc));
-+			}
++			hr = Depth.Draw([&]() {
++				HRESULT DrawResult;
++				if (ProjectQuad && DrawDeathtrapWorldQuad(*d3d9Device, dwVertexTypeDesc,
++					static_cast<const D3DTLVERTEX*>(lpVertices), UVQ, dwVertexCount, DrawResult))
++				{
++					return DrawResult;
++				}
++				return (*d3d9Device)->DrawPrimitiveUP(dptPrimitiveType, GetNumberOfPrimitives(dptPrimitiveType, dwVertexCount),
++					lpVertices, GetVertexStride(dwVertexTypeDesc));
++			});
  		}
  
  		// Handle dwFlags
-@@ -7609,7 +7685,7 @@
+@@ -3186,7 +3267,11 @@
+ 		{
+ 			DeathtrapDepthDraw Depth(*d3d9Device);
+ 			PrepareDeathtrapDepthDraw(Depth, dwVertexTypeDesc, lpVertices, dwVertexCount);
+-			hr = (*d3d9Device)->DrawIndexedPrimitiveUP(dptPrimitiveType, 0, dwVertexCount, GetNumberOfPrimitives(dptPrimitiveType, dwIndexCount), lpwIndices, D3DFMT_INDEX16, lpVertices, GetVertexStride(dwVertexTypeDesc));
++			hr = Depth.Draw([&]() {
++				return (*d3d9Device)->DrawIndexedPrimitiveUP(dptPrimitiveType, 0, dwVertexCount,
++					GetNumberOfPrimitives(dptPrimitiveType, dwIndexCount), lpwIndices, D3DFMT_INDEX16,
++					lpVertices, GetVertexStride(dwVertexTypeDesc));
++			});
+ 		}
+ 
+ 		// Handle dwFlags
+@@ -7609,7 +7694,7 @@
  	DeathtrapDepthSurface.Reset();
  	DeathtrapDepthTarget = nullptr;
  	DeathtrapDepthWidth = DeathtrapDepthHeight = 0;
@@ -124,7 +142,7 @@
  	DeathtrapDepthUnavailable = false;
  }
  
-@@ -7617,8 +7693,13 @@
+@@ -7617,8 +7702,13 @@
  {
  	if (!IsInScene ||
  		!lpCurrentRenderTargetX || !Count || Vertices != VertexCache.data() || VertexType != D3DFVF_TLVERTEX ||
@@ -140,30 +158,58 @@
  	{
  		return;
  	}
-@@ -7677,7 +7758,9 @@
+@@ -7677,7 +7767,8 @@
  		return;
  	}
  	Depth.Active = true;
 -	if (DeathtrapDepthNeedsClear)
-+	// A queue layer's order takes precedence over physical depth. Reuse the
-+	// surface, retaining the color already drawn by earlier layers.
++	// All sort layers of the current world queue share one depth surface.
 +	if (DeathtrapDepthGroup != Group)
  	{
  		if (FAILED(Device->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, 1.0f, 0)))
  		{
-@@ -7685,7 +7768,7 @@
+@@ -7685,23 +7776,34 @@
  			LOG_LIMIT(5, "DeathtrapWorldDepth depth clear failed");
  			return;
  		}
 -		DeathtrapDepthNeedsClear = false;
+-	}
+-
+-	const bool Blending = DeviceStates.RenderState[D3DRS_ALPHABLENDENABLE].State != FALSE;
 +		DeathtrapDepthGroup = Group;
++	}
++
++	DWORD Blend = FALSE;
++	if (FAILED(Device->GetRenderState(D3DRS_ALPHABLENDENABLE, &Blend)))
++	{
++		return;
++	}
++	DWORD ColorWrite = 0;
++	if (!Blend && FAILED(Device->GetRenderState(D3DRS_COLORWRITEENABLE, &ColorWrite)))
++	{
++		return;
++	}
++
+ 	if (FAILED(Device->SetRenderState(D3DRS_ZFUNC, D3DCMP_LESSEQUAL)) ||
+-		FAILED(Device->SetRenderState(D3DRS_ZWRITEENABLE, !Blending)) ||
++		FAILED(Device->SetRenderState(D3DRS_ZWRITEENABLE, FALSE)) ||
+ 		FAILED(Device->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE)))
+ 	{
+ 		DeathtrapDepthUnavailable = true;
+ 		return;
  	}
- 
- 	const bool Blending = DeviceStates.RenderState[D3DRS_ALPHABLENDENABLE].State != FALSE;
-@@ -7702,6 +7785,7 @@
- 		Output[i].sz = 1.0f - NearZ * Output[i].rhw;
- 	}
- }
+-	auto* Output = static_cast<D3DTLVERTEX*>(Vertices);
+-	for (DWORD i = 0; i < Count; ++i)
+-	{
+-		Output[i].sz = 1.0f - NearZ * Output[i].rhw;
+-	}
+-}
++	Depth.Vertices = static_cast<D3DTLVERTEX*>(Vertices);
++	Depth.Count = Count;
++	Depth.ColorWrite = Blend ? 0 : ColorWrite;
++	Depth.SetVertexDepth(DeathtrapDepthDraw::ColorNearZ);
++
++}
 +
  
  void m_IDirect3DDeviceX::UpdateVertices(DWORD& dwVertexTypeDesc, LPVOID& lpVertices, DWORD dwVertexStart, DWORD dwNumVertices)
@@ -179,3 +225,46 @@
  	bool DeathtrapDepthUnavailable = false;
  
  	// Default clip status
+@@ -374,9 +374,42 @@
+ 		ComPtr<IDirect3DSurface9> PreviousSurface;
+ 		DWORD PreviousWrite = FALSE;
+ 		DWORD PreviousFunc = D3DCMP_ALWAYS;
++		DWORD ColorWrite = 0;
++		D3DTLVERTEX* Vertices = nullptr;
++		DWORD Count = 0;
+ 		bool Active = false;
+ 		explicit DeathtrapDepthDraw(LPDIRECT3DDEVICE9 Device) : Device(Device) {}
+ 		~DeathtrapDepthDraw();
++
++		static constexpr float NearZ = 32.0f;
++		// Give the retail submission order a 2% margin for nearly coincident surfaces.
++		static constexpr float ColorNearZ = NearZ * 1.02f;
++		void SetVertexDepth(float Scale)
++		{
++			for (DWORD i = 0; i < Count; ++i)
++			{
++				Vertices[i].sz = max(0.0f, 1.0f - Scale * Vertices[i].rhw);
++			}
++		}
++
++		template <typename Render>
++		HRESULT Draw(Render&& Submit)
++		{
++			const HRESULT Result = Submit();
++			if (SUCCEEDED(Result) && ColorWrite &&
++				SUCCEEDED(Device->SetRenderState(D3DRS_COLORWRITEENABLE, 0)))
++			{
++				// Store exact depth in a separate pass with the same alpha test.
++				// This prevents successive layers from accumulating the color margin.
++				if (SUCCEEDED(Device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE)))
++				{
++					SetVertexDepth(NearZ);
++					Submit();
++				}
++				Device->SetRenderState(D3DRS_COLORWRITEENABLE, ColorWrite);
++			}
++			return Result;
++		}
+ 	};
+ 	void PrepareDeathtrapDepthDraw(DeathtrapDepthDraw& Depth, DWORD VertexType, LPVOID Vertices, DWORD Count);
+ 	void UpdateVertices(DWORD& dwVertexTypeDesc, LPVOID& lpVertices, DWORD dwVertexStart, DWORD dwNumVertices);

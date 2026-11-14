@@ -39,11 +39,7 @@ const RenderQueueCallback* g_render_queue_callbacks = nullptr;
 using RenderQueueFlush = void(__cdecl*)();
 RenderQueueFlush g_render_queue_flush = nullptr;
 
-struct WorldQueueScope {
-  uint32_t sort_layer = 0;
-  uint32_t depth_group = 0;
-};
-thread_local WorldQueueScope* g_world_queue_scope = nullptr;
+thread_local uint32_t g_world_queue_group = 0;
 thread_local uint32_t g_next_world_depth_group = 0;
 thread_local uint32_t g_world_depth_group = 0;
 thread_local std::unordered_map<const void*, deathtrap::projective_quad::Mapping>
@@ -122,34 +118,25 @@ __declspec(naked) void RecordNearClippedRoomQuadBridge() {
 }
 
 void __cdecl FlushWorldRenderQueue() {
-  WorldQueueScope scope;
-  auto* previous_scope = g_world_queue_scope;
+  const uint32_t previous_queue = g_world_queue_group;
   const uint32_t previous_group = g_world_depth_group;
-  g_world_queue_scope = g_widescreen_world_render_active ? &scope : nullptr;
+  g_world_queue_group = 0;
+  if (g_widescreen_world_render_active) {
+    if (++g_next_world_depth_group == 0) ++g_next_world_depth_group;
+    g_world_queue_group = g_next_world_depth_group;
+  }
   g_world_depth_group = 0;
   g_render_queue_flush();
   g_world_depth_group = previous_group;
-  g_world_queue_scope = previous_scope;
+  g_world_queue_group = previous_queue;
 }
 
-void __cdecl DispatchRenderQueue(uint32_t type, const void* entry, void* command) {
+void __cdecl DispatchRenderQueue(uint32_t type, void* command) {
   const uint32_t previous_group = g_world_depth_group;
   const auto* previous_quad = g_current_world_quad;
   g_current_world_quad = nullptr;
-  if (auto* scope = g_world_queue_scope) {
-    const auto* keys = g_dungeon_base + kRenderQueueKeysRva;
-    const auto* pointers = g_render_queue_expanded ? g_render_queue_arrays[2]
-        : keys + kRenderQueueOriginalOffsets[2];
-    const auto* layers = g_render_queue_expanded ? g_render_queue_arrays[1]
-        : keys + kRenderQueueOriginalOffsets[1];
-    const auto index = (static_cast<const uint8_t*>(entry) - pointers) / sizeof(void*);
-    const auto layer = reinterpret_cast<const uint16_t*>(layers)[index];
-    if (scope->depth_group == 0 || scope->sort_layer != layer) {
-      scope->sort_layer = layer;
-      if (++g_next_world_depth_group == 0) ++g_next_world_depth_group;
-      scope->depth_group = g_next_world_depth_group;
-    }
-    g_world_depth_group = scope->depth_group;
+  if (g_world_queue_group) {
+    g_world_depth_group = g_world_queue_group;
     if (type == 0 && !g_world_quad_mappings.empty()) {
       const auto mapping = g_world_quad_mappings.find(command);
       if (mapping != g_world_quad_mappings.end()) g_current_world_quad = &mapping->second;
@@ -160,15 +147,13 @@ void __cdecl DispatchRenderQueue(uint32_t type, const void* entry, void* command
   g_world_depth_group = previous_group;
 }
 
-// Retail has already validated ECX and pushed the command. EDI points to the
-// corresponding entry in the sorted pointer array.
+// Retail has already validated ECX and pushed the command.
 __declspec(naked) void RenderQueueDispatchBridge() {
   __asm {
     push dword ptr [esp+4]
-    push edi
     push ecx
     call DispatchRenderQueue
-    add esp, 12
+    add esp, 8
     ret
   }
 }
@@ -216,7 +201,7 @@ bool InstallWorldRenderQueueDepth() {
     PatchDungeonCode(dispatch, replacement_dispatch, original_dispatch);
     return false;
   }
-  AppendDeathtrapSupportLog("support_world_depth state=queue_layers");
+  AppendDeathtrapSupportLog("support_world_depth state=shared_queue");
   return true;
 }
 

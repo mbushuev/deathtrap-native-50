@@ -81,7 +81,7 @@ $dxWrapperFiles = @(
     },
     @{
         Path = 'third_party\deathtrap-dxwrapper-release225\x86\dxwrapper.dll'
-        Sha256 = '1D5937E71987F23AB342B3FB7867EACD32AE2CABC5E6C6CE346CDC84BFC3DB60'
+        Sha256 = '468C2DC26CF02F603502C40E5C8D8F232E6B83FC63985C4B3DD0B5F8CF4F662A'
     }
 )
 foreach ($dxWrapperFile in $dxWrapperFiles) {

@@ -293,7 +293,7 @@ verify_payload_hash() {
 verify_payload_hash "$dxwrapper_dir/DDraw.dll" \
     8bae794eb7506711f57b690cfb8660a5f008b0185e764f8cb56d5972e01a9f33
 verify_payload_hash "$dxwrapper_dir/dxwrapper.dll" \
-    1d5937e71987f23ab342b3fb7867eacd32ae2cabc5e6c6ce346cdc84bfc3db60
+    468c2dc26cf02f603502c40e5c8d8f232e6b83fc63985c4b3dd0b5f8cf4f662a
 
 grep -Eq '^Dd7to9[[:space:]]*=[[:space:]]*1[[:space:]]*$' "$dxwrapper_ini" ||
     die 'Bundled dxwrapper configuration does not enable Dd7to9.'

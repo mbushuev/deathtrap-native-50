@@ -164,9 +164,9 @@ void CheckDepthGroups(bool expanded) {
   flush_world();
   RequireQueue(draws[0].depth_group != 0 && draws[0].depth_group == draws[1].depth_group,
                "A whole queue layer must share one depth buffer");
-  RequireQueue(draws[1].depth_group != draws[2].depth_group &&
-               draws[2].depth_group != draws[3].depth_group && draws[3].depth_group != 0,
-               "Changing layers must isolate depth, including native layer zero");
+  RequireQueue(draws[1].depth_group == draws[2].depth_group &&
+               draws[2].depth_group == draws[3].depth_group,
+               "Different layers of one queue must share physical depth");
   RequireQueue(DeathtrapWorldDepthGroup() == 0, "Queue context leaked past the flush");
   const auto first_pass = draws[0].depth_group;
   flush_world();
