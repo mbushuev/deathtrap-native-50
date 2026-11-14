@@ -298,9 +298,9 @@ void CheckImage(const std::filesystem::path& path) {
   // Switching to a smaller external font must clear the preceding accents.
   std::ifstream credits(path.parent_path() / L"ASYLUM" / L"MENU" /
                         L"CREDIT.FNT", std::ios::binary);
-  std::vector<uint8_t> small((std::istreambuf_iterator<char>(credits)), {});
-  Require(!small.empty(), "original smaller credits font must open");
-  CheckAtlas(small);
+  std::vector<uint8_t> credits_font((std::istreambuf_iterator<char>(credits)), {});
+  Require(!credits_font.empty(), "original smaller credits font must open");
+  CheckAtlas(credits_font);
   CheckMenu(path.parent_path());
   std::cout << "Localized font pixels, CP850 metrics, menus and safety: "
             << ActiveDungeonProfileName() << " passed\n";
