@@ -109,6 +109,9 @@ void CheckInverseHeadJoint() {
   add(10, 6, 0xE00, 1, 50);
   RequireCombat(ResolvePlayerHeadJoint(scene) == 6,
                 "Inverse 1 neck and embedded arrow must retain the head joint");
+  scene.nodes.at(8).flags = 0xED8;
+  RequireCombat(ResolvePlayerHeadJoint(scene) == 6,
+                "Flame Lance firing arm must retain the same head joint");
 }
 
 std::array<bool, 30> ricviper_inventory{};

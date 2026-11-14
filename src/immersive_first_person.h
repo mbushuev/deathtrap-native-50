@@ -203,11 +203,13 @@ inline bool MatchesImmersiveHeadJoint(
 
 // Embedded projectiles and other temporary attachments become ordinary scene
 // children of the struck body joint.  They do not belong to the animated
-// skeleton. A real neck can differ from its chest by 0x100. Preserve that
-// relationship while excluding attachments with other flag differences.
+// skeleton. A real neck can differ from its chest by 0x100, and a real arm
+// can differ by 0x80 during a Flame Lance shot. Keep counting those joints
+// so that the chest still has its neck and both arms. Embedded arrows still
+// differ in the remaining bits.
 inline bool CountsTowardImmersiveJointTopology(uint32_t parent_flags,
                                                 uint32_t child_flags) {
-  return ((parent_flags ^ child_flags) & ~0x100u) == 0u;
+  return ((parent_flags ^ child_flags) & ~(0x100u | 0x80u)) == 0u;
 }
 
 // Physical DirectInput mouse Y needs the opposite sign at Dungeon's
