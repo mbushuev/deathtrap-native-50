@@ -88,14 +88,16 @@ int main() {
   Require(!selector_joystick.override_active,
           "selector ownership must release the gameplay joystick override");
 
-  Require(ShouldQueueMouseAttackCameraFacing(true, true, true),
-          "a physical gameplay press must queue camera-facing attack aim");
-  Require(!ShouldQueueMouseAttackCameraFacing(false, true, true),
+  Require(ShouldQueueMouseAttackCameraFacing(true, true, true, false),
+          "a physical melee press must queue camera-facing attack aim");
+  Require(!ShouldQueueMouseAttackCameraFacing(false, true, true, false),
           "a held mouse button must not continuously steer an attack");
-  Require(!ShouldQueueMouseAttackCameraFacing(true, false, true),
+  Require(!ShouldQueueMouseAttackCameraFacing(true, false, true, false),
           "frontend clicks must not queue attack-facing state");
-  Require(!ShouldQueueMouseAttackCameraFacing(true, true, false),
+  Require(!ShouldQueueMouseAttackCameraFacing(true, true, false, false),
           "an unavailable modern camera must preserve native attack facing");
+  Require(!ShouldQueueMouseAttackCameraFacing(true, true, true, true),
+          "ranged fire must not queue a body turn that suppresses movement");
 
   const auto turn_left = ResolveMouseAttackFacingStep(-200, 40, 4);
   Require(turn_left.heading_delta == -40 && !turn_left.ready,
@@ -117,16 +119,27 @@ int main() {
       true, true, false, false, false, false, false);
   Require(simple_attack.attack == MouseCombatAttack::kForward,
           "plain left click must select the normal forward attack");
-  Require(simple_attack.modifier_down && simple_attack.key_w,
+  Require(simple_attack.modifier_down && simple_attack.RewritesAttackMovement() &&
+              simple_attack.key_w,
           "plain left click must emit the verified F+W grammar");
 
-  const auto ranged_attack = ResolveMouseCombatKeyboardPlan(
+  const auto ranged_while_moving = ResolveMouseCombatKeyboardPlan(
       true, true, false, true, false, true, false, true);
-  Require(ranged_attack.attack == MouseCombatAttack::kRanged &&
-              ranged_attack.modifier_down && !ranged_attack.key_w &&
-              !ranged_attack.key_a && !ranged_attack.key_s &&
-              !ranged_attack.key_d,
-          "ranged fire must emit plain F without a movement direction");
+  Require(ranged_while_moving.attack == MouseCombatAttack::kRanged &&
+              ranged_while_moving.modifier_down &&
+              !ranged_while_moving.RewritesAttackMovement() &&
+              !ranged_while_moving.rewrite_immersive_movement &&
+              !ranged_while_moving.key_w && !ranged_while_moving.key_a &&
+              !ranged_while_moving.key_s && !ranged_while_moving.key_d,
+          "ranged fire must add F and leave held movement keys intact");
+  const auto ranged_while_strafing = ResolveMouseCombatKeyboardPlan(
+      true, true, true, false, false, true, false, true);
+  Require(ranged_while_strafing.modifier_down &&
+              !ranged_while_strafing.RewritesAttackMovement() &&
+              ranged_while_strafing.rewrite_immersive_movement &&
+              ranged_while_strafing.submit_immersive_movement &&
+              ranged_while_strafing.key_w,
+          "ranged fire must retain the ordinary immersive strafe path");
 
   const auto explicit_forward = ResolveMouseCombatKeyboardPlan(
       true, true, false, true, false, false, false);

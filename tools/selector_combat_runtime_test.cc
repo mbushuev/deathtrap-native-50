@@ -447,6 +447,37 @@ int main() {
     g_xinput_vibration_enabled = false;
     g_native_joystick_hooks_installed.store(true);
     g_xinput_get_state = &CombatTestPad;
+    PutCombat(g_dungeon_base + kUiSelectorModeRva, uint8_t{0});
+    const bool was_camera_relative = g_xinput_camera_relative_movement;
+    g_xinput_camera_relative_movement = false;
+    XINPUT_GAMEPAD firing{};
+    firing.bRightTrigger = 255;
+    for (int32_t weapon : {12, 13}) {
+      PutCombat(g_dungeon_base + kActiveCloseCombatWeaponRva, weapon);
+      firing.sThumbLX = 0;
+      firing.sThumbLY = 32767;
+      for (int tick = 0; tick < 5; ++tick) {
+        test_time += 100;
+        UpdateControllerBaseBindings(firing, true, false);
+      }
+      RequireCombat(g_xinput_native_joystick_y_milli.load() > 0 &&
+                        deathtrap::input::CommandActive(
+                            captured_gameplay, deathtrap::input::Command::kRun),
+                    "firethrower and Flamelance must retain forward running");
+      firing.sThumbLX = 32767;
+      firing.sThumbLY = 0;
+      test_time += 100;
+      UpdateControllerBaseBindings(firing, true, false);
+      RequireCombat(g_xinput_native_joystick_x_milli.load() > 0,
+                    "firethrower and Flamelance must retain native turning");
+    }
+    PutCombat(g_dungeon_base + kActiveCloseCombatWeaponRva, int32_t{0});
+    UpdateControllerBaseBindings(firing, true, false);
+    RequireCombat(g_xinput_native_joystick_x_milli.load() == 0,
+                  "melee must still reserve the movement stick for attack direction");
+    UpdateControllerBaseBindings({}, true, false);
+    captured_combat.Clear();
+    g_xinput_camera_relative_movement = was_camera_relative;
     constexpr std::array<WORD,4> dpad{{XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_DPAD_RIGHT,
         XINPUT_GAMEPAD_DPAD_DOWN, XINPUT_GAMEPAD_DPAD_LEFT}};
     struct DirectionCase { SHORT x, y; uint8_t command; };

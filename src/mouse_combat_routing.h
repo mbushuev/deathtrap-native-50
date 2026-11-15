@@ -23,6 +23,10 @@ struct MouseCombatKeyboardPlan {
   bool key_a = false;
   bool key_s = false;
   bool key_d = false;
+
+  constexpr bool RewritesAttackMovement() const {
+    return modifier_down && attack != MouseCombatAttack::kRanged;
+  }
 };
 
 struct ControllerCombatDirection {
@@ -108,9 +112,9 @@ constexpr ControllerJoystickMovementPlan ResolveControllerJoystickMovement(
 // selection path.
 constexpr bool ShouldQueueMouseAttackCameraFacing(
     bool physical_left_button_pressed, bool gameplay_accepts_combat,
-    bool camera_relative_available) {
+    bool camera_relative_available, bool ranged_weapon_selected) {
   return physical_left_button_pressed && gameplay_accepts_combat &&
-      camera_relative_available;
+      camera_relative_available && !ranged_weapon_selected;
 }
 
 // Advance a latched mouse attack toward its fixed camera heading without
@@ -144,14 +148,8 @@ constexpr MouseCombatKeyboardPlan ResolveMouseCombatKeyboardPlan(
     bool left_button, bool gameplay_accepts_combat,
     bool immersive_vector_locomotion, bool forward, bool backward, bool left,
     bool right, bool ranged_weapon_selected = false) {
-  if (left_button && gameplay_accepts_combat) {
-    // ACTION_ATTACK_RANGED is plain F. The directional chords below are the
-    // retail melee grammar; sending their W/A/D components while a ranged
-    // weapon is active also moves Lara as the projectile is launched.
-    if (ranged_weapon_selected) {
-      return {MouseCombatAttack::kRanged, true, false, false, false, false,
-              false, false};
-    }
+  const bool attacking = left_button && gameplay_accepts_combat;
+  if (attacking && !ranged_weapon_selected) {
     if (backward || (left && right)) {
       return {MouseCombatAttack::kBack, true, false, false, false, true,
               false, true};
@@ -174,8 +172,10 @@ constexpr MouseCombatKeyboardPlan ResolveMouseCombatKeyboardPlan(
   const bool pure_lateral = lateral != 0 && longitudinal == 0;
   const bool vector_movement =
       immersive_vector_locomotion && lateral != 0;
-  return {MouseCombatAttack::kNone,
-          false,
+  // Ranged fire adds F to the existing input. Keep the same movement plan as
+  // an ordinary walk and do not synthesize any of the directional melee keys.
+  return {attacking ? MouseCombatAttack::kRanged : MouseCombatAttack::kNone,
+          attacking,
           vector_movement,
           vector_movement,
           vector_movement && (forward || pure_lateral),

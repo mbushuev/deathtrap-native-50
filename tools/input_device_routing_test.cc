@@ -13,10 +13,12 @@
 static int32_t received_x = 0, received_y = 0;
 static bool owns_mouse = true;
 static bool accepts_combat = false;
+static bool ranged_weapon_selected = false;
 static bool physical_control_down = false;
+static bool physical_run_and_turn = false;
 bool TestCameraConsumesMouse() { return owns_mouse; }
 bool TestAcceptsCombat() { return accepts_combat; }
-bool TestRangedWeaponSelected() { return true; }
+bool TestRangedWeaponSelected() { return ranged_weapon_selected; }
 void TestPollFrontend() {}
 void TestSubmitMouse(int32_t x, int32_t y) {
   received_x += x; received_y += y;
@@ -26,8 +28,13 @@ static LONG next_x = 0, next_y = 0;
 HRESULT STDMETHODCALLTYPE FakeState(IDirectInputDeviceA*, DWORD size, void* p) {
   std::memset(p, 0, size);
   if (size == 256u) {
-    static_cast<uint8_t*>(p)[DIK_LCONTROL] =
-        physical_control_down ? 0x80u : 0u;
+    auto* keys = static_cast<uint8_t*>(p);
+    keys[DIK_LCONTROL] = physical_control_down ? 0x80u : 0u;
+    if (physical_run_and_turn) {
+      keys[DIK_R] = 0x80u; // Move Forward is rebound to R below.
+      keys[DIK_D] = 0x80u;
+      keys[DIK_LSHIFT] = 0x80u;
+    }
     return DI_OK;
   }
   auto* state = static_cast<DIMOUSESTATE*>(p);
@@ -158,7 +165,7 @@ int main() {
   if ((keyboard_state[native_scan(KeyboardAction::kSidestepRight)] & 0x80u) ||
       (keyboard_state[native_scan(KeyboardAction::kSidestepLeft)] & 0x80u)) return 23;
   g_xinput_gameplay_commands.store(CommandBit(Command::kStepForward));
-  // A mouse attack owns the direction chord. Synthetic LB Ctrl must be
+  // A melee mouse attack owns the direction chord. Synthetic LB Ctrl must be
   // removed, while a genuinely held keyboard Ctrl remains untouched.
   accepts_combat = true;
   g_physical_left_button_down.store(true);
@@ -169,8 +176,25 @@ int main() {
   HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
   if (!(keyboard_state[DIK_LCONTROL] & 0x80u) ||
       !(keyboard_state[native_scan(KeyboardAction::kAttack)] & 0x80u)) return 16;
-  g_physical_left_button_down.store(false);
   physical_control_down = false;
+  ranged_weapon_selected = true;
+  g_keyboard_bindings[static_cast<size_t>(KeyboardAction::kCastSpell)]
+      .store(deathtrap::input::kKeyboardActions[
+          static_cast<size_t>(KeyboardAction::kCastSpell)].default_retail_code);
+  g_xinput_gameplay_commands.store(0u);
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if (!(keyboard_state[native_scan(KeyboardAction::kAttack)] & 0x80u) ||
+      (keyboard_state[native_scan(KeyboardAction::kMoveForward)] & 0x80u) ||
+      (keyboard_state[native_scan(KeyboardAction::kMoveRight)] & 0x80u)) return 27;
+  physical_run_and_turn = true;
+  HookDirectInputDeviceGetState(keyboard, sizeof(keyboard_state), keyboard_state);
+  if (!(keyboard_state[native_scan(KeyboardAction::kAttack)] & 0x80u) ||
+      !(keyboard_state[native_scan(KeyboardAction::kMoveForward)] & 0x80u) ||
+      !(keyboard_state[native_scan(KeyboardAction::kMoveRight)] & 0x80u) ||
+      !(keyboard_state[native_scan(KeyboardAction::kRun)] & 0x80u)) return 28;
+  physical_run_and_turn = false;
+  ranged_weapon_selected = false;
+  g_physical_left_button_down.store(false);
   g_xinput_gameplay_commands.store(CommandBit(Command::kStepBackward) |
       CommandBit(Command::kKeepMovementDuringAttack));
   SubmitDeathtrapXInputCombatState(true, false, false, false, false);
@@ -189,5 +213,5 @@ int main() {
   if (keyboard_state[native_scan(KeyboardAction::kSidestepRight)] & 0x80u) return 26;
   std::cout << "PASS actual callbacks: keyboard 3 preserved; motion counted once; "
                "peek, buttons and menu axes preserved; vibration gain clamps; "
-               "LB/RB step chords, spell release/rebinding and mouse priority preserved\n";
+               "LB/RB step chords, spell release/rebinding, melee routing and ranged movement preserved\n";
 }
