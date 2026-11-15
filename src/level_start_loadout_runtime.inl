@@ -1,13 +1,17 @@
-// The picker passes one-based entries. The start function takes a zero-based index.
-constexpr uint8_t kCircusPickerEntry = 9;
-constexpr uint8_t kCircusLevelId = 15;
-constexpr uintptr_t kLevelPickerInput = 0x17F60u;
-constexpr uintptr_t kMenuLevelStart = 0x7FD90u;
-constexpr uintptr_t kLevelInventorySnapshot = 0x7B4E0u;
-constexpr uintptr_t kInventoryPickup = 0x7BD60u;
-constexpr deathtrap::menu::Rect kLoadoutArea{332, 175, 258, 51};
-constexpr deathtrap::menu::Rect kOriginalChoice{344, 201, 105, 24};
-constexpr deathtrap::menu::Rect kPresetChoice{449, 201, 133, 24};
+// The picker lists Spire, Circus, then Labyrinth. Its entries are
+// one-based, while the start function and the PST table use zero-based indices.
+constexpr uint8_t kCircusPickerEntry = 2;
+constexpr uint8_t kCircusLevelId = 1;
+constexpr DungeonCodeRva kLevelPickerInput{0x17F60u};
+constexpr DungeonCodeRva kMenuLevelStart{0x7FD90u};
+constexpr DungeonCodeRva kLevelInventorySnapshot{0x7B4E0u};
+constexpr DungeonCodeRva kInventoryPickup{0x7BD60u};
+// The character caption ends above this strip. The level preview starts at y=228.
+constexpr deathtrap::menu::Rect kLoadoutArea{332, 204, 258, 22};
+using LoadoutCaption = std::array<uint8_t, kLoadoutArea.width * kLoadoutArea.height>;
+std::array<LoadoutCaption, 2> g_loadout_captions{};
+bool g_loadout_captions_ready = false;
+bool g_loadout_captions_attempted = false;
 
 struct StartingItem {
   uint8_t id;
@@ -26,9 +30,68 @@ bool g_level_start_mouse_held = true;
 bool g_level_start_tab_held = true;
 bool g_circus_loadout_pending = false;
 
-void DrawLevelLoadoutChoice(deathtrap::menu::Rect area, int y, const char* caption) {
-  const auto& api = g_native50_menu_api;
-  api.text(area.x + (area.width - api.width(caption)) / 2, y, 0, caption);
+bool PaintLevelLoadoutCaption(const std::vector<uint8_t>& font, const char* text,
+                             LoadoutCaption* caption) {
+  using namespace deathtrap::text;
+  if (font.size() < sizeof(RetailFontHeader)) return false;
+  const auto* header = reinterpret_cast<const RetailFontHeader*>(font.data());
+  const auto* glyphs = reinterpret_cast<const RetailFontGlyph*>(font.data() + sizeof(*header));
+  if (header->signature != kRetailFontSignature || header->glyph_count > kMaximumFontGlyphs ||
+      font.size() < sizeof(*header) + header->glyph_count * sizeof(*glyphs)) return false;
+  const auto* characters = reinterpret_cast<const uint8_t*>(text);
+  int width = 0;
+  for (const auto* character = characters; *character; ++character) {
+    const size_t index = *character - kFirstFontCharacter;
+    if (index >= header->glyph_count) return false;
+    const auto& glyph = glyphs[index];
+    if (glyph.advance_x < 0 ||
+        static_cast<size_t>(glyph.pixels) + glyph.width * glyph.height > font.size()) return false;
+    width += glyph.advance_x;
+  }
+  if (width > kLoadoutArea.width) return false;
+  int x = (kLoadoutArea.width - width) / 2;
+  caption->fill(0);
+  for (const auto* character = characters; *character; ++character) {
+    const auto& glyph = glyphs[*character - kFirstFontCharacter];
+    const int left = x + glyph.offset_x;
+    if (left < 0 || left + glyph.width > kLoadoutArea.width ||
+        glyph.offset_y < 0 || glyph.offset_y + glyph.height > kLoadoutArea.height) return false;
+    for (int row = 0; row < glyph.height; ++row) {
+      for (int column = 0; column < glyph.width; ++column) {
+        const uint8_t ink = font[glyph.pixels + row * glyph.width + column];
+        if (ink) (*caption)[(glyph.offset_y + row) * kLoadoutArea.width + left + column] = ink;
+      }
+    }
+    x += glyph.advance_x;
+  }
+  return true;
+}
+
+bool PrepareLevelLoadoutCaptions(const std::wstring& game) {
+  using deathtrap::text::Language;
+  // The retail menu font uses CP850.
+  const char* original = "Loadout: [Original]";
+  const char* preset = "Loadout: [Level preset]";
+  switch (ActiveGameTextLanguage()) {
+    case Language::kFrench:
+      original = "\x90" "quipement : [Original]";
+      preset = "\x90" "quipement : [Du niveau]";
+      break;
+    case Language::kGerman:
+      original = "Ausr\x81stung: [Original]";
+      preset = "Ausr\x81stung: [Levelvorgabe]";
+      break;
+    case Language::kItalian:
+      original = "Dotazione: [Originale]";
+      preset = "Dotazione: [Del livello]";
+      break;
+    default:
+      break;
+  }
+  std::vector<uint8_t> font;
+  return Native50ReadHeadingFont(game, &font, 0x1486u) &&
+      PaintLevelLoadoutCaption(font, original, &g_loadout_captions[0]) &&
+      PaintLevelLoadoutCaption(font, preset, &g_loadout_captions[1]);
 }
 
 uint8_t __cdecl HookLevelPickerInput(uint8_t entry) {
@@ -44,8 +107,14 @@ uint8_t __cdecl HookLevelPickerInput(uint8_t entry) {
   const bool clicked = !std::exchange(g_level_start_mouse_held, mouse_down) && mouse_down;
   const bool pressed_tab = !std::exchange(g_level_start_tab_held, tab_down) && tab_down;
 
+  if (entry == kCircusPickerEntry && !g_loadout_captions_attempted) {
+    g_loadout_captions_attempted = true;
+    g_loadout_captions_ready = PrepareLevelLoadoutCaptions(ModuleDirectory());
+    AppendDeathtrapSupportLog("support_level_start_loadout picker_caption=%u",
+                              g_loadout_captions_ready ? 1u : 0u);
+  }
   uintptr_t surface = 0;
-  if (entry != kCircusPickerEntry ||
+  if (entry != kCircusPickerEntry || !g_loadout_captions_ready || !g_original_menu_sprite ||
       !SafeReadValue(g_dungeon_base + kHardwareBackgroundSurfaceRva, &surface) || !surface) {
     const uint8_t action = native_input(entry);
     if (action == 99 || entry == kCircusPickerEntry) g_level_start_use_preset = false;
@@ -62,16 +131,14 @@ uint8_t __cdecl HookLevelPickerInput(uint8_t entry) {
     }
   }
 
-  if (pressed_tab) g_level_start_use_preset = !g_level_start_use_preset;
-  if (clicked && kOriginalChoice.Contains(x, y)) g_level_start_use_preset = false;
-  if (clicked && kPresetChoice.Contains(x, y)) g_level_start_use_preset = true;
+  if (pressed_tab || (clicked && kLoadoutArea.Contains(x, y))) {
+    g_level_start_use_preset = !g_level_start_use_preset;
+  }
 
-  // Draw before the retail function draws the cursor and presents the page.
-  api.font(0x248Fu);
-  DrawLevelLoadoutChoice(kLoadoutArea, 180, "Starting loadout");
-  DrawLevelLoadoutChoice(kOriginalChoice, 204, g_level_start_use_preset ? "Original" : "[Original]");
-  DrawLevelLoadoutChoice(kPresetChoice, 204, g_level_start_use_preset ? "[Level preset]" : "Level preset");
-  api.font(0x1485u);
+  // The picker presents the 8-bit book surface. Use the same blit as its
+  // cursor so the caption is part of that surface before the native flip.
+  g_original_menu_sprite(g_loadout_captions[g_level_start_use_preset].data(),
+                         kLoadoutArea.width, kLoadoutArea.height, kLoadoutArea.x, kLoadoutArea.y);
   const uint8_t action = native_input(entry);
   for (size_t row = 0; row < background.size(); ++row) {
     SafeWrite(pixels + row * deathtrap::menu::kWidth, background[row].data(),
@@ -112,7 +179,7 @@ void __cdecl HookFreshLevelInventorySnapshot() {
 }
 
 bool InstallLevelStartLoadoutHooks() {
-  if (g_dungeon_image_variant != DungeonImageVariant::kEnglish ||
+  if (g_dungeon_image_variant == DungeonImageVariant::kUnsupported ||
       !g_native50_menu_hooks_installed) return false;
   struct CallSite {
     uintptr_t site;
@@ -120,9 +187,10 @@ bool InstallLevelStartLoadoutHooks() {
     uintptr_t hook;
   };
   const CallSite calls[] = {
-      {0x10746u, kLevelPickerInput, reinterpret_cast<uintptr_t>(&HookLevelPickerInput)},
-      {0x10C07u, kMenuLevelStart, reinterpret_cast<uintptr_t>(&HookMenuLevelStart)},
-      {0x80723u, kLevelInventorySnapshot, reinterpret_cast<uintptr_t>(&HookFreshLevelInventorySnapshot)},
+      {ActiveDungeonCodeRva(0x10746u), kLevelPickerInput, reinterpret_cast<uintptr_t>(&HookLevelPickerInput)},
+      {ActiveDungeonCodeRva(0x10C07u), kMenuLevelStart, reinterpret_cast<uintptr_t>(&HookMenuLevelStart)},
+      {ActiveDungeonCodeRva(0x80723u), kLevelInventorySnapshot,
+       reinterpret_cast<uintptr_t>(&HookFreshLevelInventorySnapshot)},
   };
   const auto base = reinterpret_cast<uintptr_t>(g_dungeon_base);
   for (const auto& call : calls) {

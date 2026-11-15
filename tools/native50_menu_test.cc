@@ -693,58 +693,80 @@ void CheckQuitVersionPresentation(const std::filesystem::path& game) {
   quit_test_key=0;g_original_menu_sprite=sprite;frame_pages[0].reset();frame_pages[1].reset();
   g_root_menu_version_font.clear();g_root_menu_version_font_attempted=false;
 }
-void CheckCircusLoadout() {
-  if (g_dungeon_image_variant != DungeonImageVariant::kEnglish) return;
-  Require(InstallLevelStartLoadoutHooks(), "install on the real English picker and inventory paths");
+void CheckCircusLoadout(const std::filesystem::path& game) {
+  Require(InstallLevelStartLoadoutHooks(), "install on the real picker and inventory paths");
 
   const auto saved_api = g_native50_menu_api;
-  auto page = std::make_unique<deathtrap::menu::Canvas>();
-  auto* page_pixels = page->data();
+  const auto saved_sprite = g_original_menu_sprite;
+  Require(PrepareLevelLoadoutCaptions(game.wstring()), "build captions from the actual menu font");
+  Require(g_loadout_captions[0] != g_loadout_captions[1], "both states need distinct visible ink");
+  g_loadout_captions_attempted = g_loadout_captions_ready = true;
+  auto pictured_page = std::make_unique<deathtrap::menu::Image>();
+  Require(Native50ReadPcx((game / L"ASYLUM" / L"MENU" / L"NEWGAME.PCX").wstring(),
+                         pictured_page.get()), "load the retail level picker page");
+  frame_page = 0;
+  frame_pages[0] = std::make_unique<deathtrap::menu::Canvas>(pictured_page->pixels);
+  auto* page_pixels = frame_pages[0]->data();
   Require(SafeWrite(g_dungeon_base + kHardwareBackgroundSurfaceRva, &page_pixels, sizeof(page_pixels)),
           "retail picker canvas");
   std::array<uint8_t, 5> native_input{};
   Require(SafeRead(g_dungeon_base + kLevelPickerInput, native_input.data(), native_input.size()),
           "read the original picker input prologue");
-  const auto picker_input = +[](uint8_t) -> uint8_t { return native_setup_action; };
-  PatchJump(kLevelPickerInput, reinterpret_cast<const void*>(picker_input));
+  const auto picker_input = +[](uint8_t entry) -> uint8_t {
+    unsigned ink = 0;
+    const auto& caption = g_loadout_captions[g_level_start_use_preset];
+    for (int y = 0; y < kLoadoutArea.height; ++y) {
+      for (int x = 0; x < kLoadoutArea.width; ++x) {
+        const auto expected = caption[y * kLoadoutArea.width + x];
+        if (!expected) continue;
+        const auto pixel = (y + kLoadoutArea.y) * deathtrap::menu::kWidth + x + kLoadoutArea.x;
+        if ((*frame_pages[0])[pixel] == expected) ++ink;
+      }
+    }
+    Require(entry == kCircusPickerEntry ? ink > 500 : ink < 100,
+            "native input and flip must see the caption composited into the Circus canvas only");
+    return native_setup_action;
+  };
+  PatchJump(kLevelPickerInput.english, reinterpret_cast<const void*>(picker_input));
   g_native50_menu_api.mouse = &Mouse;
   g_native50_menu_api.key = &Key;
-  g_native50_menu_api.font = &Font;
-  g_native50_menu_api.width = &Width;
-  g_native50_menu_api.text = +[](int x, int y, int flags, const char* value) {
-    Text(x, y, flags, value);
-    events.emplace_back(value);
-  };
-  const auto poll = [](uint8_t entry) {
-    events.clear();
-    return HookLevelPickerInput(entry);
+  g_original_menu_sprite = &FrameSprite;
+  const auto poll = [&](uint8_t entry) {
+    const auto result = HookLevelPickerInput(entry);
+    Require(*frame_pages[0] == pictured_page->pixels, "restore the picker canvas after native input");
+    return result;
   };
   buttons = 0;
   keys.fill(false);
   native_setup_action = 0;
-  Require(!poll(9) && events.size() == 3 && events[1] == "[Original]",
-          "Circus shows the choices with Original selected by default");
+  Require(!poll(2) && !g_level_start_use_preset, "Circus shows Original by default");
   keys[0x0F] = true;
-  Require(!poll(9) && events[2] == "[Level preset]", "Tab selects the preset");
-  Require(!poll(9) && events[2] == "[Level preset]", "held Tab keeps the selection");
+  Require(!poll(2) && g_level_start_use_preset, "Tab selects the preset");
+  Require(!poll(2) && g_level_start_use_preset, "held Tab keeps the selection");
   mouse_x = 390;
   mouse_y = 211;
   buttons = 1;
-  Require(!poll(9) && events[1] == "[Original]", "mouse can switch back to Original");
-  Require(!poll(8) && events.empty(), "other levels keep the unmodified picker");
+  Require(!poll(2) && !g_level_start_use_preset, "mouse can switch back to Original");
+  Require(!poll(9), "Inversion keeps the unmodified picker");
   PatchCode(kLevelPickerInput, native_input.data(), native_input.size());
   g_native50_menu_api = saved_api;
+  g_original_menu_sprite = saved_sprite;
+  frame_pages[0].reset();
   page_pixels = nullptr;
   Require(SafeWrite(g_dungeon_base + kHardwareBackgroundSurfaceRva, &page_pixels, sizeof(page_pixels)),
           "restore retail picker canvas");
 
+  // These data addresses are independent of the code relocation rules.
+  constexpr DungeonDataRva context_pointer_rva{0xF8C10u, 0xF9678u, 0xF90E0u, 0xF92C0u};
+  constexpr DungeonDataRva item_slots_rva{0x1D8A14u, 0x1D9474u, 0x1D8EE4u, 0x1D90C4u};
+  constexpr DungeonDataRva pst_paths_rva{0xC058Cu, 0xC0594u, 0xC0584u, 0xC0594u};
   uint8_t context[12]{};
   auto* context_pointer = context;
-  Require(SafeWrite(g_dungeon_base + 0xF8C10u, &context_pointer, sizeof(context_pointer)),
+  Require(SafeWrite(g_dungeon_base + context_pointer_rva, &context_pointer, sizeof(context_pointer)),
           "retail level context");
-  const auto reset = reinterpret_cast<KeyboardBindingMenuFn>(g_dungeon_base + 0x7B5B0u);
-  const auto retry = reinterpret_cast<KeyboardBindingMenuFn>(g_dungeon_base + 0x7B520u);
-  auto* slots = g_dungeon_base + 0x1D8A14u;
+  const auto reset = reinterpret_cast<KeyboardBindingMenuFn>(g_dungeon_base + ActiveDungeonCodeRva(0x7B5B0u));
+  const auto retry = reinterpret_cast<KeyboardBindingMenuFn>(g_dungeon_base + ActiveDungeonCodeRva(0x7B520u));
+  auto* slots = g_dungeon_base + item_slots_rva;
   const auto check_items = [&](bool preset) {
     const uint8_t expected[][2] = {{5, 15}, {9, 2}, {17, 2}, {16, 3}, {22, 5}};
     for (const auto& item : expected) {
@@ -761,12 +783,15 @@ void CheckCircusLoadout() {
     context[5] = context[6];  // Retail preparation makes the queued level active.
     HookFreshLevelInventorySnapshot();
   };
-  enter(8, false);
+  enter(1, false);
   check_items(false);
-  enter(7, true);
+  enter(8, true);  // The ninth menu entry starts Inversion.
   check_items(false);
-  enter(8, true);
-  Require(context[5] == 15, "Circus picker index must select the native Circus level");
+  enter(1, true);
+  const char* level_path = nullptr;
+  Require(SafeReadValue(g_dungeon_base + pst_paths_rva + context[5] * 28u, &level_path) &&
+              level_path && std::strcmp(level_path, "asylum\\pst\\circus.pst") == 0,
+          "the native stage table must identify the started level as Circus");
   check_items(true);
   slots[9 * 2 + 1] = 1;
   retry();
@@ -776,7 +801,7 @@ void CheckCircusLoadout() {
   Require(slots[9 * 2 + 1] == 1, "grant is consumed once by the fresh-start snapshot");
   reset();
   context_pointer = nullptr;
-  Require(SafeWrite(g_dungeon_base + 0xF8C10u, &context_pointer, sizeof(context_pointer)),
+  Require(SafeWrite(g_dungeon_base + context_pointer_rva, &context_pointer, sizeof(context_pointer)),
           "restore retail fixture context");
   std::cout << "Circus loadout: native counts, stock and other-level starts, retry and one-shot grant passed\n";
 }
@@ -791,7 +816,7 @@ void CheckOriginal(int argc, wchar_t** argv) {
     g_native50_menu_hooks_installed = false;
     Require(g_dungeon_image_variant != DungeonImageVariant::kUnsupported && InstallNative50MenuHooks() &&
                 InstallNative50MenuHooks(), "real localized signatures and idempotent install");
-    CheckCircusLoadout();
+    CheckCircusLoadout(std::filesystem::path(argv[i]).parent_path());
     auto assets = std::make_unique<Native50MenuAssets>();
     const auto dir = std::filesystem::path(argv[i]).parent_path() / L"ASYLUM" / L"MENU";
     Require(Native50ReadPcx((dir/L"SETUP.PCX").wstring(), &assets->table) &&
