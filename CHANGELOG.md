@@ -3,12 +3,27 @@
 ## Acknowledgements
 
 Thanks to the community members who contributed to the project and tested
-public builds:
+public builds.
 
+- **DustZero** — tested builds, reported bugs, and took the initiative to
+  propose new features, including level-specific starting loadouts.
 - **RicViper** — designed and originally implemented the optional gamepad layout.
-- `dbdk422a`
-- `517342` — for testing and identifying the directional-control problems
+- **dbdk422a** — contributed to the project.
+- **517342** — tested builds and identified the directional-control problems
   fixed in version 0.0.221.
+
+## 0.0.242 — Level loadouts and ranged movement
+
+- Add optional starting equipment to the **New Game** level picker, an idea
+  proposed by **DustZero**. Switch between **Original** and **Level preset**
+  by clicking the loadout line or pressing **Tab**. Spire always uses the
+  standard starting inventory.
+- Each preset supplies weapons, ammunition, spells and consumables chosen for
+  the level. Restarting from the beginning of the level restores that starting
+  inventory. The selector follows the game's English, French, German or
+  Italian interface.
+- Fix walking, running and turning while firing ranged weapons with modern
+  controls, including the Flame Lance and flamethrower in third person.
 
 ## 0.0.241 — World rendering and immersive camera fixes
 

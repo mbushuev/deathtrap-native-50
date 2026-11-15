@@ -16,6 +16,13 @@ https://youtu.be/U1RjdVP49TQ
 
 The complete user-facing list of changes is included in CHANGELOG.txt.
 
+STARTING LOADOUTS
+
+In New Game, select a level and click the loadout line or press Tab to switch
+between Original and Level preset. Nine levels have a preset. Spire always
+uses the standard starting inventory. A restart from the beginning of the
+level restores the starting inventory you chose.
+
 QUICK INSTALL - WINDOWS
 
 Everything required for the supported setup is already included. You do not
@@ -363,11 +370,14 @@ https://github.com/bangstk/ogg-winmm
 
 ACKNOWLEDGEMENTS
 
-Thanks to the community members who helped test public builds:
+Thanks to the community members who contributed and tested public builds.
 
-- dbdk422a
-- 517342 - for testing and identifying the directional-control problems
-  fixed in version 0.0.221
+- DustZero - tested builds, reported bugs, and proposed new features, including
+  level-specific starting loadouts.
+- RicViper - designed and originally implemented the optional gamepad layout.
+- dbdk422a - contributed to the project.
+- 517342 - tested builds and identified the directional-control problems
+  fixed in version 0.0.221.
 
 The installer creates a timestamped backup of existing patch files,
 DDraw.dll, dxwrapper.dll, D3D9.dll, D3DImm.dll, both wrapper configurations,

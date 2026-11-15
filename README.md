@@ -1,6 +1,6 @@
 # Deathtrap Native 50
 
-Current version: **0.0.241**
+Current version: **0.0.242**
 
 <p align="center">
   <a href="https://youtu.be/U1RjdVP49TQ"><img src="https://img.shields.io/badge/Watch_the_gameplay_demo-YouTube-FF0000?style=for-the-badge&amp;logo=youtube&amp;logoColor=white" alt="Watch the gameplay demo on YouTube"></a>
@@ -9,7 +9,7 @@ Current version: **0.0.241**
 </p>
 
 <p align="center">
-  <img src="assets/deathtrap-native50-banner-v0.0.241.png" alt="Deathtrap Native 50 v0.0.241. Red Lotus approaching the dungeon lift" width="960">
+  <img src="assets/deathtrap-native50-banner-v0.0.242.png" alt="Deathtrap Native 50 v0.0.242. Red Lotus choosing her starting equipment at the open level-selection book" width="960">
 </p>
 
 Deathtrap Native 50 is a free, unofficial modernization patch for the original
@@ -61,6 +61,9 @@ Required wrapper runtime files are redistributed under their published terms.
   including menu navigation and a right-stick pointer.
 - Radial inventory selector with the game's own icons for melee, ranged,
   spell/shield and potion/charm categories.
+- Optional starting loadouts for nine levels in **New Game**. Select a level,
+  then click the loadout line or press **Tab** to switch from **Original** to
+  **Level preset**. Spire always uses the original starting inventory.
 - Quake-style slow motion while keyboard selectors or controller radial wheels
   are open; camera control and selector input remain responsive at full rate,
   including in first person.
@@ -216,7 +219,7 @@ requires its configuration and additional native bindings in
 
 ## Installation
 
-Download `Deathtrap-Native-50-0.0.241-Setup.exe` for Windows. Close the game,
+Download `Deathtrap-Native-50-0.0.242-Setup.exe` for Windows. Close the game,
 run the installer, select the folder containing `DD_CD.EXE`, and
 choose **Install**. The EXE contains the complete Windows patch, preserves
 current Native 50 preferences by default, and creates a rollback copy before
@@ -606,12 +609,14 @@ See [Publishing releases](docs/RELEASING.md) for the exact procedure.
 ## Acknowledgements
 
 Thanks to the community members who contributed to the project and tested
-public builds:
+public builds.
 
+- **DustZero** — tested builds, reported bugs, and took the initiative to
+  propose new features, including level-specific starting loadouts.
 - **RicViper** — designed and originally implemented the
   [optional RicViper gamepad layout](docs/RICVIPER-CONTROLS.md).
-- `dbdk422a`
-- `517342` — for testing and identifying the directional-control problems
+- **dbdk422a** — contributed to the project.
+- **517342** — tested builds and identified the directional-control problems
   fixed in version 0.0.221.
 
 ## Licence
