@@ -693,7 +693,7 @@ void CheckQuitVersionPresentation(const std::filesystem::path& game) {
   quit_test_key=0;g_original_menu_sprite=sprite;frame_pages[0].reset();frame_pages[1].reset();
   g_root_menu_version_font.clear();g_root_menu_version_font_attempted=false;
 }
-void CheckCircusLoadout(const std::filesystem::path& game) {
+void CheckLevelStartLoadouts(const std::filesystem::path& game) {
   Require(InstallLevelStartLoadoutHooks(), "install on the real picker and inventory paths");
 
   const auto saved_api = g_native50_menu_api;
@@ -723,8 +723,9 @@ void CheckCircusLoadout(const std::filesystem::path& game) {
         if ((*frame_pages[0])[pixel] == expected) ++ink;
       }
     }
-    Require(entry == kCircusPickerEntry ? ink > 500 : ink < 100,
-            "native input and flip must see the caption composited into the Circus canvas only");
+    const bool has_preset = entry >= 2 && entry <= 10;
+    Require(has_preset ? ink > 500 : ink < 100,
+            "the caption must reach the flip for playable levels that have a preset");
     return native_setup_action;
   };
   PatchJump(kLevelPickerInput.english, reinterpret_cast<const void*>(picker_input));
@@ -747,7 +748,16 @@ void CheckCircusLoadout(const std::filesystem::path& game) {
   mouse_y = 211;
   buttons = 1;
   Require(!poll(2) && !g_level_start_use_preset, "mouse can switch back to Original");
-  Require(!poll(9), "Inversion keeps the unmodified picker");
+  buttons = 0;
+  keys[0x0F] = false;
+  for (uint8_t entry = 0; entry <= 10; ++entry) {
+    Require(!poll(entry), "checking the loadout caption must not start a level");
+  }
+  keys[0x0F] = true;
+  Require(!poll(10) && g_level_start_use_preset, "Dragon offers the same switch");
+  native_setup_action = 99;
+  Require(poll(10) == 99 && !g_level_start_use_preset, "Back resets the loadout choice");
+  native_setup_action = 0;
   PatchCode(kLevelPickerInput, native_input.data(), native_input.size());
   g_native50_menu_api = saved_api;
   g_original_menu_sprite = saved_sprite;
@@ -767,43 +777,74 @@ void CheckCircusLoadout(const std::filesystem::path& game) {
   const auto reset = reinterpret_cast<KeyboardBindingMenuFn>(g_dungeon_base + ActiveDungeonCodeRva(0x7B5B0u));
   const auto retry = reinterpret_cast<KeyboardBindingMenuFn>(g_dungeon_base + ActiveDungeonCodeRva(0x7B520u));
   auto* slots = g_dungeon_base + item_slots_rva;
-  const auto check_items = [&](bool preset) {
-    const uint8_t expected[][2] = {{5, 15}, {9, 2}, {17, 2}, {16, 3}, {22, 5}};
-    for (const auto& item : expected) {
-      Require(slots[item[0] * 2] == (preset ? 1 : 0) &&
-                  slots[item[0] * 2 + 1] == (preset ? item[1] : 0),
-              "actual retail inventory slot must have the requested count and ownership");
+  using InventoryLookup = const uint8_t*(__cdecl*)(int);
+  const auto lookup = reinterpret_cast<InventoryLookup>(g_dungeon_base + kInventoryLookupRva);
+  const auto check_items = [&](const LevelStartPreset* preset) {
+    std::array<uint8_t, 41> expected{};
+    expected[0] = expected[7] = 1;  // Standard sword and unarmed combat.
+    if (preset) {
+      for (size_t i = 0; i < preset->count; ++i) {
+        const auto& item = preset->items[i];
+        const auto slot = static_cast<size_t>(item.id);
+        Require(slot < expected.size() && !expected[slot] && item.quantity,
+                "a preset should grant each valid slot once");
+        expected[slot] = item.quantity;
+      }
     }
-    Require(slots[0] && slots[7 * 2], "retain the stock sword and unarmed combat");
+    for (size_t id = 0; id < expected.size(); ++id) {
+      const auto* item = lookup(static_cast<int>(id));
+      Require(expected[id] ? item && item[1] == expected[id] : !item,
+              "the real inventory lookup must expose exactly the requested owned items and counts");
+    }
   };
-  const auto enter = [&](uint8_t picker_index, bool preset) {
+  const auto enter = [&](uint8_t picker_index, uint8_t character, bool preset) {
     reset();
     g_level_start_use_preset = preset;
-    HookMenuLevelStart(picker_index, 1);
+    HookMenuLevelStart(picker_index, character);
     context[5] = context[6];  // Retail preparation makes the queued level active.
     HookFreshLevelInventorySnapshot();
   };
-  enter(1, false);
-  check_items(false);
-  enter(8, true);  // The ninth menu entry starts Inversion.
-  check_items(false);
-  enter(1, true);
-  const char* level_path = nullptr;
-  Require(SafeReadValue(g_dungeon_base + pst_paths_rva + context[5] * 28u, &level_path) &&
-              level_path && std::strcmp(level_path, "asylum\\pst\\circus.pst") == 0,
-          "the native stage table must identify the started level as Circus");
-  check_items(true);
-  slots[9 * 2 + 1] = 1;
-  retry();
-  check_items(true);
-  slots[9 * 2 + 1] = 1;
+  constexpr const char* stage_files[] = {
+      "spire.pst", "circus.pst", "vertigo.pst", "quarry.pst", "pita.pst",
+      "belfrya.pst", "hive.pst", "sewer.pst", "inverson.pst", "dragon.pst",
+  };
+  for (uint8_t index = 0; index < std::size(stage_files); ++index) {
+    const auto* preset = LevelPreset(index);
+    Require(static_cast<bool>(preset) == (index != 0), "all entries except Spire have a preset");
+    for (uint8_t character : {uint8_t{0}, uint8_t{1}}) {
+      enter(index, character, false);
+      check_items(nullptr);
+      enter(index, character, true);
+      const char* level_path = nullptr;
+      const std::string expected_path = std::string("asylum\\pst\\") + stage_files[index];
+      Require(SafeReadValue(g_dungeon_base + pst_paths_rva + context[5] * 28u, &level_path) &&
+                  level_path && expected_path == level_path,
+              "the native stage table must identify the selected level");
+      check_items(preset);
+      if (preset) {
+        slots[9 * 2 + 1] = 1;
+        retry();
+        check_items(preset);
+        slots[9 * 2 + 1] = 1;
+        HookFreshLevelInventorySnapshot();
+        Require(slots[9 * 2 + 1] == 1, "preset must be granted exactly once");
+      }
+    }
+  }
+  reset();
+  g_level_start_use_preset = true;
+  HookMenuLevelStart(9, 1);
+  context[5] = 1;  // A different stage became active before inventory setup.
   HookFreshLevelInventorySnapshot();
-  Require(slots[9 * 2 + 1] == 1, "grant is consumed once by the fresh-start snapshot");
+  check_items(nullptr);
+  context[5] = context[6];
+  HookFreshLevelInventorySnapshot();
+  check_items(nullptr);
   reset();
   context_pointer = nullptr;
   Require(SafeWrite(g_dungeon_base + context_pointer_rva, &context_pointer, sizeof(context_pointer)),
           "restore retail fixture context");
-  std::cout << "Circus loadout: native counts, stock and other-level starts, retry and one-shot grant passed\n";
+  std::cout << "Level loadouts: all ten menu entries, both characters, exact counts and retry passed\n";
 }
 
 void CheckOriginal(int argc, wchar_t** argv) {
@@ -816,7 +857,7 @@ void CheckOriginal(int argc, wchar_t** argv) {
     g_native50_menu_hooks_installed = false;
     Require(g_dungeon_image_variant != DungeonImageVariant::kUnsupported && InstallNative50MenuHooks() &&
                 InstallNative50MenuHooks(), "real localized signatures and idempotent install");
-    CheckCircusLoadout(std::filesystem::path(argv[i]).parent_path());
+    CheckLevelStartLoadouts(std::filesystem::path(argv[i]).parent_path());
     auto assets = std::make_unique<Native50MenuAssets>();
     const auto dir = std::filesystem::path(argv[i]).parent_path() / L"ASYLUM" / L"MENU";
     Require(Native50ReadPcx((dir/L"SETUP.PCX").wstring(), &assets->table) &&
