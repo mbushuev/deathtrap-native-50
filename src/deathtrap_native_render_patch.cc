@@ -21294,6 +21294,7 @@ bool InstallGameTextFix() {
 #include "corpse_retention_runtime.inl"
 #include "native50_menu_runtime.inl"
 #include "death_recovery_runtime.inl"
+#include "level_start_loadout_runtime.inl"
 #include "save_thumbnail_runtime.inl"
 
 bool InstallRootMenuEscapeHook() {
@@ -22124,6 +22125,7 @@ bool InstallDeathtrapNativeRenderHooks() {
   InstallInterfaceScaleHooks();
   InstallNative50MenuHooks();
   InstallDeathRecoveryHooks();
+  InstallLevelStartLoadoutHooks();
   InstallSaveThumbnailHooks();
 
   // Preserve the retail serializer, slots, screenshots and loader. The hook
