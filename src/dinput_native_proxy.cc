@@ -1717,6 +1717,34 @@ size_t SwapChainVtableSize(IDXGISwapChain* swap_chain) {
   return 18u;
 }
 
+size_t CompleteSwapChainVtableSize(void** table, size_t public_size) {
+  // The DXGI implementation can dispatch private virtual methods through
+  // this same table, including during the final Release. Those methods
+  // follow the documented interface slots and vary by Windows version.
+  MEMORY_BASIC_INFORMATION memory{};
+  if (!VirtualQuery(table, &memory, sizeof(memory)) ||
+      memory.State != MEM_COMMIT ||
+      (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS))) {
+    return 0;
+  }
+  const auto end = reinterpret_cast<uintptr_t>(memory.BaseAddress) + memory.RegionSize;
+  const auto available = (end - reinterpret_cast<uintptr_t>(table)) / sizeof(void*);
+  constexpr size_t kMaxSlots = 128;
+  const size_t limit = std::min<size_t>(available, kMaxSlots);
+  for (size_t slot = 0; slot < limit; ++slot) {
+    MEMORY_BASIC_INFORMATION target{};
+    if (!VirtualQuery(table[slot], &target, sizeof(target)) ||
+        target.State != MEM_COMMIT ||
+        (target.Protect & (PAGE_GUARD | PAGE_NOACCESS)) ||
+        !(target.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ |
+                            PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) {
+      return slot >= public_size ? slot : 0;
+    }
+  }
+  // The end could not be identified safely in the readable range.
+  return 0;
+}
+
 bool CloneAndPatchSwapChainVtable(void* interface_pointer,
                                   size_t vtable_size, bool patch_present,
                                   bool patch_present1) {
@@ -1740,7 +1768,11 @@ bool CloneAndPatchSwapChainVtable(void* interface_pointer,
     return true;
   }
 
-  const size_t bytes = vtable_size * sizeof(void*);
+  const size_t complete_size = CompleteSwapChainVtableSize(current, vtable_size);
+  if (!complete_size) {
+    return false;
+  }
+  const size_t bytes = complete_size * sizeof(void*);
   auto** const clone = static_cast<void**>(VirtualAlloc(
       nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
   if (!clone) {

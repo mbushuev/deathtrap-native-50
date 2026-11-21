@@ -6,6 +6,7 @@
 #include <d3d11_1.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
+#include <wrl/implements.h>
 
 #include <algorithm>
 #include <array>
@@ -14,7 +15,6 @@
 #include <cstdio>
 #include <memory>
 #include <mutex>
-#include <unordered_map>
 
 #include "deathtrap_native_render_patch.h"
 
@@ -220,8 +220,14 @@ class Sampler {
   uint32_t sample_height_ = 0;
 };
 
-struct State {
-  ComPtr<IDXGISwapChain> swap_chain;
+// DXGI releases this attachment with the swap chain. Holding the chain here
+// would keep its back buffers and device alive across menu mode changes.
+constexpr GUID kPresentGuardState = {
+    0xc3b41ab3, 0x46bd, 0x4e76, {0x9c, 0xa3, 0x53, 0x91, 0xc6, 0x02, 0x7a, 0x54}};
+
+struct State final : Microsoft::WRL::RuntimeClass<
+                         Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
+                         IUnknown> {
   ComPtr<ID3D11Device> device;
   ComPtr<ID3D11DeviceContext> context;
   std::unique_ptr<Sampler> sampler;
@@ -238,14 +244,24 @@ struct State {
   std::mutex mutex;
 };
 
-void LogExtendedGraphicsEnvironment(State* state) {
+ComPtr<IUnknown> GetPresentGuardState(IDXGISwapChain* swap_chain) {
+  ComPtr<IUnknown> state;
+  UINT size = sizeof(IUnknown*);
+  if (FAILED(swap_chain->GetPrivateData(
+          kPresentGuardState, &size, state.GetAddressOf()))) {
+    state.Reset();
+  }
+  return state;
+}
+
+void LogExtendedGraphicsEnvironment(IDXGISwapChain* swap_chain, const State& state) {
   if (!DeathtrapExtendedLogsEnabled()) {
     return;
   }
   ComPtr<IDXGIDevice> dxgi_device;
   ComPtr<IDXGIAdapter> adapter;
   DXGI_ADAPTER_DESC adapter_desc{};
-  bool adapter_valid = SUCCEEDED(state->device.As(&dxgi_device)) &&
+  bool adapter_valid = SUCCEEDED(state.device.As(&dxgi_device)) &&
       SUCCEEDED(dxgi_device->GetAdapter(&adapter)) &&
       SUCCEEDED(adapter->GetDesc(&adapter_desc));
   char adapter_name[512] = {};
@@ -254,13 +270,13 @@ void LogExtendedGraphicsEnvironment(State* state) {
                        static_cast<int>(sizeof(adapter_name)), nullptr, nullptr);
   }
   DXGI_SWAP_CHAIN_DESC swap_desc{};
-  const bool swap_valid = SUCCEEDED(state->swap_chain->GetDesc(&swap_desc));
+  const bool swap_valid = SUCCEEDED(swap_chain->GetDesc(&swap_desc));
   ComPtr<IDXGIOutput> output;
   DXGI_OUTPUT_DESC output_desc{};
   DEVMODEW display{};
   display.dmSize = sizeof(display);
   const bool display_valid =
-      SUCCEEDED(state->swap_chain->GetContainingOutput(&output)) &&
+      SUCCEEDED(swap_chain->GetContainingOutput(&output)) &&
       SUCCEEDED(output->GetDesc(&output_desc)) &&
       EnumDisplaySettingsW(output_desc.DeviceName, ENUM_CURRENT_SETTINGS,
                             &display) != FALSE;
@@ -274,7 +290,7 @@ void LogExtendedGraphicsEnvironment(State* state) {
       adapter_desc.DeviceId,
       static_cast<unsigned long long>(adapter_desc.DedicatedVideoMemory) /
           (1024u * 1024u),
-      static_cast<unsigned>(state->device->GetFeatureLevel()),
+      static_cast<unsigned>(state.device->GetFeatureLevel()),
       swap_valid ? 1u : 0u, swap_desc.BufferDesc.Width,
       swap_desc.BufferDesc.Height, static_cast<unsigned>(swap_desc.BufferDesc.Format),
       swap_desc.SampleDesc.Count, swap_desc.BufferCount,
@@ -283,8 +299,7 @@ void LogExtendedGraphicsEnvironment(State* state) {
       kColumns * kRows);
 }
 
-std::mutex g_states_mutex;
-std::unordered_map<IDXGISwapChain*, std::shared_ptr<State>> g_states;
+std::mutex g_present_guard_attach_mutex;
 
 bool IsCorrupt(const VisualSample& exact, const VisualSample& candidate,
                uint32_t* newly_black, const char** reason) {
@@ -465,32 +480,32 @@ void AttachNativeD3D11PresentGuard(IDXGISwapChain* swap_chain,
   if (!device) {
     return;
   }
-  std::lock_guard<std::mutex> lock(g_states_mutex);
-  if (g_states.find(swap_chain) != g_states.end()) {
+  std::lock_guard<std::mutex> lock(g_present_guard_attach_mutex);
+  if (GetPresentGuardState(swap_chain)) {
     return;
   }
-  auto state = std::make_shared<State>();
-  state->swap_chain = swap_chain;
+  auto state = Microsoft::WRL::Make<State>();
+  if (!state) {
+    return;
+  }
   state->device = device;
   device->GetImmediateContext(&state->context);
   state->sampler =
       std::make_unique<Sampler>(device.Get(), state->context.Get());
-  LogExtendedGraphicsEnvironment(state.get());
-  g_states.emplace(swap_chain, state);
+  if (FAILED(swap_chain->SetPrivateDataInterface(kPresentGuardState, state.Get()))) {
+    return;
+  }
+  LogExtendedGraphicsEnvironment(swap_chain, *state.Get());
   Log("native-only D3D11 swapchain attached sc=%p", swap_chain);
 }
 
 bool AllowNativeD3D11Present(IDXGISwapChain* swap_chain) {
   const DeathtrapDiagnosticScope diagnostic(deathtrap::timing::Part::kGuard);
-  std::shared_ptr<State> state;
-  {
-    std::lock_guard<std::mutex> lock(g_states_mutex);
-    const auto it = g_states.find(swap_chain);
-    if (it == g_states.end()) {
-      return true;
-    }
-    state = it->second;
+  const auto attachment = GetPresentGuardState(swap_chain);
+  if (!attachment) {
+    return true;
   }
+  auto* const state = static_cast<State*>(attachment.Get());
   std::lock_guard<std::mutex> lock(state->mutex);
   ComPtr<ID3D11Texture2D> backbuffer;
   ComPtr<IDXGISwapChain3> swap_chain3;
