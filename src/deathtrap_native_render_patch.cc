@@ -871,6 +871,8 @@ uint64_t g_contact_projection_68390_small_rejections = 0;
 uint8_t* g_dungeon_base = nullptr;
 SceneSnapshot g_previous_snapshot;
 SceneSnapshot g_older_snapshot;
+std::atomic<uint32_t> g_save_load_presentation_generation{0};
+uint32_t g_rendered_save_load_generation = 0;
 LARGE_INTEGER g_qpc_frequency{};
 bool g_debug_log = false;
 std::atomic<bool> g_extended_log_enabled{false};
@@ -20239,6 +20241,13 @@ void PublishSelectorTimePlan(const deathtrap::selector_time::Plan& plan) {
 
 void __cdecl HookRenderPresentWait(void* context, int wait) {
   NativeTimingTick timing;
+  const uint32_t load = GetDeathtrapSaveLoadPresentationGeneration();
+  if (load != g_rendered_save_load_generation) {
+    // A same-level load can keep the root address while replacing the scene.
+    // Start from a native frame before interpolating the new world.
+    ResetSceneHistory();
+    g_rendered_save_load_generation = load;
+  }
   if (ConsumeDeathtrapImmersiveKeyboardToggle() && IsGameForeground() &&
       DeathtrapGameplayReady(false)) {
     ToggleCustomHeadView("keyboard_binding");
@@ -21958,6 +21967,10 @@ bool DeathtrapRangedWeaponSelected() {
 
 DeathtrapNativePresentationStage GetDeathtrapNativePresentationStage() {
   return g_active_presentation_trace.stage;
+}
+
+uint32_t GetDeathtrapSaveLoadPresentationGeneration() {
+  return g_save_load_presentation_generation.load(std::memory_order_acquire);
 }
 
 uint64_t GetDeathtrapNativePresentationTick() {

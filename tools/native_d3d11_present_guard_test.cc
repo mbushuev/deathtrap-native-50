@@ -14,6 +14,7 @@ namespace {
 using Microsoft::WRL::ComPtr;
 DeathtrapNativePresentationStage stage = DeathtrapNativePresentationStage::kExact;
 unsigned destroyed_chains = 0;
+uint32_t save_load_generation = 0;
 
 struct LifetimeObserver final : Microsoft::WRL::RuntimeClass<
     Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IUnknown> {
@@ -66,6 +67,14 @@ void CheckSwapChain(HWND window) {
   context->ClearRenderTargetView(view.Get(), black);
   stage = DeathtrapNativePresentationStage::kMidpoint;
   Require(!AllowNativeD3D11Present(swap_chain.Get()), "Black midpoint accepted");
+  ++save_load_generation;
+  Require(AllowNativeD3D11Present(swap_chain.Get()), "A saved game reused the prior scene's exact frame");
+  context->ClearRenderTargetView(view.Get(), bright);
+  stage = DeathtrapNativePresentationStage::kExact;
+  Require(AllowNativeD3D11Present(swap_chain.Get()), "New scene's exact frame rejected");
+  context->ClearRenderTargetView(view.Get(), black);
+  stage = DeathtrapNativePresentationStage::kMidpoint;
+  Require(!AllowNativeD3D11Present(swap_chain.Get()), "Guard failed to acquire the new scene baseline");
 }
 
 }  // namespace
@@ -77,6 +86,7 @@ deathtrap::timing::Stamp BeginDeathtrapDiagnosticTiming() { return {}; }
 void EndDeathtrapDiagnosticTiming(deathtrap::timing::Part, deathtrap::timing::Stamp) {}
 DeathtrapNativePresentationStage GetDeathtrapNativePresentationStage() { return stage; }
 uint64_t GetDeathtrapNativePresentationTick() { return 1; }
+uint32_t GetDeathtrapSaveLoadPresentationGeneration() { return save_load_generation; }
 DeathtrapControllerSelectorStatus GetDeathtrapControllerSelectorStatus() { return {}; }
 
 int main() {
@@ -88,5 +98,5 @@ int main() {
     Require(destroyed_chains == cycle, "Swap chain remained alive");
   }
   DestroyWindow(window);
-  std::puts("PASS: 24 swap chains released and black midpoints rejected");
+  std::puts("PASS: 24 swap chains released, scene changes reset the sample, and black midpoints rejected");
 }

@@ -79,6 +79,7 @@ int __cdecl HookRecoverySave(const char* name, const void* metadata) {
 }
 int __cdecl HookRecoveryLoad(const char* name) {
   const int result = g_original_recovery_load ? g_original_recovery_load(name) : 0;
+  if (result) g_save_load_presentation_generation.fetch_add(1, std::memory_order_release);
   RecordRecoveryCheckpoint(name, result != 0, "load");
   return result;
 }

@@ -195,6 +195,7 @@ uint64_t GetDeathtrapNativeSuppressedPresentCount();
 // execute synchronously on the game's render thread.
 DeathtrapNativePresentationStage GetDeathtrapNativePresentationStage();
 uint64_t GetDeathtrapNativePresentationTick();
+uint32_t GetDeathtrapSaveLoadPresentationGeneration();
 
 // Exact world-render boundary consumed by the DirectDraw presentation proxy.
 // HUD, menus and movies are deliberately outside it.

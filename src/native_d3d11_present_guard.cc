@@ -237,6 +237,8 @@ struct State final : Microsoft::WRL::RuntimeClass<
   uint64_t rejected_midpoint_tick = 0;
   uint32_t rejected_midpoint_newly_black = 0;
   bool rejected_midpoint_valid = false;
+  uint32_t save_load_generation = 0;
+  bool sample_after_load = false;
   uint32_t width = 0;
   uint32_t height = 0;
   DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
@@ -507,6 +509,13 @@ bool AllowNativeD3D11Present(IDXGISwapChain* swap_chain) {
   }
   auto* const state = static_cast<State*>(attachment.Get());
   std::lock_guard<std::mutex> lock(state->mutex);
+  const uint32_t load = GetDeathtrapSaveLoadPresentationGeneration();
+  if (state->save_load_generation != load) {
+    state->save_load_generation = load;
+    state->sample_after_load = DeathtrapExtendedLogsEnabled();
+    state->last_exact_valid = false;
+    state->rejected_midpoint_valid = false;
+  }
   ComPtr<ID3D11Texture2D> backbuffer;
   ComPtr<IDXGISwapChain3> swap_chain3;
   UINT index = 0;
@@ -532,6 +541,13 @@ bool AllowNativeD3D11Present(IDXGISwapChain* swap_chain) {
   }
   const DeathtrapNativePresentationStage stage =
       GetDeathtrapNativePresentationStage();
+  if (state->sample_after_load && stage != DeathtrapNativePresentationStage::kMidpoint) {
+    state->sample_after_load = false;
+    AppendDeathtrapSupportLog(
+        "support_load_output generation=%u stage=%u width=%u height=%u dark_cells=%u mean=%.1f",
+        load, static_cast<unsigned>(stage), desc.Width, desc.Height,
+        sample.near_black_cells, sample.mean_luma);
+  }
   const uint64_t source_tick = GetDeathtrapNativePresentationTick();
   if (stage == DeathtrapNativePresentationStage::kMidpoint &&
       state->last_exact_valid) {

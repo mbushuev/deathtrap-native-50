@@ -127,14 +127,20 @@ void RuntimeCases() {
   Reset();Death(0);
   Require(!mode_calls && !pause_calls && context[0xC]==0xFF && play_calls==1,
           "no session checkpoint: automatic restart without changing video mode");
-  Require(HookRecoveryLoad("s4")==1 && g_recovery_checkpoint.slot==4,"successful load establishes baseline");
+  const uint32_t previous_scene=GetDeathtrapSaveLoadPresentationGeneration();
+  Require(HookRecoveryLoad("s4")==1 && g_recovery_checkpoint.slot==4 &&
+              GetDeathtrapSaveLoadPresentationGeneration()==previous_scene+1,
+          "successful load establishes both the checkpoint and a new scene for presentation");
   Death(0);
   Require(mode_calls==1 && pause_calls==1 && context[0xC]==4 && release_calls==2 && drawn_frames==4,
           "load baseline, held press blocked, full redraw and input cleanup");
   Put(8,uint32_t{0x2800});HookRecoveryPrepare(context.data());
   Require(g_recovery_checkpoint.slot==4,"death retry preserves baseline");
   HookRecoveryLoad("s4");HookRecoverySave("s2",nullptr);serializer_ok=false;
+  const uint32_t current_scene=GetDeathtrapSaveLoadPresentationGeneration();
   Require(!HookRecoverySave("s7",nullptr) && !HookRecoveryLoad("s8"),"native failures must pass through");
+  Require(GetDeathtrapSaveLoadPresentationGeneration()==current_scene,
+          "failed load leaves the current presentation scene intact");
   Require(g_recovery_checkpoint.slot==2,"failed save/load cannot replace latest successful save");
   serializer_ok=true;Death(1);
   Require(context[0xC]==0xFF && g_recovery_checkpoint.slot==2,"restart bypasses load and preserves run checkpoint");
