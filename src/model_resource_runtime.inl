@@ -19,15 +19,30 @@ std::string g_model_overlay_path;
 std::atomic<bool> g_model_overlay_active{false};
 bool g_model_resource_hooks_installed=false;
 
+uint32_t HeroineStoneTexture(uint32_t source) {
+  const auto& pack = g_dual_heroine_pack;
+  if (source < pack.e3_texture_first || source >= pack.first_mesh) return 0;
+  return pack.resources + source - pack.e3_texture_first;
+}
+
+uint32_t ModelOverlaySourceId(uint32_t id) {
+  if (id < g_dual_heroine_pack.resources) return id;
+  const auto source = g_dual_heroine_pack.e3_texture_first +
+                      (id - g_dual_heroine_pack.resources);
+  return source < g_dual_heroine_pack.first_mesh ? source : 0;
+}
+
 bool ApplyModelResourceOverlay() {
   uint32_t count=0,capacity=0;
   if (g_model_overlay.size()!=g_dual_heroine_pack.resources ||
       !SafeReadValue(g_dungeon_base+kRenderResourceCountRva,&count) || count!=14125 ||
       !SafeReadValue(g_dungeon_base+kModelResourceCapacityRva,&capacity) ||
       g_model_overlay.size()>capacity || !g_model_resource_register) return false;
+  const auto total = HeroineStoneTexture(g_dual_heroine_pack.first_mesh - 1) + 1;
+  if (total < g_model_overlay.size() || total > capacity) return false;
   auto* table=g_dungeon_base+kModelResourceEntriesRva;
-  for (uint32_t id=1;id<g_model_overlay.size();++id) {
-    const auto& entry=g_model_overlay[id];
+  for (uint32_t id=1;id<total;++id) {
+    const auto& entry=g_model_overlay[ModelOverlaySourceId(id)];
     if (!entry.type && !entry.size) continue;
     uintptr_t name=0;
     if (!SafeReadValue(table+id*16,&name)) return false;
@@ -38,7 +53,6 @@ bool ApplyModelResourceOverlay() {
     const std::array<uint32_t,2> extent{entry.offset,entry.size};
     if (!SafeWrite(table+id*16+4,extent.data(),sizeof(extent))) return false;
   }
-  const auto total=static_cast<uint32_t>(g_model_overlay.size());
   if (!SafeWrite(g_dungeon_base+kRenderResourceCountRva,&total,4)) return false;
   g_model_overlay_active.store(true,std::memory_order_release);
   AppendDeathtrapSupportLog("support_heroine_model resources=%u storage=original_plus_overlay shared_chains=%u",
@@ -64,15 +78,17 @@ int __cdecl HookModelArchiveInit(const char* name) {
 }
 
 void* __cdecl HookModelResourceOpen(uint32_t id,const char* mode) {
-  if (!g_model_overlay_active.load(std::memory_order_acquire) || !id ||
-      id>=g_model_overlay.size() || g_model_overlay[id].source==0)
+  if (!g_model_overlay_active.load(std::memory_order_acquire))
+    return g_model_resource_open(id,mode);
+  const uint32_t source = ModelOverlaySourceId(id);
+  if (!source || source>=g_model_overlay.size() || g_model_overlay[source].source==0)
     return g_model_resource_open(id,mode);
   // Native resources are read-only. Never send an unexpected write to either
   // the original BOX or the reconstructed overlay.
   if (!mode || mode[0]!='r' || std::strchr(mode,'+')) return nullptr;
   auto* file=g_model_native_open(g_model_overlay_path.c_str(),mode);
   if (!file) return nullptr;
-  if (g_model_native_seek(file,static_cast<long>(g_model_overlay[id].offset),SEEK_SET)==0) return file;
+  if (g_model_native_seek(file,static_cast<long>(g_model_overlay[source].offset),SEEK_SET)==0) return file;
   g_model_native_close(file);return nullptr;
 }
 

@@ -12,9 +12,17 @@ std::array<uint8_t,0x1100> player_data{};
 std::array<uint8_t,0x114> player_root{},node{},middle{},enemy{};
 uintptr_t player_render_link=0;
 uint32_t expected=0,loads=0,draws=0;
+uint32_t expected_stone_texture=0;
 template<class T> void Write(void* p,T value) { Require(SafeWrite(p,&value,sizeof(value)),"write fixture"); }
 int __cdecl Draw(void* mesh) {
-  Require(mesh==meshes[expected].data(),"draw only the expected healthy/native part");++draws;return 147;
+  Require(mesh==meshes[expected].data(),"draw only the expected healthy/native part");
+  if (expected_stone_texture) {
+    const auto faces=ReadStonePrtFaces(mesh);
+    uint32_t texture=0;
+    Require(faces.count==1 && SafeReadValue(faces.first+kPrtFaceTextureOffset,&texture) &&
+        texture==expected_stone_texture,"Iron Man's replacement mesh retains the stone effect");
+  }
+  ++draws;return 147;
 }
 int __cdecl Node(void* owner,void*) {
   Require(owner==node.data(),"native node argument must be unchanged");return 257;
@@ -36,6 +44,44 @@ void Render(uint32_t id,bool wounds,bool owns) {
       player_root==root_before && player_data==health_before &&
       meshes[expected]==health_mesh && meshes[id]==source_mesh,"render must never edit health, nodes, UVs or meshes");
 }
+
+void __cdecl PaintIronManFixture(uintptr_t,void* mesh,uint32_t texture,int32_t,int32_t) {
+  const auto faces=ReadStonePrtFaces(mesh);
+  Require(faces.count==1 && texture==kIronManStonePage,"keep Iron Man's native stone atlas");
+  Write(faces.first+kPrtFaceTextureOffset,texture);
+}
+
+void CheckIronManStone() {
+  const uint32_t wounded=3905, healthy=deathtrap::wounds::HealthyPart(wounded);
+  std::array<uint8_t,kPrtFaceStride> native_face{}, healthy_face{};
+  const auto prepare=[](uint32_t mesh,uint8_t* face) {
+    meshes[mesh][6]=1;
+    meshes[mesh][7]=reinterpret_cast<uintptr_t>(face);
+    Write(face+kPrtFaceMaterialOffset,uint8_t{1});
+    Write(face+kPrtFaceTextureOffset,uint32_t{5972});
+  };
+  prepare(wounded,native_face.data());
+  prepare(healthy,healthy_face.data());
+  const auto before=healthy_face;
+  g_native_paint_stone_mesh=&PaintIronManFixture;
+  Write(player_data.data()+0x1C,
+        reinterpret_cast<uintptr_t>(g_dungeon_base+ActiveDungeonCodeRva(0x83A10)));
+  Write(node.data()+kRenderResourceHandleOffset,wounded);
+  HookHeroineStonePaint(reinterpret_cast<uintptr_t>(node.data()),meshes[wounded].data(),
+                        kIronManStonePage,-1000,1000);
+  expected_stone_texture=kIronManStonePage;
+  Render(wounded,true,true);
+  Render(wounded,false,true);
+  Require(healthy_face==before,"temporary stone color must be restored after drawing Iron Man");
+  Write(player_data.data()+0x1C,uintptr_t{0});
+  expected_stone_texture=5972;
+  Render(wounded,false,true);
+  expected_stone_texture=0;
+  meshes[wounded]={};
+  meshes[healthy]={};
+  g_native_paint_stone_mesh=nullptr;
+}
+
 void Cases() {
   loads=0;
   g_model_archive_selection.store(0);
@@ -98,6 +144,7 @@ void Cases() {
   // switching back on restores it without waiting for another hit/heal.
   g_show_body_wounds.store(true);expected=id;
   Require(HookHeroinePrtDraw(meshes[id].data())==147,"enabling wounds immediately restores the actual injury");
+  CheckIronManStone();
 }
 }
 int wmain(int argc,wchar_t** argv) {
@@ -115,7 +162,9 @@ int wmain(int argc,wchar_t** argv) {
     Require(module!=nullptr,"map retail DLL");
     g_dungeon_base=reinterpret_cast<uint8_t*>(module);g_dungeon_image_variant=IdentifyDungeonImage(g_dungeon_base);
     g_heroine_waist_hook_installed=g_dual_heroine_node_installed=false;
-    Require(MH_Initialize()==MH_OK && InstallHeroineWaistHook() && InstallDualHeroineNodeHook(),
+    g_native_paint_stone_mesh=nullptr;
+    Require(MH_Initialize()==MH_OK && InstallHeroineWaistHook() && InstallDualHeroineNodeHook() &&
+            InstallHeroineStonePaint(),
             "native render signatures in all localized binaries");
     Require(MH_Uninitialize()==MH_OK,"remove fixture hooks");FreeLibrary(module);
   }

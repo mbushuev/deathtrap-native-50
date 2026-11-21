@@ -12,10 +12,14 @@ std::ifstream dual_archive;
 std::map<uint32_t,std::vector<uint8_t>> dual_owned;
 uint32_t dual_loads=0,dual_draws=0,dual_chain_draws=0,expected_draw_id=0;
 uintptr_t fixture_node=0;
+bool check_stone_materials=false;
+size_t stone_faces_drawn=0, colored_faces_drawn=0, e3_stone_faces_drawn=0;
 void* __cdecl LoadDualFixture(uint32_t id,uint32_t type,const char*) {
   RequireDual(!LoadedHeroineResource(id),"Warm loader must not reload a resident resource");
   uint32_t index=0;dual_archive.seekg(0);dual_archive.read(reinterpret_cast<char*>(&index),4);
-  std::array<uint32_t,3> entry{};dual_archive.seekg(index+4+(id-1)*12);dual_archive.read(reinterpret_cast<char*>(entry.data()),12);
+  const auto file_id=ModelOverlaySourceId(id);
+  RequireDual(file_id!=0,"Registered resource has a source");
+  std::array<uint32_t,3> entry{};dual_archive.seekg(index+4+(file_id-1)*12);dual_archive.read(reinterpret_cast<char*>(entry.data()),12);
   const bool mesh=_strnicmp(reinterpret_cast<const char*>(&entry[2]),".prt",4)==0;
   RequireDual((mesh && type==0x42000002u) || (!mesh && type==0x41000002u && entry[1]==65536),"Native resource type must match alias");
   auto& bytes=dual_owned[id];bytes.resize(entry[1]);dual_archive.seekg(entry[0]);dual_archive.read(reinterpret_cast<char*>(bytes.data()),entry[1]);
@@ -31,6 +35,29 @@ int __cdecl DrawDualFixture(void* mesh) {
   const bool shared=HeroineSharedChains() && HeroineE3VisualActive() && chain>=0 &&
       mesh==reinterpret_cast<void*>(LoadedHeroineResource(HeroineChainResource(chain)));
   RequireDual(shared || mesh==reinterpret_cast<void*>(LoadedHeroineResource(expected_draw_id)),"Selected part/injury state must match its independent resident resource");
+  if (check_stone_materials) {
+    const auto faces=ReadStonePrtFaces(mesh);
+    for (uint32_t i=0;i<faces.count;++i) {
+      const auto* face=faces.first+i*kPrtFaceStride;
+      if (!(face[kPrtFaceMaterialOffset]&1)) continue;
+      uint32_t texture=0;
+      std::memcpy(&texture,face+kPrtFaceTextureOffset,sizeof(texture));
+      if (HeroineE3VisualActive() && texture>=g_dual_heroine_pack.resources) {
+        const auto* page=reinterpret_cast<const uint8_t*>(LoadedHeroineResource(texture));
+        const auto* original=reinterpret_cast<const uint8_t*>(
+            LoadedHeroineResource(ModelOverlaySourceId(texture)));
+        RequireDual(page && original && std::equal(page,page+kStonePageSize,original,
+            [](uint8_t gray,uint8_t color) { return gray==(color ? 8 : 0); }),
+            "Stone uses a gray copy of the selected E3 atlas and keeps transparent pixels");
+        ++stone_faces_drawn;
+        ++e3_stone_faces_drawn;
+      } else if (texture==kHeroineStonePage) {
+        ++stone_faces_drawn;
+      } else {
+        ++colored_faces_drawn;
+      }
+    }
+  }
   if (shared) ++dual_chain_draws;
   ++dual_draws;return 1927;
 }
@@ -93,6 +120,8 @@ void CheckNativeOverlayRouting(const std::filesystem::path& root) {
   const auto old=g_model_overlay[1],alias=g_model_overlay[g_dual_heroine_pack.first_mesh];
   g_model_overlay[1]={4,4,old.type,0};
   g_model_overlay[g_dual_heroine_pack.first_mesh]={4,alias.size,alias.type,0};
+  const auto source=g_dual_heroine_pack.e3_texture_first;
+  const auto stone=HeroineStoneTexture(source);
   g_model_archive_selection.store(-1);
   RequireDual(HookModelArchiveInit((root/kModelFiles[0]).string().c_str())==1 &&
       g_model_overlay_active.load() && native_registers>0,"Extend original table after native initialization");
@@ -107,13 +136,70 @@ void CheckNativeOverlayRouting(const std::filesystem::path& root) {
   RequireDual(stream && std::fread(header.data(),header.size(),1,static_cast<FILE*>(stream))==1,
       "Changed mesh opens the native overlay stream at the correct offset");
   FixtureClose(stream);
-  RequireDual(native_base_opens==2 && native_overlay_opens==1 &&
+  stream=HookModelResourceOpen(stone,"rb");
+  RequireDual(stream && ModelOverlaySourceId(stone)==source,
+      "A stone atlas gets its own resource while reading the same artwork bytes");
+  FixtureClose(stream);
+  RequireDual(native_base_opens==2 && native_overlay_opens==2 &&
       HookModelResourceOpen(3903,"r+")==nullptr,"No redirection of original resources or writes");
   const auto path=g_model_overlay_path;g_model_overlay_path+=".missing";
   RequireDual(HookModelResourceOpen(3903,"rb")==nullptr && native_base_opens==2,
       "Missing changed-resource data never falls back to unrelated original bytes");
   g_model_overlay_path=path;g_model_overlay[1]=old;g_model_overlay[g_dual_heroine_pack.first_mesh]=alias;
   g_model_overlay_active.store(false);
+}
+
+void CheckPetrification(uint8_t* node, uint8_t* actor) {
+  RequireDual(g_native_paint_stone_mesh && g_stone_palette,"Install the native stone paint hook");
+  const uint32_t count=HeroineStoneTexture(g_dual_heroine_pack.first_mesh-1)+1;
+  SafeWrite(g_dungeon_base+kRenderResourceCountRva,&count,4);
+  std::array<uint8_t,768> palette{};
+  for (size_t i=0;i<palette.size();i+=3) {
+    palette[i]=32;
+    palette[i+1]=192;
+    palette[i+2]=255;
+  }
+  g_stone_palette=palette.data();
+  std::array<uint8_t,0x24> state{};
+  const auto state_address=reinterpret_cast<uintptr_t>(state.data());
+  const auto callback=reinterpret_cast<uintptr_t>(g_dungeon_base+ActiveDungeonCodeRva(0x83A10));
+  SafeWrite(actor+0x2C,&state_address,4);
+  SafeWrite(state.data()+0x1C,&callback,4);
+  const Matrix3x4 identity{{16384,0,0,0,16384,0,0,0,16384,0,0,0}};
+  SafeWrite(node+kMatrixOffset,&identity,sizeof(identity));
+  g_show_body_wounds.store(false);
+  const uint32_t wounded_hand=4287;
+  SafeWrite(node+kRenderResourceHandleOffset,&wounded_hand,4);
+  auto* source=reinterpret_cast<void*>(LoadedHeroineResource(wounded_hand));
+  const auto source_faces=ReadStonePrtFaces(source);
+  const std::vector<uint8_t> source_before(source_faces.first,source_faces.first+source_faces.count*kPrtFaceStride);
+  for (bool e3 : {false,true}) {
+    g_e3_model_requested.store(e3);
+    const uint32_t clean=deathtrap::wounds::HealthyPart(wounded_hand);
+    expected_draw_id=e3?clean:g_dual_heroine_pack.first_mesh+static_cast<uint32_t>(HeroineMeshIndex(clean));
+    const auto faces=ReadStonePrtFaces(reinterpret_cast<void*>(LoadedHeroineResource(expected_draw_id)));
+    const std::vector<uint8_t> before(faces.first,faces.first+faces.count*kPrtFaceStride);
+    HookHeroineStonePaint(fixture_node,source,kHeroineStonePage,-10000,10000);
+    RequireDual(std::equal(source_before.begin(),source_before.end(),source_faces.first),
+        "Native coloration is deferred from the attached wounded mesh");
+    check_stone_materials=true;
+    stone_faces_drawn=colored_faces_drawn=e3_stone_faces_drawn=0;
+    RequireDual(HookDualHeroineNode(node,nullptr)==1927 && stone_faces_drawn>0 && !colored_faces_drawn &&
+        (e3_stone_faces_drawn>0)==e3,
+        "The visible clean mesh petrifies in Original and E3");
+    RequireDual(std::equal(before.begin(),before.end(),faces.first),
+        "Temporary stone materials must never persist on the shared mesh");
+    const uintptr_t recovered=0;
+    SafeWrite(state.data()+0x1C,&recovered,4);
+    stone_faces_drawn=colored_faces_drawn=0;
+    RequireDual(HookDualHeroineNode(node,nullptr)==1927 && !stone_faces_drawn && colored_faces_drawn>0,
+        "Normal colors return after discarding the dying player state");
+    SafeWrite(state.data()+0x1C,&callback,4);
+  }
+  check_stone_materials=false;
+  const uintptr_t no_state=0;
+  SafeWrite(actor+0x2C,&no_state,4);
+  g_stone_palette=nullptr;
 }
 int RunDualTest(int argc,wchar_t** argv) {
   RequireDual(argc==3,"Pass original Dungeon.dll and dual-model fixture directory");
@@ -315,12 +401,14 @@ int RunDualTest(int argc,wchar_t** argv) {
   SafeWrite(g_dungeon_base+kRenderResourceTableRva+alias*4,&empty,4);dual_owned.erase(alias);const auto before_leaf=dual_loads;
   expected_draw_id=id;SafeWrite(g_dungeon_base+kPrtCurrentNodeRva,&fixture_node,4);
   RequireDual(HookHeroinePrtDraw(reinterpret_cast<void*>(LoadedHeroineResource(id)))==1927 && dual_loads==before_leaf,"No allocation or disk read in leaf renderer");
+  SafeWrite(g_dungeon_base+kUiOwnerPointerRva,&player,4);
+  CheckPetrification(node.data(),actor.data());
   MH_Uninitialize();dual_archive.close();
   const auto absolute_root=std::filesystem::canonical(root);
   RequireDual(absolute_root.parent_path()==std::filesystem::canonical(temporary) &&
       absolute_root.filename()==L"native50-dual-"+std::to_wstring(GetCurrentProcessId()),"Fixture cleanup stays in its exact temporary directory");
   std::filesystem::remove_all(absolute_root);
-  std::cout<<"Dual heroine: 1200 parts/states, five teams, live model/wound toggles, burned death hands and respawn isolation, zero reloads, unchanged pose/ownership, level reload recovery and guarded archive routing passed\n";
+  std::cout<<"Dual heroine: model and wound switches, burned hands, stone materials and recovery, level reloads and guarded archive routing passed\n";
   return 0;
 }
 int CheckStartup(int argc,wchar_t** argv) {

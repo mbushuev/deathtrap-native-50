@@ -77,6 +77,11 @@ bool IsPlayerVisualNode(uintptr_t node) {
   }
   return false;
 }
+
+#include "heroine_petrification_runtime.inl"
+
+void WarmHeroineStoneNode(uintptr_t node, uint32_t id);
+
 int __cdecl HookDualHeroineNode(void* node,void* camera) {
   uint32_t id=0;
   if (!g_show_body_wounds.load(std::memory_order_relaxed) && node && g_dual_heroine_load &&
@@ -97,6 +102,10 @@ int __cdecl HookDualHeroineNode(void* node,void* camera) {
       WarmDualHeroineGroup(static_cast<uint32_t>(index)/240);
     }
   }
+  if (HeroineE3VisualActive() && node &&
+      SafeReadValue(static_cast<uint8_t*>(node)+kRenderResourceHandleOffset,&id) &&
+      HeroineMeshIndex(id)>=0 && HeroineStoneDrawActive(reinterpret_cast<uintptr_t>(node)))
+    WarmHeroineStoneNode(reinterpret_cast<uintptr_t>(node), id);
   return g_original_dual_heroine_node(node,camera);
 }
 
@@ -207,21 +216,38 @@ uintptr_t ResolveHeroinePelvisNode(uintptr_t node) {
   return 0;
 }
 
-int DrawSharedHeroineChain(uint32_t resource,int result) {
-  if (!HeroineSharedChains() || !HeroineE3VisualActive()) return result;
-  const int kind=HeroineBodyStage(resource)>=0?0:HeroinePelvisResource(resource)?1:-1;
+int SharedHeroineChainKind(uint32_t resource) {
+  if (!HeroineSharedChains() || !HeroineE3VisualActive()) return -1;
+  return HeroineBodyStage(resource)>=0 ? 0 : HeroinePelvisResource(resource) ? 1 : -1;
+}
+
+void WarmHeroineStoneNode(uintptr_t node, uint32_t id) {
+  if (!g_show_body_wounds.load(std::memory_order_relaxed)) id=deathtrap::wounds::HealthyPart(id);
+  const auto appearance=ResolveHeroineHandAppearance(node,id);
+  auto mesh=LoadedHeroineResource(appearance);
+  if (!mesh) mesh=LoadedHeroineResource(id);
+  if (mesh) WarmHeroineStonePages(reinterpret_cast<void*>(mesh));
+  const auto chain=SharedHeroineChainKind(id);
+  if (chain>=0) {
+    const auto shared=LoadedHeroineResource(HeroineChainResource(static_cast<uint32_t>(chain)));
+    if (shared) WarmHeroineStonePages(reinterpret_cast<void*>(shared));
+  }
+}
+
+int DrawSharedHeroineChain(uintptr_t node,uint32_t resource,int result) {
+  const int kind=SharedHeroineChainKind(resource);
   if (kind<0) return result;
   const auto shared=LoadedHeroineResource(HeroineChainResource(static_cast<uint32_t>(kind)));
   // The native node has already published its transform/material state. A
   // shared chain follows that same bone, including detached-part animation.
   // No resource allocation, file access or mutation of owned pointers here.
-  if (shared) g_original_heroine_prt_draw(reinterpret_cast<void*>(shared));
+  if (shared) DrawHeroineMesh(reinterpret_cast<void*>(shared),node);
   return result;
 }
 
-int DrawHeroinePartAndChain(void* mesh,uint32_t resource) {
-  const int result=g_original_heroine_prt_draw(mesh);
-  return DrawSharedHeroineChain(resource,result);
+int DrawHeroinePartAndChain(void* mesh,uintptr_t node,uint32_t resource) {
+  const int result=DrawHeroineMesh(mesh,node);
+  return DrawSharedHeroineChain(node,resource,result);
 }
 
 using WaistGeometry = std::array<int32_t,6>; // position/center, then Q14 normal
@@ -390,9 +416,9 @@ bool PrepareWaistDraw(void* mesh,const WaistWarp& warp,WaistDrawTransaction* tra
   return !transaction->changes.empty();
 }
 
-int CallWaistDrawAndRestore(void* mesh,WaistDrawTransaction* transaction) {
+int CallWaistDrawAndRestore(void* mesh,uintptr_t node,WaistDrawTransaction* transaction) {
   int result=0;
-  __try { result=g_original_heroine_prt_draw(mesh); }
+  __try { result=DrawHeroineMesh(mesh,node); }
   __finally { transaction->Restore(); }
   return result;
 }
@@ -459,40 +485,40 @@ int __cdecl HookHeroinePrtDraw(void* mesh) {
       resource=appearance;mesh=reinterpret_cast<void*>(burned);
     }
   }
-  if (HeroineMeshIndex(resource)<0) return g_original_heroine_prt_draw(mesh);
+  if (HeroineMeshIndex(resource)<0) return DrawHeroineMesh(mesh,node);
   if (HeroineBodyStage(native_resource)>=0) LogHeroineVisualStage(node,native_resource,resource);
   if (HeroineLiveSwitchEnabled() && !g_e3_model_requested.load()) {
     const auto index=static_cast<uint32_t>(HeroineMeshIndex(resource));
     const auto alias=LoadedHeroineResource(g_dual_heroine_pack.first_mesh+index);
     if (g_dual_heroine_groups[index/240].ready && alias)
-      return g_original_heroine_prt_draw(reinterpret_cast<void*>(alias));
+      return DrawHeroineMesh(reinterpret_cast<void*>(alias),node);
     // A missing/unloaded family is retried at the next node entry. Never
     // allocate resources while native leaf-render state is already prepared.
     g_dual_heroine_groups[index/240].ready=false;
   }
-  if (HeroineBodyStage(resource)<0) return DrawHeroinePartAndChain(mesh,resource);
+  if (HeroineBodyStage(resource)<0) return DrawHeroinePartAndChain(mesh,node,resource);
   Matrix3x4 parent_world{},world{};WaistWarp warp{};
   if (!HeroineE3VisualActive()) {
-    LogHeroineWaistRuntime(2,resource,mesh);return DrawHeroinePartAndChain(mesh,resource);
+    LogHeroineWaistRuntime(2,resource,mesh);return DrawHeroinePartAndChain(mesh,node,resource);
   }
   if (!(parent=ResolveHeroinePelvisNode(node))) {
-    LogHeroineWaistRuntime(3,resource,mesh);return DrawHeroinePartAndChain(mesh,resource);
+    LogHeroineWaistRuntime(3,resource,mesh);return DrawHeroinePartAndChain(mesh,node,resource);
   }
   if (!SafeRead(reinterpret_cast<void*>(parent+kMatrixOffset),&parent_world,sizeof(parent_world)) ||
       !SafeRead(reinterpret_cast<void*>(node+kMatrixOffset),&world,sizeof(world)) ||
       !MakeWaistWarp(parent_world,world,&warp)) {
-    LogHeroineWaistRuntime(4,resource,mesh);return DrawHeroinePartAndChain(mesh,resource);
+    LogHeroineWaistRuntime(4,resource,mesh);return DrawHeroinePartAndChain(mesh,node,resource);
   }
   WaistDrawTransaction transaction;
   if (!PrepareWaistDraw(mesh,warp,&transaction)) {
-    LogHeroineWaistRuntime(5,resource,mesh);return DrawHeroinePartAndChain(mesh,resource);
+    LogHeroineWaistRuntime(5,resource,mesh);return DrawHeroinePartAndChain(mesh,node,resource);
   }
   if (!transaction.Apply()) {
-    LogHeroineWaistRuntime(6,resource,mesh);return DrawHeroinePartAndChain(mesh,resource);
+    LogHeroineWaistRuntime(6,resource,mesh);return DrawHeroinePartAndChain(mesh,node,resource);
   }
   LogHeroineWaistRuntime(0,resource,mesh);
-  const int result=CallWaistDrawAndRestore(mesh,&transaction);
-  return DrawSharedHeroineChain(resource,result);
+  const int result=CallWaistDrawAndRestore(mesh,node,&transaction);
+  return DrawSharedHeroineChain(node,resource,result);
 }
 
 bool InstallHeroineWaistHook() {
@@ -534,5 +560,7 @@ bool InstallDualHeroineNodeHook() {
         reinterpret_cast<void**>(&g_original_dual_heroine_node))!=MH_OK) return false;
   if (MH_EnableHook(node)!=MH_OK) { MH_RemoveHook(node);return false; }
   g_dual_heroine_load=reinterpret_cast<HeroineResourceLoad>(load);
-  g_dual_heroine_node_installed=true;return true;
+  g_dual_heroine_node_installed=true;
+  InstallHeroineStonePaint();
+  return true;
 }

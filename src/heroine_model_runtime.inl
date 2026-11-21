@@ -92,7 +92,8 @@ bool ReadDualHeroinePack() {
   catch (...) { return false; }
   bool archive_ok=entries.size()==pack.resources;
   std::vector<uint32_t> verify_ids{pack.first_mesh,pack.first_texture-1,
-      pack.e3_texture_first,pack.first_texture,pack.first_texture+pack.texture_count-1};
+      pack.first_texture,pack.first_texture+pack.texture_count-1};
+  for (uint32_t id=pack.e3_texture_first;id<pack.first_mesh;++id) verify_ids.push_back(id);
   if (pack.version>=2) { verify_ids.push_back(pack.resources-2);verify_ids.push_back(pack.resources-1); }
   for (uint32_t id:verify_ids) {
     if (!archive_ok || id>=entries.size()) { archive_ok=false;break; }
