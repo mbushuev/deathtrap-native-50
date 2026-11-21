@@ -95,6 +95,17 @@ target_compile_definitions(input_device_routing_test PRIVATE
 target_compile_options(input_device_routing_test PRIVATE /W4 /permissive- /EHsc /utf-8)
 target_link_libraries(input_device_routing_test PRIVATE d3d11 dxgi dxguid minhook winmm)
 
+add_executable(native_d3d11_present_guard_test
+  tools/native_d3d11_present_guard_test.cc
+  src/native_d3d11_present_guard.cc)
+target_compile_features(native_d3d11_present_guard_test PRIVATE cxx_std_17)
+target_compile_definitions(native_d3d11_present_guard_test PRIVATE
+  WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_include_directories(native_d3d11_present_guard_test PRIVATE src)
+target_compile_options(native_d3d11_present_guard_test PRIVATE
+  /W4 /permissive- /EHsc /utf-8)
+target_link_libraries(native_d3d11_present_guard_test PRIVATE d3d11 dxgi)
+
 add_executable(controller_base_bindings_test
   tools/controller_base_bindings_test.cc
   src/dinput_native_proxy.cc
