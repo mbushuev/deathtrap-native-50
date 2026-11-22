@@ -96,7 +96,7 @@ void __cdecl Pause(int kind,int allow_return) {
   Require(raster_width==640 && raster_height==480 && raster_pitch==640 && raster_bpp==8,
           "switch native gameplay raster to 640x480 menu before loading/drawing the page");
   Require(!DeathtrapGameplayReady(false),"modal must reject live gameplay input");
-  g_xinput_menu_mode.store(false);ReconcileXInputFrontendOwnership(true);
+  g_xinput_menu_mode.store(false);ReconcileXInputFrontendOwnership(PlayerInputState::kPlaying);
   Require(g_xinput_menu_mode.load(),"modal must force controller menu ownership");
   HookRecoveryRootMenu();
 }

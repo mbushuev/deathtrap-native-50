@@ -83,6 +83,49 @@ uintptr_t __cdecl CombatTestSpecialMovementStage() {
   return test_turns;
 }
 
+void CheckPetrifiedOrbit(uint8_t* root, uint8_t* context, uint8_t* player) {
+  const auto image = reinterpret_cast<uintptr_t>(g_dungeon_base);
+  PutCombat(g_dungeon_base + kUiOwnerPointerRva, reinterpret_cast<uintptr_t>(root));
+  PutCombat(context + 0x1C, image + ActiveDungeonCodeRva(0x83A10));
+  g_custom_camera_view_mode.store(static_cast<uint32_t>(CustomCameraViewMode::kHead));
+  captured_pad = {};
+  captured_pad.Gamepad.sThumbRX = 25000;
+  captured_pad.Gamepad.sThumbRY = -22000;
+  captured_pad.Gamepad.sThumbLY = 32767;
+  captured_pad.Gamepad.bRightTrigger = 255;
+  captured_pad.Gamepad.wButtons = XINPUT_GAMEPAD_A;
+  for (const auto handler : {0x83F20u, 0x4EBF0u}) {
+    PutCombat(root, image + ActiveDungeonCodeRva(handler));
+    UpdateDeathtrapXInput();
+    PollFrontendXInputInternal();
+    RequireCombat(ReadPlayerInputState() == PlayerInputState::kPetrified &&
+        CurrentCustomCameraViewMode() == CustomCameraViewMode::kModernThirdPerson &&
+        DeathtrapModernCameraConsumesMouse() && !g_xinput_menu_mode.load(),
+        "both stone stages allow orbit and show the body from head view");
+    RequireCombat(g_third_person_orbit_input_active.load() &&
+        g_third_person_orbit_input_x.load() > 0 && g_third_person_orbit_input_y.load() < 0 &&
+        !g_xinput_native_joystick_y_milli.load() && !captured_gameplay &&
+        !captured_combat.Consume() && !DeathtrapGameplayAcceptsMouseCombat() &&
+        !DeathtrapGameplayAcceptsControllerCombat(),
+        "the statue accepts right-stick input without moving or attacking");
+  }
+  g_death_recovery_dialog_active.store(true);
+  UpdateDeathtrapXInput();
+  RequireCombat(!DeathtrapModernCameraConsumesMouse() && g_xinput_menu_mode.load() &&
+      !g_third_person_orbit_input_active.load(), "death menu takes back both inputs");
+  g_death_recovery_dialog_active.store(false);
+  PutCombat(context + 0x1C, uintptr_t{0});
+  RequireCombat(ReadPlayerInputState() == PlayerInputState::kUnavailable,
+      "ordinary deaths sharing the statue's final handler do not receive orbit input");
+  PutCombat(root, uintptr_t{1});
+  PutCombat(g_dungeon_base + kUiOwnerPointerRva, reinterpret_cast<uintptr_t>(player));
+  captured_pad = {};
+  ReconcileXInputFrontendOwnership(ReadPlayerInputState());
+  RequireCombat(DeathtrapGameplayReady(false) && CurrentCustomCameraViewMode() == CustomCameraViewMode::kHead,
+      "loading a living player restores gameplay and the saved camera preference");
+  SetCustomHeadViewSelected(false, "test");
+}
+
 void CheckInverseHeadJoint() {
   SceneSnapshot scene;
   scene.root = 11;
@@ -448,6 +491,7 @@ int main() {
     g_native_joystick_hooks_installed.store(true);
     g_xinput_get_state = &CombatTestPad;
     PutCombat(g_dungeon_base + kUiSelectorModeRva, uint8_t{0});
+    CheckPetrifiedOrbit(root.data(), context.data(), player.data());
     const bool was_camera_relative = g_xinput_camera_relative_movement;
     g_xinput_camera_relative_movement = false;
     XINPUT_GAMEPAD firing{};

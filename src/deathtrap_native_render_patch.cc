@@ -1168,9 +1168,13 @@ struct RetailCameraProbeSnapshot {
   bool valid = false;
 };
 
+uintptr_t PetrifyingPlayer();
+
 CustomCameraViewMode CurrentCustomCameraViewMode() {
   const uint32_t raw = g_custom_camera_view_mode.load(
       std::memory_order_acquire);
+  if (raw == static_cast<uint32_t>(CustomCameraViewMode::kHead) && PetrifyingPlayer())
+    return CustomCameraViewMode::kModernThirdPerson;
   return raw <= static_cast<uint32_t>(CustomCameraViewMode::kRetail)
              ? static_cast<CustomCameraViewMode>(raw)
              : CustomCameraViewMode::kModernThirdPerson;
@@ -4117,9 +4121,11 @@ bool SweepOwnedCameraAgainstRooms(
   return true;
 }
 
-bool DeathtrapGameplayReady(bool require_selector_closed) {
+enum class PlayerInputState { kUnavailable, kPlaying, kPetrified };
+
+PlayerInputState ReadPlayerInputState(bool require_selector_closed = false) {
   if (!g_dungeon_base || g_death_recovery_dialog_active.load(std::memory_order_acquire)) {
-    return false;
+    return PlayerInputState::kUnavailable;
   }
 
   uint8_t selector_mode = 0;
@@ -4135,10 +4141,6 @@ bool DeathtrapGameplayReady(bool require_selector_closed) {
       !SafeReadValue(g_dungeon_base + kGameRootPointerRva, &game_root) ||
       !game_root ||
       !SafeReadValue(reinterpret_cast<const void*>(game_root), &root_vtable) ||
-      root_vtable == reinterpret_cast<uintptr_t>(g_dungeon_base) +
-                         0x00083F20u ||
-      root_vtable == reinterpret_cast<uintptr_t>(g_dungeon_base) +
-                         0x0004EBF0u ||
       !SafeReadValue(reinterpret_cast<const void*>(game_root + 0x2Cu),
                      &gameplay_context) ||
       !gameplay_context ||
@@ -4146,9 +4148,20 @@ bool DeathtrapGameplayReady(bool require_selector_closed) {
           reinterpret_cast<const void*>(gameplay_context + 0x1030u),
           &gameplay_object) ||
       !gameplay_object) {
-    return false;
+    return PlayerInputState::kUnavailable;
   }
-  return true;
+  const auto image = reinterpret_cast<uintptr_t>(g_dungeon_base);
+  if (root_vtable == image + ActiveDungeonCodeRva(0x83F20) ||
+      root_vtable == image + ActiveDungeonCodeRva(0x4EBF0)) {
+    // The statue keeps its stone callback when it enters the shared death animation.
+    return PetrifyingPlayer() == game_root ? PlayerInputState::kPetrified
+                                           : PlayerInputState::kUnavailable;
+  }
+  return PlayerInputState::kPlaying;
+}
+
+bool DeathtrapGameplayReady(bool require_selector_closed) {
+  return ReadPlayerInputState(require_selector_closed) == PlayerInputState::kPlaying;
 }
 
 bool WeaponWheelGameplayReady() {
@@ -14915,15 +14928,16 @@ bool RecentMode3CameraCallback() {
          now_ms - last_mode3_ms <= watchdog_ms;
 }
 
-void ReconcileXInputFrontendOwnership(bool native_gameplay) {
+void ReconcileXInputFrontendOwnership(PlayerInputState state) {
   // Pause/front-end screens retain the live player pointer, so the presence
   // of a recent mode-3 gameplay camera callback is the authoritative owner.
   // This also repairs transitions made with a physical mouse: no XInput
   // Start edge is required to return the right stick to cursor duty.
-  const bool gameplay_camera_active =
-      RecentMode3CameraCallback() || RetailFirstPersonActive();
+  const bool gameplay_camera_active = state == PlayerInputState::kPetrified
+      ? g_third_person_orbit_enabled && RecentMode3CameraCallback()
+      : RecentMode3CameraCallback() || RetailFirstPersonActive();
   const bool menu_mode = g_death_recovery_dialog_active.load(std::memory_order_acquire) ||
-      !native_gameplay || !gameplay_camera_active;
+      state == PlayerInputState::kUnavailable || !gameplay_camera_active;
   const bool previous =
       g_xinput_menu_mode.exchange(menu_mode, std::memory_order_acq_rel);
   if (previous != menu_mode && g_debug_log) {
@@ -14972,13 +14986,13 @@ void UpdateDeathtrapXInput() {
                     g_xinput_controller_index);
   }
   g_xinput_was_connected = true;
-  const bool native_gameplay = DeathtrapGameplayReady(false);
+  const auto player_state = ReadPlayerInputState();
   const WORD newly_pressed =
       state.Gamepad.wButtons & ~g_previous_xinput_buttons;
-  ReconcileXInputFrontendOwnership(native_gameplay);
-  g_xinput_previous_native_gameplay = native_gameplay;
+  ReconcileXInputFrontendOwnership(player_state);
+  g_xinput_previous_native_gameplay = player_state == PlayerInputState::kPlaying;
   const bool gameplay =
-      native_gameplay && !g_xinput_menu_mode.load(std::memory_order_acquire);
+      !g_xinput_menu_mode.load(std::memory_order_acquire);
   // Frontend DirectInput polling owns movies and menus. The scheduler owns
   // only gameplay so engine actions and the native selector never run from a
   // foreign input thread.
@@ -14988,6 +15002,19 @@ void UpdateDeathtrapXInput() {
     }
     g_camera_recenter.Cancel();
     PublishThirdPersonOrbitInput(0.0, 0.0, false);
+    return;
+  }
+  if (player_state == PlayerInputState::kPetrified) {
+    if (g_controller_selector.direction_down) CloseControllerSelector(true);
+    // Release movement and combat through the regular input path. Keep pause/back
+    // available and reserve the right stick for looking around the statue.
+    XINPUT_GAMEPAD navigation{};
+    navigation.wButtons = state.Gamepad.wButtons & (XINPUT_GAMEPAD_START | XINPUT_GAMEPAD_BACK);
+    UpdateControllerBaseBindings(navigation, false, false);
+    if (g_xinput_base_bindings) {
+      PublishThirdPersonOrbitInput(NormalizedStick(state.Gamepad.sThumbRX, g_xinput_right_deadzone),
+                                   NormalizedStick(state.Gamepad.sThumbRY, g_xinput_right_deadzone), true);
+    }
     return;
   }
   if ((newly_pressed & XINPUT_GAMEPAD_START) != 0) {
@@ -15026,11 +15053,10 @@ void PollFrontendXInputInternal() {
     return;
   }
 
-  const bool native_gameplay = DeathtrapGameplayReady(false);
-  ReconcileXInputFrontendOwnership(native_gameplay);
+  ReconcileXInputFrontendOwnership(ReadPlayerInputState());
   const bool menu_mode =
       g_xinput_menu_mode.load(std::memory_order_acquire);
-  if (native_gameplay && !menu_mode) {
+  if (!menu_mode) {
     return;
   }
   if (g_xinput_ricviper && g_controller_selector.direction_down) {
@@ -21892,7 +21918,7 @@ bool DeathtrapModernCameraConsumesMouse() {
       RetailFirstPersonActive()) {
     return false;
   }
-  if (!DeathtrapGameplayReady(false)) {
+  if (ReadPlayerInputState() == PlayerInputState::kUnavailable) {
     return false;
   }
   const uint64_t last_mode3_ms =
