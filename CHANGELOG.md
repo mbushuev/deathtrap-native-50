@@ -12,6 +12,20 @@ public builds.
 - **517342** — tested builds and identified the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.243 — Gorgon petrification and black-screen fixes
+
+- Restore the gray stone textures when a Gorgon petrifies the player,
+  including on the reconstructed E3 Red Lotus model.
+- Keep orbit camera controls available while the player turns to stone and
+  while the statue remains on screen. Use the mouse or right stick with
+  modern controls.
+- Fix a black screen after repeated trips through the menu and save loading.
+  The renderer releases old display and depth buffers at video-mode changes
+  and resets presentation history when loading a save.
+
+Verified that flying turtles in **Inversion** do not multiply across repeated
+reloads of the bridge save.
+
 ## 0.0.242 — Level loadouts and ranged movement
 
 - Add optional starting equipment to the **New Game** level picker, an idea
