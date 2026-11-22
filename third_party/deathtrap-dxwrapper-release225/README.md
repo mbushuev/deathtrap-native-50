@@ -19,11 +19,13 @@ Supported internal scales are 2..4, default 3. The exact source modification
 and reproduction instructions are in `source/`. The layer also consumes the
 patch's exported display mode and dimensions to provide borderless and framed
 window presentation without an exclusive display-mode switch.
+When the game replaces its primary surface, the wrapper releases the previous
+flip chain's GPU resources and the legacy devices' world depth buffers.
 
 - DDraw.dll (proxy stub):
   `8BAE794EB7506711F57B690CFB8660A5F008B0185E764F8CB56D5972E01A9F33`
 - dxwrapper.dll:
-  `468C2DC26CF02F603502C40E5C8D8F232E6B83FC63985C4B3DD0B5F8CF4F662A`
+  `2D9FABE6BE522E653B0E02CBF27854AF2701FF545E812E86263641F7274C0CC1`
 
 The final backend remains unmodified dgVoodoo 2.86.2 D3D9 to D3D11.
 On Steam Deck the same Dd7to9 layer hands D3D9 directly to Proton/DXVK and

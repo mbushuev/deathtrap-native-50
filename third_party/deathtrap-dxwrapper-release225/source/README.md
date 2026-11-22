@@ -18,7 +18,7 @@ git checkout 576c8f28aefc595e98b98fad64f379b151b2896f
 git apply path\to\deathtrap-dxwrapper.patch
 git apply path\to\deathtrap-page-restore-present.patch
 git apply --ignore-space-change path\to\deathtrap-world-depth.patch
-git apply --ignore-space-change path\to\deathtrap-world-depth-order.patch
+git apply -C1 --ignore-space-change path\to\deathtrap-world-depth-order.patch
 git submodule update --init --recursive
 msbuild dxwrapper.sln /t:Rebuild /m:1 /p:Configuration=Release /p:Platform=Win32 /p:PreBuildEventUseInBuild=false
 ```
@@ -28,7 +28,7 @@ Expected outputs and SHA-256 hashes:
 - `bin/Release/stub.dll` (packaged as `DDraw.dll`):
   `8BAE794EB7506711F57B690CFB8660A5F008B0185E764F8CB56D5972E01A9F33`
 - `bin/Release/dxwrapper.dll`:
-  `468C2DC26CF02F603502C40E5C8D8F232E6B83FC63985C4B3DD0B5F8CF4F662A`
+  `2D9FABE6BE522E653B0E02CBF27854AF2701FF545E812E86263641F7274C0CC1`
 
 dxwrapper is licensed under the Mozilla Public License 2.0. The complete
 license is included in the repository as

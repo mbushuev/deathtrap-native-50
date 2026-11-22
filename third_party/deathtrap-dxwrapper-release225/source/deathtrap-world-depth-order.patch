@@ -268,3 +268,181 @@
  	};
  	void PrepareDeathtrapDepthDraw(DeathtrapDepthDraw& Depth, DWORD VertexType, LPVOID Vertices, DWORD Count);
  	void UpdateVertices(DWORD& dwVertexTypeDesc, LPVOID& lpVertices, DWORD dwVertexStart, DWORD dwNumVertices);
+diff --git a/ddraw/IDirectDrawX.cpp b/ddraw/IDirectDrawX.cpp
+--- a/ddraw/IDirectDrawX.cpp
++++ b/ddraw/IDirectDrawX.cpp
+@@ -551,33 +551,11 @@ HRESULT m_IDirectDrawX::CreateSurface2(LPDDSURFACEDESC2 lpDDSurfaceDesc2, LPDIRE
+ 			return DDERR_INVALIDPARAMS;
+ 		}
+ 
+-		// Check for existing primary surface
+-		if ((lpDDSurfaceDesc2->ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE) && GetPrimarySurface())
++		const bool CreatesPrimary = (lpDDSurfaceDesc2->ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE) != 0;
++		if (CreatesPrimary && GetPrimarySurface() && !Config.DdrawAllowPrimarySurfaceReplacement)
+ 		{
+-			if (!Config.DdrawAllowPrimarySurfaceReplacement)
+-			{
+-				LOG_LIMIT(100, __FUNCTION__ << " Error: primary surface already exists!");
+-				return DDERR_PRIMARYSURFACEALREADYEXISTS;
+-			}
+-
+-			// Some legacy games create the next mode's primary surface before releasing the
+-			// previous Direct3D device. End the old scene while its primary is still active;
+-			// after replacing PrimarySurface the old device can no longer present/close it.
+-			if (IsInScene())
+-			{
+-				const HRESULT endSceneResult = EndActive3DScenes();
+-				if (FAILED(endSceneResult))
+-				{
+-					LOG_LIMIT(10, __FUNCTION__ << " Warning: failed to end the active scene before replacing the primary surface: " << (D3DERR)endSceneResult);
+-				}
+-				else
+-				{
+-					LOG_LIMIT(10, __FUNCTION__ << " Warning: ended the active scene before replacing the primary surface.");
+-				}
+-			}
+-
+-			LOG_LIMIT(10, __FUNCTION__ << " Warning: allowing a new primary surface to replace the active primary surface: " << PrimarySurface);
+-			PrimarySurface = nullptr;
++			LOG_LIMIT(100, __FUNCTION__ << " Error: primary surface already exists!");
++			return DDERR_PRIMARYSURFACEALREADYEXISTS;
+ 		}
+ 
+ 		// Validate backbuffer
+@@ -806,6 +784,33 @@ HRESULT m_IDirectDrawX::CreateSurface2(LPDDSURFACEDESC2 lpDDSurfaceDesc2, LPDIRE
+ 
+ 		DWORD DxVersion = DirectXVersion > 3 ? DirectXVersion : 1;	// The first 3 versions create interface version 1
+ 
++		if (CreatesPrimary && GetPrimarySurface())
++		{
++			ScopedCriticalSection ThreadLockDD(DdrawWrapper::GetDDCriticalSection());
++			// Some legacy games create the next mode's primary surface before releasing the
++			// previous Direct3D device. End the old scene while its primary is still active;
++			// after replacing PrimarySurface the old device can no longer present/close it.
++			if (IsInScene())
++			{
++				const HRESULT endSceneResult = EndActive3DScenes();
++				if (FAILED(endSceneResult))
++				{
++					LOG_LIMIT(10, __FUNCTION__ << " Warning: failed to end the active scene before replacing the primary surface: " << (D3DERR)endSceneResult);
++				}
++				else
++				{
++					LOG_LIMIT(10, __FUNCTION__ << " Warning: ended the active scene before replacing the primary surface.");
++				}
++			}
++
++			LOG_LIMIT(10, __FUNCTION__ << " Warning: allowing a new primary surface to replace the active primary surface: " << PrimarySurface);
++			// The old COM surfaces may outlive this video mode. Their GPU storage
++			// and the legacy devices' world depth buffers belong to the old mode.
++			PrimarySurface->RetirePrimaryChain();
++			ResetDeathtrapDepthResources();
++			PrimarySurface = nullptr;
++		}
++
+ 		m_IDirectDrawSurfaceX *Interface = new m_IDirectDrawSurfaceX(this, DxVersion, &Desc2);
+ 
+ 		if (Desc2.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE)
+@@ -4523,7 +4528,7 @@ void m_IDirectDrawX::ReleaseD3D9IndexBuffer(LPDIRECT3DINDEXBUFFER9& d3d9IndexBuf
+ 	}
+ }
+ 
+-void m_IDirectDrawX::ReleaseAllD9Resources(bool BackupData, bool ResetInterface)
++void m_IDirectDrawX::ResetDeathtrapDepthResources()
+ {
+ 	for (const auto& pDDraw : DDrawVector)
+ 	{
+@@ -4535,6 +4540,11 @@ void m_IDirectDrawX::ReleaseAllD9Resources(bool BackupData, bool ResetInterface)
+ 			}
+ 		}
+ 	}
++}
++
++void m_IDirectDrawX::ReleaseAllD9Resources(bool BackupData, bool ResetInterface)
++{
++	ResetDeathtrapDepthResources();
+ 
+ 	// Remove render target and depth stencil surfaces
+ 	if (d3d9Device && ResetInterface && (RenderTargetSurface || DepthStencilSurface))
+diff --git a/ddraw/IDirectDrawX.h b/ddraw/IDirectDrawX.h
+--- a/ddraw/IDirectDrawX.h
++++ b/ddraw/IDirectDrawX.h
+@@ -86,6 +86,7 @@ private:
+ 	void ResetAllSurfaceDisplay();
+ 	void ReleaseD3D9VertexBuffer(LPDIRECT3DVERTEXBUFFER9& d3d9VertexBuffer, DWORD& VertexBufferSize);
+ 	void ReleaseD3D9IndexBuffer(LPDIRECT3DINDEXBUFFER9& d3d9IndexBuffer, DWORD& IndexBufferSize);
++	void ResetDeathtrapDepthResources();
+ 	void ReleaseAllD9Resources(bool BackupData, bool ResetInterface);
+ 	void ReleaseD9Device();
+ 	void ReleaseD9Object();
+diff --git a/ddraw/IDirectDrawSurfaceX.cpp b/ddraw/IDirectDrawSurfaceX.cpp
+--- a/ddraw/IDirectDrawSurfaceX.cpp
++++ b/ddraw/IDirectDrawSurfaceX.cpp
+@@ -2377,6 +2377,11 @@ HRESULT m_IDirectDrawSurfaceX::IsLost()
+ 
+ 	if (Config.Dd7to9)
+ 	{
++		if (RetiredPrimary)
++		{
++			return DDERR_SURFACELOST;
++		}
++
+ 		if (!CanSurfaceBeLost())
+ 		{
+ 			return D3D_OK;
+@@ -4261,6 +4266,11 @@ HRESULT m_IDirectDrawSurfaceX::CheckOnlyInterface(char* FunctionName, bool Check
+ 
+ HRESULT m_IDirectDrawSurfaceX::CheckInterface(char* FunctionName, bool CheckD3DDevice, bool CheckD3DSurface, bool CheckLostSurface)
+ {
++	if (RetiredPrimary && (CheckD3DSurface || CheckLostSurface))
++	{
++		return DDERR_SURFACELOST;
++	}
++
+ 	// Check ddrawParent device
+ 	if (!ddrawParent)
+ 	{
+@@ -5696,6 +5706,24 @@ void m_IDirectDrawSurfaceX::ClearUsing3DFlag()
+ 	}
+ }
+ 
++void m_IDirectDrawSurfaceX::RetirePrimaryChain()
++{
++	ScopedCriticalSection ThreadLock(GetCriticalSection());
++	if (RetiredPrimary)
++	{
++		return;
++	}
++	RetiredPrimary = true;
++	for (const auto& Attachment : AttachedSurfaceMap)
++	{
++		if (!Attachment.second.isAttachedSurfaceAdded && Attachment.second.pSurface->IsBackBuffer())
++		{
++			Attachment.second.pSurface->RetirePrimaryChain();
++		}
++	}
++	ReleaseD9Surface(false, false, false);
++}
++
+ void m_IDirectDrawSurfaceX::ReleaseD9Surface(bool BackupData, bool ResetSurface, bool IsDeviceLost)
+ {
+ 	ScopedCriticalSection ThreadLock(GetCriticalSection(), Config.Dd7to9);
+diff --git a/ddraw/IDirectDrawSurfaceX.h b/ddraw/IDirectDrawSurfaceX.h
+--- a/ddraw/IDirectDrawSurfaceX.h
++++ b/ddraw/IDirectDrawSurfaceX.h
+@@ -257,6 +257,7 @@ private:
+ 	bool SurfaceRequiresEmulation = false;
+ 	bool ComplexRoot = false;
+ 	bool ComplexChild = false;
++	bool RetiredPrimary = false;
+ 	bool IsSurfaceLost = false;
+ 	bool IsInFlip = false;
+ 	bool PresentOnUnlock = false;
+@@ -549,6 +550,7 @@ public:
+ 
+ 	// Direct3D9 interface functions
+ 	void SetAsRenderTarget();
++	void RetirePrimaryChain();
+ 	void ReleaseD9Surface(bool BackupData, bool ResetSurface, bool IsDeviceLost);
+ 	void ReleaseD9AuxiliarySurfaces(bool ResetSurface);
+ 	HRESULT PresentSurface(LPRECT lpDestRect, bool IsSkipScene, bool SkipCriticalSection);

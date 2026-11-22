@@ -1204,7 +1204,20 @@ index bffe0205..d93acc85 100644
  UINT m_IDirectDrawX::GetAdapterIndex() const
  {
  	return d3d9AdapterIndex;
-@@ -5400,7 +5490,14 @@ HRESULT m_IDirectDrawX::CopyPrimarySurface(m_IDirectDrawSurfaceX* pPrimarySurfac
+@@ -3513,8 +3603,10 @@ HRESULT m_IDirectDrawX::CreateD9Device(char* FunctionName)
+ 	// Window handle
+ 	presParams.hDeviceWindow = hWnd;
+ 
+-	// Set parameters for the current display mode
+-	if (Device.IsWindowed)
++	// The D3D9 wrapper forces a windowed swap chain for both Deathtrap
++	// display modes. Use the same effective mode for device reuse and reset.
++	// DirectDraw can still report logical exclusive mode to the game.
++	if (Device.IsWindowed || Config.EnableWindowMode)
+ 	{
+ 		// Window mode
+ 		presParams.Windowed = TRUE;
+@@ -5400,7 +5492,14 @@ HRESULT m_IDirectDrawX::CopyPrimarySurface(m_IDirectDrawSurfaceX* pPrimarySurfac
  	// Get source rect
  	RECT* pSrcRect = nullptr;
  	RECT SrcRect = { 0, 0, (LONG)pPrimarySurface->GetD9Width(), (LONG)pPrimarySurface->GetD9Height() };
@@ -1220,7 +1233,7 @@ index bffe0205..d93acc85 100644
  	{
  		// Clip rect
  		RECT ClientRect = {};
-@@ -5428,6 +5525,42 @@ HRESULT m_IDirectDrawX::CopyPrimarySurface(m_IDirectDrawSurfaceX* pPrimarySurfac
+@@ -5428,6 +5527,42 @@ HRESULT m_IDirectDrawX::CopyPrimarySurface(m_IDirectDrawSurfaceX* pPrimarySurfac
  		pDestRect = &DestRect;
  	}
  
