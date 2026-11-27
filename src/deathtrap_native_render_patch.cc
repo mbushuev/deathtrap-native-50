@@ -22169,6 +22169,7 @@ bool InstallDeathtrapNativeRenderHooks() {
   InstallCorpseRetentionHooks();
   InstallInterfaceScaleHooks();
   InstallNative50MenuHooks();
+  InstallInversionReloadHook();
   InstallDeathRecoveryHooks();
   InstallLevelStartLoadoutHooks();
   InstallSaveThumbnailHooks();

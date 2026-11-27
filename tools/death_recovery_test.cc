@@ -304,6 +304,37 @@ void NativeLifecycle() {
           "real native load state consumes slot, records baseline and resumes");
   Death(1);
   Require(context[0xC]==0xFF,"real native restart choice cannot reload a slot");
+
+  const auto* callsite = g_dungeon_base + kSameLevelSaveLoadCallRva;
+  int32_t displacement = 0;
+  std::memcpy(&displacement, callsite + 1, sizeof(displacement));
+  const auto load_from_menu = reinterpret_cast<RecoveryStateFn>(callsite + 5 + displacement);
+  Require(load_from_menu == &HookSameLevelSaveLoad, "redirect only the in-place menu load");
+  Reset();
+  g_original_recovery_prepare = native_prepare;
+  saved_levels[4] = 15;
+  Slots(context.data() + 0xD);
+  Put(5, uint8_t{15});
+  Put(0xC, uint8_t{4});
+  Put(8, uint32_t{0x102});
+  load_from_menu(context.data());
+  std::memcpy(&callback, context.data(), sizeof(callback));
+  std::memcpy(&flags, context.data() + 8, sizeof(flags));
+  Require(callback == reinterpret_cast<uintptr_t>(g_dungeon_base + kRecoveryPrepareRva) &&
+              (flags & 0x2000) && context[0xC] == 4 && play_calls == 0,
+          "Inversion schedules a world restart with the same save slot");
+  reinterpret_cast<RecoveryStateFn>(callback)(context.data());
+  std::memcpy(&callback, context.data(), sizeof(callback));
+  Require(callback == reinterpret_cast<uintptr_t>(g_dungeon_base + ActiveDungeonCodeRva(0x7F080)) &&
+              context[0xC] == 4 && play_calls == 0,
+          "Inversion rebuilds the world before consuming the pending save");
+  Reset();
+  Slots(context.data() + 0xD);
+  Put(0xC, uint8_t{4});
+  Put(8, uint32_t{0x102});
+  load_from_menu(context.data());
+  Require(context[0xC] == 0xFF && play_calls == 1,
+          "other levels still resume from the save without a world rebuild");
 }
 void OriginalImages(int argc,wchar_t** argv) {
   for(int i=1;i<argc;++i) {
@@ -316,6 +347,7 @@ void OriginalImages(int argc,wchar_t** argv) {
     g_original_save_thumbnail_capture=nullptr;
     g_original_save_thumbnail_convert=nullptr;
     Require(g_dungeon_image_variant!=DungeonImageVariant::kUnsupported &&
+        InstallInversionReloadHook() && InstallInversionReloadHook() &&
         InstallNative50MenuHooks() && InstallDeathRecoveryHooks() && InstallDeathRecoveryHooks(),
         "native hooks and menu transaction signatures work in every localization");
     Require(InstallSaveThumbnailHooks() && InstallSaveThumbnailHooks(),

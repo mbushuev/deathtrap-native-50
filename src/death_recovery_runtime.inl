@@ -2,6 +2,9 @@
 // actor traversal or presentation callbacks. Native save files stay untouched.
 constexpr DungeonCodeRva kRecoverySaveRva{0x99CB0u}, kRecoveryLoadRva{0x99D40u};
 constexpr DungeonCodeRva kRecoveryPlayRva{0x7F5B0u}, kRecoveryPrepareRva{0x7F8A0u};
+constexpr DungeonCodeRva kSameLevelSaveLoadCallRva{0x7F529u};
+constexpr DungeonCodeRva kResumeSaveRva{0x7F3C0u};
+constexpr DungeonCodeRva kRecoverySetStateRva{0x7EF60u};
 constexpr DungeonCodeRva kRecoveryDestroyRva{0x7EE30u}, kRecoveryRootMenuRva{0xF1E0u};
 constexpr DungeonCodeRva kRecoveryContextRva{0x7EF50u}, kRecoveryPauseRva{0x5C80u};
 constexpr DungeonCodeRva kRecoveryMenuModeRva{0x6A310u};
@@ -40,6 +43,49 @@ bool RecoveryContext(void* context, uint8_t* level, uint32_t* flags = nullptr) {
       SafeReadValue(static_cast<uint8_t*>(context) + 8, &native_flags) &&
       (!flags || (*flags = native_flags, true));
 }
+void __cdecl HookSameLevelSaveLoad(void* context) {
+  constexpr uint8_t kInversionLevel = 15;
+  constexpr uint32_t kRestartWorld = 0x2000u;
+  uint8_t level = 0;
+  uint8_t slot = 0xFF;
+  uint32_t flags = 0;
+  if (RecoveryContext(context, &level, &flags) && level == kInversionLevel &&
+      SafeReadValue(static_cast<uint8_t*>(context) + 0xC, &slot) && slot < 10) {
+    // Inversion's in-place restore leaves the flying platforms and their
+    // triggers in the old world. Queue the native same-level restart, which
+    // rebuilds the world before consuming the selected save slot.
+    flags |= kRestartWorld;
+    if (SafeWrite(static_cast<uint8_t*>(context) + 8, &flags, sizeof(flags))) {
+      const auto prepare = reinterpret_cast<RecoveryStateFn>(
+          g_dungeon_base + kRecoveryPrepareRva);
+      const auto set_state = reinterpret_cast<void(__cdecl*)(void*, RecoveryStateFn)>(
+          g_dungeon_base + kRecoverySetStateRva);
+      set_state(context, prepare);
+      AppendDeathtrapSupportLog("support_inversion_reload slot=%u world=rebuild",
+                                static_cast<unsigned>(slot));
+      return;
+    }
+  }
+  reinterpret_cast<RecoveryStateFn>(g_dungeon_base + kResumeSaveRva)(context);
+}
+
+bool InstallInversionReloadHook() {
+  if (!g_dungeon_base ||
+      !MatchesDungeonCode(kRecoveryPrepareRva,
+          std::array<uint8_t, 9>{0x53, 0x56, 0x8B, 0x74, 0x24, 0x0C, 0x8B, 0x46, 8}) ||
+      !MatchesDungeonCode(kRecoverySetStateRva,
+          std::array<uint8_t, 11>{0x8B, 0x4C, 0x24, 8, 0x8B, 0x44, 0x24, 4, 0x89, 8, 0xC3})) {
+    return false;
+  }
+  const auto base = reinterpret_cast<uintptr_t>(g_dungeon_base);
+  const auto site = base + kSameLevelSaveLoadCallRva;
+  const auto patched = RenderQueueCall<5>(
+      site, reinterpret_cast<uintptr_t>(&HookSameLevelSaveLoad));
+  return MatchesDungeonCode(kSameLevelSaveLoadCallRva, patched) ||
+      PatchDungeonCode(kSameLevelSaveLoadCallRva,
+          RenderQueueCall<5>(site, base + kResumeSaveRva), patched);
+}
+
 bool RecoveryFingerprint(const char* name, WIN32_FILE_ATTRIBUTE_DATA* output) {
   // Use the engine's configured save directory and filename builder, including
   // custom installations. The 0x88-byte context is the serializer's own layout.
