@@ -136,11 +136,21 @@ void RuntimeCases() {
           "load baseline, held press blocked, full redraw and input cleanup");
   Put(8,uint32_t{0x2800});HookRecoveryPrepare(context.data());
   Require(g_recovery_checkpoint.slot==4,"death retry preserves baseline");
-  HookRecoveryLoad("s4");HookRecoverySave("s2",nullptr);serializer_ok=false;
+  uint8_t level = 0;
+  uint32_t flags = 0;
+  Put(8,kRestoreLevelStartInventory | 0x40u);
+  HookRecoveryLoad("s4");
+  Require(RecoveryContext(context.data(),&level,&flags) && flags==0x40u,
+          "successful retry load preserves the saved inventory and unrelated flags");
+  HookRecoverySave("s2",nullptr);serializer_ok=false;
+  Put(8,kRestoreLevelStartInventory | 0x40u);
   const uint32_t current_scene=GetDeathtrapSaveLoadPresentationGeneration();
   Require(!HookRecoverySave("s7",nullptr) && !HookRecoveryLoad("s8"),"native failures must pass through");
   Require(GetDeathtrapSaveLoadPresentationGeneration()==current_scene,
           "failed load leaves the current presentation scene intact");
+  Require(RecoveryContext(context.data(),&level,&flags) &&
+              flags==(kRestoreLevelStartInventory | 0x40u),
+          "failed retry load keeps the level-start inventory fallback");
   Require(g_recovery_checkpoint.slot==2,"failed save/load cannot replace latest successful save");
   serializer_ok=true;Death(1);
   Require(context[0xC]==0xFF && g_recovery_checkpoint.slot==2,"restart bypasses load and preserves run checkpoint");

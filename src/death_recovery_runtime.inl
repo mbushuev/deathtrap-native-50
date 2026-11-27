@@ -9,6 +9,7 @@ constexpr DungeonCodeRva kRecoveryDestroyRva{0x7EE30u}, kRecoveryRootMenuRva{0xF
 constexpr DungeonCodeRva kRecoveryContextRva{0x7EF50u}, kRecoveryPauseRva{0x5C80u};
 constexpr DungeonCodeRva kRecoveryMenuModeRva{0x6A310u};
 constexpr DungeonCodeRva kRecoveryPathRva{0x99E30u}, kRecoverySlotsRva{0x99E50u};
+constexpr uint32_t kRestoreLevelStartInventory = 0x200000u;
 using RecoveryStateFn = void(__cdecl*)(void*);
 using RecoverySaveFn = int(__cdecl*)(const char*, const void*);
 using RecoveryLoadFn = int(__cdecl*)(const char*);
@@ -125,8 +126,22 @@ int __cdecl HookRecoverySave(const char* name, const void* metadata) {
 }
 int __cdecl HookRecoveryLoad(const char* name) {
   const int result = g_original_recovery_load ? g_original_recovery_load(name) : 0;
-  if (result) g_save_load_presentation_generation.fetch_add(1, std::memory_order_release);
-  RecordRecoveryCheckpoint(name, result != 0, "load");
+  if (!result) return result;
+
+  // A same-level rebuild schedules the level-start inventory snapshot to be
+  // reapplied at gameplay entry. A successful save restore already supplied
+  // the current inventory, including keys acquired since entering the level.
+  void* context = g_death_recovery_api.context ? g_death_recovery_api.context() : nullptr;
+  uint8_t level = 0;
+  uint32_t flags = 0;
+  if (RecoveryContext(context, &level, &flags) && (flags & kRestoreLevelStartInventory)) {
+    flags &= ~kRestoreLevelStartInventory;
+    if (SafeWrite(static_cast<uint8_t*>(context) + 8, &flags, sizeof(flags))) {
+      AppendDeathtrapSupportLog("support_recovery inventory=save level=%u", level);
+    }
+  }
+  g_save_load_presentation_generation.fetch_add(1, std::memory_order_release);
+  RecordRecoveryCheckpoint(name, true, "load");
   return result;
 }
 bool RecoveryCheckpointAvailable(void* context, uint8_t level) {
