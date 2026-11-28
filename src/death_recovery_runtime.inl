@@ -10,6 +10,7 @@ constexpr DungeonCodeRva kRecoveryContextRva{0x7EF50u}, kRecoveryPauseRva{0x5C80
 constexpr DungeonCodeRva kRecoveryMenuModeRva{0x6A310u};
 constexpr DungeonCodeRva kRecoveryPathRva{0x99E30u}, kRecoverySlotsRva{0x99E50u};
 constexpr uint32_t kRestoreLevelStartInventory = 0x200000u;
+constexpr uint8_t kInversionLevel = 15;
 using RecoveryStateFn = void(__cdecl*)(void*);
 using RecoverySaveFn = int(__cdecl*)(const char*, const void*);
 using RecoveryLoadFn = int(__cdecl*)(const char*);
@@ -45,7 +46,6 @@ bool RecoveryContext(void* context, uint8_t* level, uint32_t* flags = nullptr) {
       (!flags || (*flags = native_flags, true));
 }
 void __cdecl HookSameLevelSaveLoad(void* context) {
-  constexpr uint8_t kInversionLevel = 15;
   constexpr uint32_t kRestartWorld = 0x2000u;
   uint8_t level = 0;
   uint8_t slot = 0xFF;

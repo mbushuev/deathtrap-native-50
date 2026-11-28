@@ -360,6 +360,8 @@ void OriginalImages(int argc,wchar_t** argv) {
         InstallInversionReloadHook() && InstallInversionReloadHook() &&
         InstallNative50MenuHooks() && InstallDeathRecoveryHooks() && InstallDeathRecoveryHooks(),
         "native hooks and menu transaction signatures work in every localization");
+    Require(InstallInversionRiderLoadHook() && InstallInversionRiderLoadHook(),
+            "rider recovery must hook only the native player-position load call");
     Require(InstallSaveThumbnailHooks() && InstallSaveThumbnailHooks(),
             "save capture hooks must work in every localization");
     NativeSaveThumbnail();
