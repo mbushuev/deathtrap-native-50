@@ -17069,13 +17069,60 @@ int32_t ToFixed(double value) {
       static_cast<double>(std::numeric_limits<int32_t>::max())));
 }
 
+// Use the preceding angular step to temper sharp changes in the speed of
+// small bone rotations. Both ends of the cubic stay on the original SLERP
+// arc. The bounded tangent keeps the phase monotonic on starts and reversals.
+double BoneRotationPhase(const Matrix3x4& older, const Matrix3x4& previous,
+                         const Matrix3x4& current, double phase) {
+  double preceding_step_squared = 0.0;
+  double current_step_squared = 0.0;
+  double aligned_step = 0.0;
+  for (size_t i = 0; i < 9; ++i) {
+    const double preceding_step =
+        static_cast<double>(previous.values[i]) - older.values[i];
+    const double current_step =
+        static_cast<double>(current.values[i]) - previous.values[i];
+    preceding_step_squared += preceding_step * preceding_step;
+    current_step_squared += current_step * current_step;
+    aligned_step += preceding_step * current_step;
+  }
+  // A four-degree rotation moves the basis rows of a unit-scale joint by
+  // about 0.1 in total. Keep larger pose changes on the existing linear phase.
+  constexpr double kMaximumBasisStep = 0.1 * kMatrixFixedScale;
+  constexpr double kMaximumStepSquared = kMaximumBasisStep * kMaximumBasisStep;
+  if (current_step_squared == 0.0 ||
+      current_step_squared > kMaximumStepSquared ||
+      preceding_step_squared > kMaximumStepSquared) {
+    return phase;
+  }
+  const double speed_ratio =
+      std::clamp(aligned_step / current_step_squared, 0.0, 2.0);
+  return phase + 0.5 * (speed_ratio - 1.0) *
+                     phase * (1.0 - phase) * (1.0 - 2.0 * phase);
+}
+
 bool InterpolateRigid(const Matrix3x4& previous, const Matrix3x4& current,
                       double phase, Matrix3x4* interpolated,
                       double* translation_distance,
-                      double* rotation_degrees) {
+                      double* rotation_degrees,
+                      const Matrix3x4* older_bone = nullptr) {
   RigidTransform from;
+  if (!DecodeRigid(previous, &from)) {
+    return false;
+  }
+  if (previous.values == current.values) {
+    // Keep native fixed-point rounding for a joint that held its exact pose.
+    *interpolated = current;
+    if (translation_distance) {
+      *translation_distance = 0.0;
+    }
+    if (rotation_degrees) {
+      *rotation_degrees = 0.0;
+    }
+    return true;
+  }
   RigidTransform to;
-  if (!DecodeRigid(previous, &from) || !DecodeRigid(current, &to)) {
+  if (!DecodeRigid(current, &to)) {
     return false;
   }
   const Vec3 translation_delta = Subtract(to.translation, from.translation);
@@ -17085,7 +17132,11 @@ bool InterpolateRigid(const Matrix3x4& previous, const Matrix3x4& current,
   }
   double angle = 0.0;
   phase = std::clamp(phase, 0.0, 1.0);
-  const Quaternion rotation = Slerp(from.rotation, to.rotation, phase, &angle);
+  const double rotation_phase =
+      older_bone ? BoneRotationPhase(*older_bone, previous, current, phase)
+                 : phase;
+  const Quaternion rotation =
+      Slerp(from.rotation, to.rotation, rotation_phase, &angle);
   if (!std::isfinite(angle) || angle > kMaximumNodeRotationDegrees) {
     return false;
   }
@@ -18317,10 +18368,27 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
       ++stats.parent_mismatch;
       ++stats.exact;
     } else {
+      const Matrix3x4* older_bone = nullptr;
+      if (older && player_render_node && older->player == player_render_node &&
+          previous.player == player_render_node &&
+          entry.first != player_render_node && entry.first != current.camera &&
+          previous_it->second.local.values != entry.second.local.values &&
+          previous_it->second.render_resource_handle ==
+              entry.second.render_resource_handle &&
+          is_player_subtree_node(entry.first)) {
+        const auto older_it = older->nodes.find(entry.first);
+        if (older_it != older->nodes.end() &&
+            older_it->second.parent == entry.second.parent &&
+            older_it->second.render_resource_handle ==
+                entry.second.render_resource_handle) {
+          older_bone = &older_it->second.local;
+        }
+      }
       double translation = 0.0;
       double rotation = 0.0;
       if (InterpolateRigid(previous_it->second.local, entry.second.local,
-                           phase, &midpoint.local, &translation, &rotation)) {
+                           phase, &midpoint.local, &translation, &rotation,
+                           older_bone)) {
         midpoint.local_interpolated = true;
         stats.max_translation = std::max(stats.max_translation, translation);
         stats.max_rotation_degrees =
@@ -18363,8 +18431,17 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
     } else {
       auto parent_midpoint = midpoint_nodes.find(parent);
       if (parent_midpoint != midpoint_nodes.end() && build_world(parent)) {
-        midpoint.world = MultiplyAffine(midpoint.local,
-                                        parent_midpoint->second.world);
+        // If neither input moved, the native world matrix already represents
+        // this sample and preserves the engine's fixed-point composition.
+        const auto current_parent = current.nodes.find(parent);
+        if (midpoint.local.values == current_it->second.local.values &&
+            parent_midpoint->second.world.values ==
+                current_parent->second.world.values) {
+          midpoint.world = current_it->second.world;
+        } else {
+          midpoint.world =
+              MultiplyAffine(midpoint.local, parent_midpoint->second.world);
+        }
         midpoint.world_interpolated = true;
         ++stats.hierarchical;
       } else if (parent_midpoint == midpoint_nodes.end()) {

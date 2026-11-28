@@ -29,6 +29,70 @@ void __cdecl CaptureQueueDraw(void* command) {
   static_cast<QueueDraw*>(command)->depth_group = DeathtrapWorldDepthGroup();
 }
 
+void CheckBonePresentation() {
+  const auto pose = [](double radians) {
+    const int32_t sine = ToFixed(std::sin(radians));
+    const int32_t cosine = ToFixed(std::cos(radians));
+    return Matrix3x4{{ToFixed(1.0), 0, 0, 0, cosine, sine,
+                      0, -sine, cosine, 0, 0, 0}};
+  };
+  const Matrix3x4 neutral = pose(0.0);
+  const Matrix3x4 small_turn = pose(0.03);
+  const Matrix3x4 large_turn = pose(0.5);
+  RequireQueue(BoneRotationPhase(neutral, neutral, large_turn, 0.25) == 0.25,
+               "Large joint rotations use the original interpolation phase");
+  RequireQueue(BoneRotationPhase(neutral, neutral, small_turn, 0.0) == 0.0 &&
+                   BoneRotationPhase(neutral, neutral, small_turn, 1.0) == 1.0,
+               "Joint interpolation preserves both source endpoints");
+
+  for (const auto& preceding : {neutral, pose(-0.07), pose(0.03)}) {
+    double last_phase = 0.0;
+    for (int i = 1; i <= 12; ++i) {
+      const double phase = BoneRotationPhase(
+          preceding, neutral, small_turn, i / 12.0);
+      RequireQueue(phase > last_phase && phase <= 1.0,
+                   "A joint must progress monotonically even in slow motion");
+      last_phase = phase;
+    }
+  }
+
+  std::array<uint8_t, kMatrixOffset + sizeof(Matrix3x4)> root{}, child{};
+  SceneSnapshot previous;
+  previous.player = reinterpret_cast<uintptr_t>(root.data());
+  const auto bone = reinterpret_cast<uintptr_t>(child.data());
+  previous.nodes[previous.player].local = neutral;
+  previous.nodes[previous.player].world = neutral;
+  NodeTransform& joint = previous.nodes[bone];
+  joint.parent = previous.player;
+  // Retail fixed-point composition can differ from recomposition by a unit.
+  joint.local = pose(-0.01);
+  joint.world = joint.local;
+  --joint.world.values[9];
+  SceneSnapshot older = previous;
+  SceneSnapshot current = previous;
+  const auto rendered_bone = [&] {
+    Matrix3x4 rendered{};
+    std::memcpy(&rendered, child.data() + kMatrixOffset, sizeof(rendered));
+    return rendered;
+  };
+  const auto held = ApplyInterpolatedScene(&older, previous, current, 1.0 / 3.0,
+                                            false, 1);
+  RequireQueue(held.applied == 2 &&
+                   rendered_bone().values == joint.world.values,
+               "Held animation must reproduce the exact native world matrix");
+
+  current.nodes[bone].local = small_turn;
+  current.nodes[bone].world = small_turn;
+  ApplyInterpolatedScene(nullptr, previous, current, 1.0 / 3.0, false, 2);
+  const auto linear = rendered_bone();
+  ApplyInterpolatedScene(&older, previous, current, 1.0 / 3.0, false, 2);
+  RequireQueue(rendered_bone().values[5] < linear.values[5],
+               "With pose history, a small joint rotation eases out of a hold");
+  RestoreScene(current);
+  RequireQueue(rendered_bone().values == small_turn.values,
+               "Restoring the scene must restore the exact source endpoint");
+}
+
 void CheckProjectiveQuads() {
   using namespace deathtrap::projective_quad;
   const auto test = [](const std::array<Point, 4>& corners, const std::array<UV, 4>& uv,
@@ -193,6 +257,7 @@ int wmain(int argc,wchar_t** argv) {
   RequireQueue(InstallWorldRenderQueueDepth(), "Install world queue depth scope");
   RequireQueue(InstallWorldRenderQueueDepth(), "World queue install must be idempotent");
   RequireQueue(InstallWorldQuadProjection(), "Install world quad projection");
+  CheckBonePresentation();
   CheckProjectiveQuads();
   CheckRoomFaceProjection();
   CheckDepthGroups(false);
