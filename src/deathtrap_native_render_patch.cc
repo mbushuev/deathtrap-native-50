@@ -17069,42 +17069,35 @@ int32_t ToFixed(double value) {
       static_cast<double>(std::numeric_limits<int32_t>::max())));
 }
 
-// Both rotation vectors use coordinates relative to the previous pose.
-// This keeps their projection meaningful for large angles and changing axes.
-Vec3 ShortestRotationStep(const Quaternion& from, const Quaternion& to) {
-  const Vec3 a{from.x, from.y, from.z};
-  const Vec3 b{to.x, to.y, to.z};
-  const Vec3 rotation = Subtract(
-      Subtract(Scale(b, from.w), Scale(a, to.w)), Cross(a, b));
-  const double sine = Length(rotation);
-  if (sine < 1.0e-8) {
-    return {};
+// Use the preceding angular step to temper sharp changes in the speed of
+// small bone rotations. Both ends of the cubic stay on the original SLERP
+// arc. The bounded tangent keeps the phase monotonic on starts and reversals.
+double BoneRotationPhase(const Matrix3x4& older, const Matrix3x4& previous,
+                         const Matrix3x4& current, double phase) {
+  double preceding_step_squared = 0.0;
+  double current_step_squared = 0.0;
+  double aligned_step = 0.0;
+  for (size_t i = 0; i < 9; ++i) {
+    const double preceding_step =
+        static_cast<double>(previous.values[i]) - older.values[i];
+    const double current_step =
+        static_cast<double>(current.values[i]) - previous.values[i];
+    preceding_step_squared += preceding_step * preceding_step;
+    current_step_squared += current_step * current_step;
+    aligned_step += preceding_step * current_step;
   }
-  const double cosine = from.w * to.w + Dot(a, b);
-  const double angle = 2.0 * std::atan2(sine, std::abs(cosine));
-  return Scale(rotation, (cosine < 0.0 ? -angle : angle) / sine);
-}
-
-double BoneRotationPhase(const Matrix3x4& older, const RigidTransform& from,
-                         const RigidTransform& to, double phase) {
-  RigidTransform past;
-  if (!DecodeRigid(older, &past)) {
-    return phase;
-  }
-  const Vec3 next = ShortestRotationStep(from.rotation, to.rotation);
-  const Vec3 back = ShortestRotationStep(from.rotation, past.rotation);
-  const double angle = Length(next);
-  constexpr double kRadiansPerDegree = 3.14159265358979323846 / 180.0;
-  const double limit = kMaximumNodeRotationDegrees * kRadiansPerDegree;
-  if (angle < 1.0e-8 || angle > limit || Length(back) > limit) {
+  // A four-degree rotation moves the basis rows of a unit-scale joint by
+  // about 0.1 in total. Keep larger pose changes on the existing linear phase.
+  constexpr double kMaximumBasisStep = 0.1 * kMatrixFixedScale;
+  constexpr double kMaximumStepSquared = kMaximumBasisStep * kMaximumBasisStep;
+  if (current_step_squared == 0.0 ||
+      current_step_squared > kMaximumStepSquared ||
+      preceding_step_squared > kMaximumStepSquared) {
     return phase;
   }
   const double speed_ratio =
-      std::clamp(-Dot(back, next) / (angle * angle), 0.0, 2.0);
-  // Keep the easing monotonic and cap the pose correction at less than one
-  // degree even during a fast attack. The source poses are sampled on time.
-  const double gain = std::min(0.5, 8.0 * kRadiansPerDegree / angle);
-  return phase + gain * (speed_ratio - 1.0) *
+      std::clamp(aligned_step / current_step_squared, 0.0, 2.0);
+  return phase + 0.5 * (speed_ratio - 1.0) *
                      phase * (1.0 - phase) * (1.0 - 2.0 * phase);
 }
 
@@ -17140,7 +17133,8 @@ bool InterpolateRigid(const Matrix3x4& previous, const Matrix3x4& current,
   double angle = 0.0;
   phase = std::clamp(phase, 0.0, 1.0);
   const double rotation_phase =
-      older_bone ? BoneRotationPhase(*older_bone, from, to, phase) : phase;
+      older_bone ? BoneRotationPhase(*older_bone, previous, current, phase)
+                 : phase;
   const Quaternion rotation =
       Slerp(from.rotation, to.rotation, rotation_phase, &angle);
   if (!std::isfinite(angle) || angle > kMaximumNodeRotationDegrees) {
@@ -18377,17 +18371,16 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
       ++stats.exact;
     } else {
       const Matrix3x4* older_bone = nullptr;
-      if (older && entry.second.parent && entry.first != player_render_node &&
-          entry.first != current.camera &&
+      if (older && player_render_node && older->player == player_render_node &&
+          previous.player == player_render_node &&
+          entry.first != player_render_node && entry.first != current.camera &&
           previous_it->second.local.values != entry.second.local.values &&
-          previous_it->second.flags == entry.second.flags &&
           previous_it->second.render_resource_handle ==
               entry.second.render_resource_handle &&
-          !SceneNodeDescendsFrom(current, current.camera, entry.first)) {
+          is_player_subtree_node(entry.first)) {
         const auto older_it = older->nodes.find(entry.first);
         if (older_it != older->nodes.end() &&
             older_it->second.parent == entry.second.parent &&
-            older_it->second.flags == entry.second.flags &&
             older_it->second.render_resource_handle ==
                 entry.second.render_resource_handle) {
           older_bone = &older_it->second.local;
