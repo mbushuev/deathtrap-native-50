@@ -12,6 +12,22 @@ public builds.
 - **517342** — tested builds and identified the directional-control problems
   fixed in version 0.0.221.
 
+## 0.0.244 — Inversion saves and camera fixes
+
+- Rebuild **Inversion** when reloading a save through the menu. Flying turtles
+  and their triggers reset so the platforms can be activated again.
+- Resume saves made on a flying turtle with the platform beneath the player.
+  Verified loading from the main menu, reloading during play, loading after
+  death, and saving and reloading again in mid-flight.
+- Restore the saved inventory after a level rebuild or death reload, including
+  keys collected since entering the level.
+- Accept a Space tap on the level briefing and restore gameplay input as the
+  level opens. Third-person camera orbit starts responding after a save load
+  even when the starting view is close to a wall or obstacle.
+- Keep the first-person camera aligned with the animated head in intermediate
+  frames to reduce shoulder jitter while blocking. Smooth small joint
+  movements such as breathing.
+
 ## 0.0.243 — Gorgon petrification and black-screen fixes
 
 - Restore the gray stone textures when a Gorgon petrifies the player,
