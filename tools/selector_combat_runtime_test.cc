@@ -9,7 +9,7 @@ void CaptureSelectorGameplay(uint32_t);
 UINT WINAPI CombatTestSystemInput(UINT count, LPINPUT, int) { return count; }
 
 namespace {
-bool test_foreground = true, test_cursor = false;
+bool test_foreground = true;
 ULONGLONG test_time = 1000;
 HWND WINAPI CombatTestForeground() {
   return test_foreground ? reinterpret_cast<HWND>(1) : nullptr;
@@ -18,10 +18,6 @@ DWORD WINAPI CombatTestWindowProcess(HWND, LPDWORD process) {
   if (process) *process = GetCurrentProcessId();
   return GetCurrentThreadId();
 }
-BOOL WINAPI CombatTestCursor(PCURSORINFO info) {
-  info->flags = test_cursor ? CURSOR_SHOWING : 0;
-  return TRUE;
-}
 ULONGLONG WINAPI CombatTestTime() { return test_time; }
 }
 
@@ -29,7 +25,6 @@ ULONGLONG WINAPI CombatTestTime() { return test_time; }
 // creating windows, sending input, or depending on the user's active desktop.
 #define GetForegroundWindow CombatTestForeground
 #define GetWindowThreadProcessId CombatTestWindowProcess
-#define GetCursorInfo CombatTestCursor
 #define GetTickCount64 CombatTestTime
 #define SendInput CombatTestSystemInput
 #define SubmitDeathtrapXInputCombatState CaptureSelectorCombat
@@ -41,7 +36,6 @@ ULONGLONG WINAPI CombatTestTime() { return test_time; }
 #undef SubmitDeathtrapXInputCombatState
 #undef SendInput
 #undef GetTickCount64
-#undef GetCursorInfo
 #undef GetWindowThreadProcessId
 #undef GetForegroundWindow
 
@@ -81,6 +75,56 @@ void __cdecl CombatTestTurn(void* input) {
 
 uintptr_t __cdecl CombatTestSpecialMovementStage() {
   return test_turns;
+}
+
+void CheckLevelStartInput(uint8_t* session) {
+  // The live player and native play callback already exist during the
+  // briefing. Input ownership changes only when the prompt finishes.
+  PutCombat(g_dungeon_base + kNativeLevelBriefingRva, uint32_t{1});
+  captured_pad = {};
+  PollFrontendXInputInternal();
+  RequireCombat(DeathtrapGameplayReady(false) && g_xinput_menu_mode.load() &&
+      !DeathtrapModernCameraConsumesMouse() && !DeathtrapGameplayAcceptsMouseCombat(),
+      "level briefing owns both inputs while the play callback is registered");
+
+  MSG key{};
+  key.hwnd = reinterpret_cast<HWND>(1);
+  key.message = WM_KEYDOWN;
+  key.wParam = VK_SPACE;
+  const auto message = reinterpret_cast<LPARAM>(&key);
+  LevelBriefingKeyMessage(HC_ACTION, PM_NOREMOVE, message);
+  key.lParam = 1L << 30;
+  LevelBriefingKeyMessage(HC_ACTION, PM_REMOVE, message);
+  RequireCombat(!g_level_briefing_space_tapped, "a peek or repeat cannot confirm the briefing");
+  key.lParam = 1;
+  LevelBriefingKeyMessage(HC_ACTION, PM_REMOVE, message);
+  key.message = WM_KEYUP;
+  LevelBriefingKeyMessage(HC_ACTION, PM_REMOVE, message);
+  RequireCombat(HookLevelBriefingSpaceDown(0x39u) && !g_level_briefing_space_tapped,
+      "a Space tap between native polls confirms exactly once");
+
+  PutCombat(g_dungeon_base + kNativeLevelBriefingRva, uint32_t{0});
+  captured_pad = {};
+  captured_pad.Gamepad.sThumbLY = 32767;
+  captured_pad.Gamepad.sThumbRX = 25000;
+  UpdateDeathtrapXInput();
+  RequireCombat(!g_xinput_menu_mode.load() && g_third_person_orbit_input_active.load() &&
+      g_xinput_native_joystick_y_milli.load() != 0 &&
+      DeathtrapModernCameraConsumesMouse() && DeathtrapGameplayAcceptsControllerCombat(),
+      "first gameplay input works before a gameplay camera callback");
+  PutCombat(session + 8u, uint32_t{1});
+  PollFrontendXInputInternal();
+  RequireCombat(g_xinput_menu_mode.load() && !DeathtrapModernCameraConsumesMouse() &&
+      !DeathtrapGameplayAcceptsControllerCombat(), "pause owns input while the scene remains live");
+  PutCombat(session + 8u, uint32_t{0});
+  PutCombat(session, uintptr_t{0});
+  RequireCombat(!DeathtrapModernCameraConsumesMouse(), "load dispatch must release camera input");
+  PutCombat(session, reinterpret_cast<uintptr_t>(g_dungeon_base + kNativePlayStateRva));
+  PutCombat(g_dungeon_base + kCameraControllerRva + kCameraControllerActiveModeOffset, uint8_t{4});
+  UpdateDeathtrapXInput();
+  RequireCombat(!g_xinput_menu_mode.load() && !DeathtrapModernCameraConsumesMouse(),
+      "native first person keeps gameplay ownership and retains its own mouse look");
+  PutCombat(g_dungeon_base + kCameraControllerRva + kCameraControllerActiveModeOffset, uint8_t{3});
 }
 
 void CheckPetrifiedOrbit(uint8_t* root, uint8_t* context, uint8_t* player) {
@@ -358,6 +402,9 @@ int main() {
   uintptr_t link = reinterpret_cast<uintptr_t>(heading_node.data());
   test_heading_node = link;
   g_dungeon_base = image.data();
+  std::array<uint8_t, 12> session{};
+  PutCombat(g_dungeon_base + kNativeSessionListRva, reinterpret_cast<uintptr_t>(session.data()));
+  PutCombat(session.data(), reinterpret_cast<uintptr_t>(g_dungeon_base + kNativePlayStateRva));
   g_display_windowed = false;
   g_xinput_controller_present.store(false);
   g_xinput_menu_mode.store(false);
@@ -388,7 +435,6 @@ int main() {
             reinterpret_cast<uintptr_t>(g_dungeon_base + kPlayerStateDispatcherRva));
   PutCombat(g_dungeon_base + kCameraControllerRva +
                 kCameraControllerActiveModeOffset, uint8_t{3});
-  g_last_mode3_source_tick_ms.store(test_time);
   g_custom_camera_view_mode.store(static_cast<uint32_t>(CustomCameraViewMode::kHead));
   RequireCombat(!DeathtrapImmersiveFirstPersonActive() &&
                     DeathtrapThirdPersonKeyboardCameraRelativeAvailable(),
@@ -417,7 +463,6 @@ int main() {
                 "scripted takeover must release immersive aim immediately");
   g_scripted_camera_override_active.store(false);
   test_time += g_camera_source_watchdog_ms.load() + 1;
-  g_last_mode3_source_tick_ms.store(test_time);
   PutCombat(controller.data() + 0x2EC,
             reinterpret_cast<uintptr_t>(g_dungeon_base + kPlayerStateDispatcherRva));
   RequireCombat(!DeathtrapImmersiveFirstPersonActive() &&
@@ -432,11 +477,12 @@ int main() {
   for (const auto variant : {DungeonImageVariant::kEnglish, DungeonImageVariant::kFrenchGog,
                             DungeonImageVariant::kGermanGog, DungeonImageVariant::kItalianGog}) {
     g_dungeon_image_variant = variant;
+    PutCombat(g_dungeon_base + kNativeSessionListRva, reinterpret_cast<uintptr_t>(session.data()));
+    PutCombat(session.data(), reinterpret_cast<uintptr_t>(g_dungeon_base + kNativePlayStateRva));
     PutCombat(g_dungeon_base + kGameRootPointerRva, reinterpret_cast<uintptr_t>(root.data()));
     PutCombat(g_dungeon_base + kUiOwnerPointerRva, reinterpret_cast<uintptr_t>(player.data()));
     PutCombat(controller.data() + 0x2EC, reinterpret_cast<uintptr_t>(g_dungeon_base + kPlayerStateDispatcherRva));
     PutCombat(g_dungeon_base + kCameraControllerRva + kCameraControllerActiveModeOffset, uint8_t{3});
-    g_last_mode3_source_tick_ms.store(test_time);
     for (unsigned mode = 0; mode < 256; ++mode) {
       PutCombat(g_dungeon_base + kUiSelectorModeRva, static_cast<uint8_t>(mode));
       RequireCombat(DeathtrapGameplayAcceptsMouseCombat() == (mode <= 4), "only gameplay and keyboard F1-F4 rows may accept combat");
@@ -459,7 +505,7 @@ int main() {
       RequestDeathtrapThirdPersonMouseAttackFacing();
       RequireCombat(GetDeathtrapThirdPersonMouseAttackFacingPhase() == DeathtrapMouseAttackFacingPhase::kPending, "single click queues its turn");
       for (unsigned tick = 0; tick < 16 && GetDeathtrapThirdPersonMouseAttackFacingPhase() != DeathtrapMouseAttackFacingPhase::kReady; ++tick) {
-        test_time += 60; g_last_mode3_source_tick_ms.store(test_time);
+        test_time += 60;
         UpdateMouseAttackCameraFacing(player.data());
       }
       int32_t result = -1; uint8_t mode_after = 255;
@@ -471,11 +517,9 @@ int main() {
       CompleteDeathtrapThirdPersonMouseAttackFacing(DeathtrapMouseAttackFacingPhase::kReady);
       test_foreground = false;
       RequireCombat(!DeathtrapGameplayAcceptsMouseCombat(), "background window must reject combat"); test_foreground = true;
-      test_cursor = true;
-      RequireCombat(!DeathtrapGameplayAcceptsMouseCombat(), "frontend cursor must reject combat"); test_cursor = false;
-      g_xinput_controller_present.store(true); g_xinput_menu_mode.store(true);
-      RequireCombat(!DeathtrapGameplayAcceptsMouseCombat(), "controller pause/menu must reject combat");
-      g_xinput_controller_present.store(false); g_xinput_menu_mode.store(false);
+      PutCombat(session.data() + 8u, uint32_t{1});
+      RequireCombat(!DeathtrapGameplayAcceptsMouseCombat(), "native pause must reject combat");
+      PutCombat(session.data() + 8u, uint32_t{0});
       g_controller_selector_overlay.store(1);
       RequireCombat(!DeathtrapGameplayAcceptsMouseCombat() && !DeathtrapThirdPersonMouseAttackCameraRelativeAvailable(), "controller radial must retain exclusive ownership");
       g_controller_selector_overlay.store(0);
@@ -491,6 +535,7 @@ int main() {
     g_native_joystick_hooks_installed.store(true);
     g_xinput_get_state = &CombatTestPad;
     PutCombat(g_dungeon_base + kUiSelectorModeRva, uint8_t{0});
+    CheckLevelStartInput(session.data());
     CheckPetrifiedOrbit(root.data(), context.data(), player.data());
     const bool was_camera_relative = g_xinput_camera_relative_movement;
     g_xinput_camera_relative_movement = false;
@@ -573,15 +618,18 @@ int main() {
     captured_pad_result=ERROR_SUCCESS;
     RequireCombat(captured_combat.Consume()==0,"disconnection discards an unsent RT tap");
     PollOpenControllerSelectorForPresentation();
+    PutCombat(session.data() + 8u, uint32_t{1});
     g_xinput_menu_mode.store(true);
     UpdateControllerBaseBindings(captured_pad.Gamepad,false,false);
     RequireCombat(captured_combat.Consume()==0 && !DeathtrapGameplayAcceptsControllerCombat(),
         "frontend transition discards pending combat and blocks dispatch");
+    PutCombat(session.data() + 8u, uint32_t{0});
     g_xinput_menu_mode.store(false);
     CloseControllerSelector();
     g_xinput_controller_present.store(false);
   }
   RequireCombat(test_turns > 0, "bounded turn writer must be exercised");
   CheckRicViperSelector();
-  std::cout << "Selector combat: F1-F4, all four controller radials, RT direction/taps, independent selection, attack-facing, frontend/focus/disconnect guards and four layouts passed\n";
+  std::cout << "Level-start input, briefing Space, F1-F4, controller radials, RT taps, "
+               "attack-facing, focus/disconnect guards and four game layouts passed\n";
 }

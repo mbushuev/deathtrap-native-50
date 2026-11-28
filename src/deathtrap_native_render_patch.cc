@@ -135,6 +135,11 @@ constexpr uintptr_t kRateConsumerSignatureRva = 0x0007F015u;
 constexpr DungeonCodeRva kSchedulerRateSetterRva{0x00050390u};
 constexpr DungeonCodeRva kRenderPresentWaitRva{0x00080600u};
 constexpr DungeonCodeRva kRendererRva{0x0001B320u};
+constexpr DungeonCodeRva kNativePlayStateRva{0x0007F5B0u};
+constexpr DungeonDataRva kNativeSessionListRva{
+    0x001D7A94u, 0x001D84F4u, 0x001D7F64u, 0x001D8144u};
+constexpr DungeonDataRva kNativeLevelBriefingRva{
+    0x000E7C20u, 0x000E8620u, 0x000E80A8u, 0x000E8210u};
 constexpr DungeonCodeRva kSceneCacheUpdateRva{0x00039160u};
 constexpr DungeonCodeRva kCameraCacheUpdateRva{0x00003860u};
 // These two leaves are the narrow transform portion of the broad 0x3860
@@ -960,7 +965,6 @@ double g_selector_presentation_yaw_offset = 0.0;
 double g_selector_presentation_pitch_offset = 0.0;
 std::atomic<uint64_t> g_last_controller_interaction_ms{0};
 std::atomic<uint64_t> g_controller_interaction_sequence{0};
-std::atomic<uint64_t> g_last_mode3_source_tick_ms{0};
 // The retail root-menu context does not expose a stable "game in progress"
 // flag: the candidate field remains zero after returning from gameplay. Keep
 // a process-local latch instead. Mode 3 is entered by real gameplay before
@@ -4122,6 +4126,24 @@ bool SweepOwnedCameraAgainstRooms(
 }
 
 enum class PlayerInputState { kUnavailable, kPlaying, kPetrified };
+
+bool NativeGameplayInputActive() {
+  uintptr_t session = 0;
+  uintptr_t update = 0;
+  uint32_t briefing = 0;
+  uint32_t flags = 0;
+  // The native session gets its play callback before the briefing returns.
+  // Pausing keeps the previous player and camera alive. Neither their
+  // presence nor the timing of a render callback defines input ownership.
+  return g_dungeon_base &&
+      SafeReadValue(g_dungeon_base + kNativeLevelBriefingRva, &briefing) &&
+      briefing == 0 &&
+      SafeReadValue(g_dungeon_base + kNativeSessionListRva, &session) && session &&
+      SafeReadValue(reinterpret_cast<const void*>(session), &update) &&
+      update == reinterpret_cast<uintptr_t>(g_dungeon_base + kNativePlayStateRva) &&
+      SafeReadValue(reinterpret_cast<const void*>(session + 8u), &flags) &&
+      (flags & 1u) == 0;
+}
 
 PlayerInputState ReadPlayerInputState(bool require_selector_closed = false) {
   if (!g_dungeon_base || g_death_recovery_dialog_active.load(std::memory_order_acquire)) {
@@ -10641,8 +10663,6 @@ void __cdecl HookMode3Camera(void* controller) {
   g_owned_camera_player_fade_requested.store(
       false, std::memory_order_release);
   g_third_person_orbit_state.collision_constrained_this_tick = false;
-  g_last_mode3_source_tick_ms.store(GetTickCount64(),
-                                     std::memory_order_release);
   g_root_menu_gameplay_seen.store(true, std::memory_order_release);
 
   const uintptr_t base = reinterpret_cast<uintptr_t>(controller);
@@ -14649,12 +14669,14 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
         g_xinput_run_threshold, g_xinput_run_release_threshold,
         g_xinput_action_threshold, g_xinput_walk_release_threshold};
     const uint64_t movement_now_ms = GetTickCount64();
+    // The first gameplay poll follows a native tick too. Starting the filter
+    // with zero elapsed time discards that sample after every menu transition.
     const double movement_elapsed_seconds =
         g_xinput_movement_sample_ms &&
                 movement_now_ms >= g_xinput_movement_sample_ms
             ? static_cast<double>(movement_now_ms -
                                   g_xinput_movement_sample_ms) / 1000.0
-            : 0.0;
+            : static_cast<double>(kOriginalPeriodMilliseconds) / 1000.0;
     g_xinput_movement_sample_ms = movement_now_ms;
     const bool movement_blocked =
         selector_blocks_movement || controller_combat_owns_stick;
@@ -14918,30 +14940,14 @@ void UpdateControllerBaseBindings(const XINPUT_GAMEPAD& pad, bool gameplay,
   g_previous_xinput_buttons = buttons;
 }
 
-bool RecentMode3CameraCallback() {
-  const uint64_t last_mode3_ms =
-      g_last_mode3_source_tick_ms.load(std::memory_order_acquire);
-  const uint64_t now_ms = GetTickCount64();
-  const uint64_t watchdog_ms =
-      g_camera_source_watchdog_ms.load(std::memory_order_acquire);
-  return last_mode3_ms && now_ms >= last_mode3_ms &&
-         now_ms - last_mode3_ms <= watchdog_ms;
-}
-
 void ReconcileXInputFrontendOwnership(PlayerInputState state) {
-  // Pause/front-end screens retain the live player pointer, so the presence
-  // of a recent mode-3 gameplay camera callback is the authoritative owner.
-  // This also repairs transitions made with a physical mouse: no XInput
-  // Start edge is required to return the right stick to cursor duty.
-  const bool gameplay_camera_active = state == PlayerInputState::kPetrified
-      ? g_third_person_orbit_enabled && RecentMode3CameraCallback()
-      : RecentMode3CameraCallback() || RetailFirstPersonActive();
   const bool menu_mode = g_death_recovery_dialog_active.load(std::memory_order_acquire) ||
-      state == PlayerInputState::kUnavailable || !gameplay_camera_active;
+      state == PlayerInputState::kUnavailable || !NativeGameplayInputActive() ||
+      (state == PlayerInputState::kPetrified && !g_third_person_orbit_enabled);
   const bool previous =
       g_xinput_menu_mode.exchange(menu_mode, std::memory_order_acq_rel);
   if (previous != menu_mode && g_debug_log) {
-    AppendNativeLog("xinput frontend owner=%s source=camera_watchdog",
+    AppendNativeLog("xinput frontend owner=%s source=native_session",
                     menu_mode ? "MENU" : "GAMEPLAY");
   }
 }
@@ -21338,6 +21344,7 @@ bool InstallGameTextFix() {
 #include "inversion_turtle_runtime.inl"
 #include "level_start_loadout_runtime.inl"
 #include "save_thumbnail_runtime.inl"
+#include "level_briefing_input_runtime.inl"
 
 bool InstallRootMenuEscapeHook() {
   if (!g_dungeon_base) {
@@ -21907,71 +21914,31 @@ void NotifyDeathtrapOperateInput() {
 }
 
 bool DeathtrapModernCameraConsumesMouse() {
-  if (!g_third_person_orbit_enabled ||
+  if (!g_third_person_orbit_enabled || !IsGameForeground() ||
       (g_controller_selector_overlay.load(std::memory_order_acquire) & 1u) !=
           0u) {
     return false;
   }
   // Tab and R3 both enter the retail mode-4 camera. Hand physical mouse axes
-  // back immediately; the mode-3 watchdog alone would delay native look and
-  // cannot identify an R3 request before the controller mode flips.
+  // back immediately, including an R3 request before the native mode flips.
   if (g_xinput_first_person_toggled.load(std::memory_order_acquire) ||
       RetailFirstPersonActive()) {
     return false;
   }
-  if (ReadPlayerInputState() == PlayerInputState::kUnavailable) {
-    return false;
-  }
-  const uint64_t last_mode3_ms =
-      g_last_mode3_source_tick_ms.load(std::memory_order_acquire);
-  const uint64_t now_ms = GetTickCount64();
-  const uint64_t watchdog_ms =
-      g_camera_source_watchdog_ms.load(std::memory_order_acquire);
-  if (!last_mode3_ms || now_ms - last_mode3_ms > watchdog_ms) {
-    // Pause and frontend screens may keep the player/controller pointers
-    // alive, but they stop the gameplay mode-3 camera callback. This watchdog
-    // is therefore the authoritative mouse hand-off for physical-mouse runs
-    // where no XInput Start transition exists.
-    return false;
-  }
-  CURSORINFO cursor = {};
-  cursor.cbSize = sizeof(cursor);
-  if (!g_display_windowed && GetCursorInfo(&cursor) &&
-      (cursor.flags & CURSOR_SHOWING) != 0u) {
-    // Pause/options screens may retain every gameplay pointer used by
-    // DeathtrapGameplayReady.  Their visible native cursor is the reliable
-    // frontend ownership signal in borderless mode, including mouse-only runs
-    // where no XInput Start transition exists.  The legacy game leaves the
-    // system cursor visible over a framed window even during gameplay, so
-    // windowed mode must use the mode-3 watchdog and native gameplay test.
-    return false;
-  }
-  // menu_mode is a pause/frontend override maintained by the XInput bridge.
-  // Without a connected controller it used to remain true forever, so a real
-  // mouse controlled Lara until plugging a pad happened to clear the flag.
-  // Ignore that controller-owned override when no controller is present; the
-  // native gameplay test still releases the mouse in movies and main menus.
-  return !g_xinput_controller_present.load(std::memory_order_acquire) ||
-         !g_xinput_menu_mode.load(std::memory_order_acquire);
+  return NativeGameplayInputActive() &&
+         ReadPlayerInputState() != PlayerInputState::kUnavailable;
 }
 
 static bool GameplayAcceptsCombat(bool controller) {
   uint8_t selector_mode = 0;
   if (!IsGameForeground() ||
       (!controller && (g_controller_selector_overlay.load(std::memory_order_acquire) & 1u) != 0u) ||
-      !DeathtrapGameplayReady(false) ||
+      !NativeGameplayInputActive() || !DeathtrapGameplayReady(false) ||
       !SafeReadValue(g_dungeon_base + kUiSelectorModeRva, &selector_mode) ||
       selector_mode > 4u) {
     return false;
   }
-  CURSORINFO cursor = {};
-  cursor.cbSize = sizeof(cursor);
-  if (!g_display_windowed && GetCursorInfo(&cursor) &&
-      (cursor.flags & CURSOR_SHOWING) != 0u) {
-    return false;
-  }
-  return !g_xinput_controller_present.load(std::memory_order_acquire) ||
-         !g_xinput_menu_mode.load(std::memory_order_acquire);
+  return true;
 }
 
 bool DeathtrapGameplayAcceptsMouseCombat() {
@@ -22160,6 +22127,7 @@ bool InstallDeathtrapNativeRenderHooks() {
   // to its own native Return-to-game action when a session exists, or consume
   // it at the startup menu. Clickable Quit and every submenu stay native.
   InstallRootMenuEscapeHook();
+  InstallLevelBriefingInputHook();
 
   // Page the retail keyboard screen without changing its fixed 11-row
   // storage. Failure leaves the original screen completely untouched.
