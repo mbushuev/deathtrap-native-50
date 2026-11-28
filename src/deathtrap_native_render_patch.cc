@@ -5327,17 +5327,32 @@ bool InitializeThirdPersonOrbit(void* controller, int32_t native_x,
                                 int32_t native_y, int32_t native_z,
                                 const std::array<int32_t, 3>& focus,
                                 uint64_t input_sequence) {
-  const double dx = static_cast<double>(native_x - focus[0]);
-  const double dy = static_cast<double>(native_y - focus[1]);
-  const double dz = static_cast<double>(native_z - focus[2]);
+  const double dx = static_cast<double>(native_x) - focus[0];
+  const double dy = static_cast<double>(native_y) - focus[1];
+  const double dz = static_cast<double>(native_z) - focus[2];
   const double horizontal = std::hypot(dx, dz);
   const double radius = std::hypot(horizontal, dy);
-  if (!std::isfinite(radius) || radius < 250.0 || radius > 5000.0) {
-    return false;
+  double yaw = std::atan2(dx, dz);
+  double pitch = std::atan2(dy, std::max(horizontal, 1.0));
+  if (radius < 250.0 || radius > 5000.0) {
+    // Loading can leave the retail endpoint clipped almost onto the actor.
+    // Seed behind the actor so an unusable retail angle cannot stall orbit
+    // initialization. The resulting endpoint still goes through collision.
+    int32_t heading = 0;
+    if (!ReadLivePlayerHeading(&heading, nullptr)) return false;
+    const auto target = deathtrap::camera::BehindActorRecenterTarget(
+        heading, kPlayerHeadingUnitsPerTurn,
+        g_third_person_orbit_preferred_radius, 240.0);
+    if (!target.valid) return false;
+    yaw = target.yaw;
+    pitch = target.pitch;
+    AppendDeathtrapSupportLog(
+        "support_camera_orbit_seed source=actor_heading native_radius=%.1f",
+        radius);
   }
   g_third_person_orbit_state.controller = controller;
   g_third_person_orbit_state.engaged = true;
-  g_third_person_orbit_state.yaw = std::atan2(dx, dz);
+  g_third_person_orbit_state.yaw = yaw;
   g_third_person_heading_reference_microradians.store(
       static_cast<int32_t>(std::lround(
           g_third_person_orbit_state.yaw * 1000000.0)),
@@ -5345,7 +5360,7 @@ bool InitializeThirdPersonOrbit(void* controller, int32_t native_x,
   g_third_person_heading_reference_valid.store(true,
                                                 std::memory_order_release);
   g_third_person_orbit_state.pitch = std::clamp(
-      std::atan2(dy, std::max(horizontal, 1.0)),
+      pitch,
       g_third_person_orbit_min_pitch_radians,
       g_third_person_orbit_max_pitch_radians);
   g_camera_recenter.Cancel();

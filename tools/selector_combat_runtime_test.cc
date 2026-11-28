@@ -77,6 +77,34 @@ uintptr_t __cdecl CombatTestSpecialMovementStage() {
   return test_turns;
 }
 
+void CheckClippedOrbitStart(uint8_t* heading_node) {
+  std::array<uint8_t, 0x280> camera{};
+  const std::array<int32_t, 3> focus{-6576, 6400, 23};
+  const std::array<int32_t, 3> clipped_native{-6542, 6406, -42};
+  constexpr int32_t kHeading = 384;
+  PutCombat(heading_node + kPlayerHeadingOffset, kHeading);
+  PutCombat(camera.data() + kCameraControllerFocusOffset, focus);
+  const auto target = deathtrap::camera::BehindActorRecenterTarget(
+      kHeading, kPlayerHeadingUnitsPerTurn,
+      g_third_person_orbit_preferred_radius, 240.0);
+
+  constexpr int32_t kMouseDelta = 120;
+  g_third_person_mouse_delta_x.store(kMouseDelta);
+  std::array<int32_t, 3> orbit{};
+  RequireCombat(BuildThirdPersonOrbitPosition(camera.data(), clipped_native, &orbit),
+      "the clipped retail position from a cold save must initialize the orbit");
+  const double yaw = g_third_person_orbit_state.yaw;
+  const double expected_yaw = target.yaw +
+      kMouseDelta * g_third_person_mouse_horizontal_radians;
+  RequireCombat(std::abs(std::remainder(yaw - expected_yaw, 2.0 * kOrbitPi)) < 1.0e-6 &&
+      !g_third_person_mouse_delta_x.load(),
+      "the first mouse sample must rotate the orbit seeded behind the actor");
+  RequireCombat(BuildThirdPersonOrbitPosition(camera.data(), clipped_native, &orbit) &&
+      g_third_person_orbit_state.yaw == yaw,
+      "a continued clipped retail camera must preserve the controlled orbit");
+  ResetThirdPersonOrbit("test");
+}
+
 void CheckLevelStartInput(uint8_t* session) {
   // The live player and native play callback already exist during the
   // briefing. Input ownership changes only when the prompt finishes.
@@ -431,6 +459,8 @@ int main() {
             reinterpret_cast<uintptr_t>(root.data()));
   PutCombat(g_dungeon_base + kUiOwnerPointerRva,
             reinterpret_cast<uintptr_t>(player.data()));
+  CheckClippedOrbitStart(heading_node.data());
+  g_third_person_heading_reference_valid.store(true);
   PutCombat(controller.data() + 0x2EC,
             reinterpret_cast<uintptr_t>(g_dungeon_base + kPlayerStateDispatcherRva));
   PutCombat(g_dungeon_base + kCameraControllerRva +
