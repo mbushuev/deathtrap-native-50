@@ -36,20 +36,30 @@ void CheckBonePresentation() {
     return Matrix3x4{{ToFixed(1.0), 0, 0, 0, cosine, sine,
                       0, -sine, cosine, 0, 0, 0}};
   };
+  const auto rotation_phase = [](const Matrix3x4& older,
+                                 const Matrix3x4& previous,
+                                 const Matrix3x4& current, double phase) {
+    RigidTransform from, to;
+    RequireQueue(DecodeRigid(previous, &from) && DecodeRigid(current, &to),
+                 "Fixture must contain rigid transforms");
+    return BoneRotationPhase(older, from, to, phase);
+  };
   const Matrix3x4 neutral = pose(0.0);
   const Matrix3x4 small_turn = pose(0.03);
-  const Matrix3x4 large_turn = pose(0.5);
-  RequireQueue(BoneRotationPhase(neutral, neutral, large_turn, 0.25) == 0.25,
-               "Large joint rotations use the original interpolation phase");
-  RequireQueue(BoneRotationPhase(neutral, neutral, small_turn, 0.0) == 0.0 &&
-                   BoneRotationPhase(neutral, neutral, small_turn, 1.0) == 1.0,
+  const Matrix3x4 fast_turn = pose(1.0);
+  RequireQueue(rotation_phase(neutral, neutral, pose(2.0), 0.25) == 0.25,
+               "A rotation discontinuity must keep the snap policy");
+  RequireQueue(rotation_phase(neutral, neutral, fast_turn, 0.25) < 0.25,
+               "Fast continuous rotations must also ease between poses");
+  RequireQueue(rotation_phase(neutral, neutral, fast_turn, 0.0) == 0.0 &&
+                   rotation_phase(neutral, neutral, fast_turn, 1.0) == 1.0,
                "Joint interpolation preserves both source endpoints");
 
-  for (const auto& preceding : {neutral, pose(-0.07), pose(0.03)}) {
+  for (const auto& preceding : {neutral, pose(-0.7), pose(0.8)}) {
     double last_phase = 0.0;
     for (int i = 1; i <= 12; ++i) {
-      const double phase = BoneRotationPhase(
-          preceding, neutral, small_turn, i / 12.0);
+      const double phase = rotation_phase(
+          preceding, neutral, fast_turn, i / 12.0);
       RequireQueue(phase > last_phase && phase <= 1.0,
                    "A joint must progress monotonically even in slow motion");
       last_phase = phase;
@@ -91,6 +101,23 @@ void CheckBonePresentation() {
   RestoreScene(current);
   RequireQueue(rendered_bone().values == small_turn.values,
                "Restoring the scene must restore the exact source endpoint");
+
+  // Turn the same hierarchy into a non-player actor using the ordinary scene
+  // traversal. A large but continuous rotation must ease on that rig too.
+  for (auto* scene : {&older, &previous, &current}) {
+    scene->player = 0;
+  }
+  current.nodes[bone].local = fast_turn;
+  current.nodes[bone].world = fast_turn;
+  ApplyInterpolatedScene(nullptr, previous, current, 1.0 / 3.0, false, 3);
+  const auto enemy_linear = rendered_bone();
+  ApplyInterpolatedScene(&older, previous, current, 1.0 / 3.0, false, 3);
+  RequireQueue(rendered_bone().values[5] < enemy_linear.values[5],
+               "A fast rotation on another actor must use pose history");
+  ++current.nodes[bone].render_resource_handle;
+  ApplyInterpolatedScene(&older, previous, current, 1.0 / 3.0, false, 4);
+  RequireQueue(rendered_bone().values == enemy_linear.values,
+               "A resource replacement must discard history for that joint");
 }
 
 void CheckProjectiveQuads() {
