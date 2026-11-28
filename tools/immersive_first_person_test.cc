@@ -37,6 +37,18 @@ int main() {
                   &carried_head),
           "a stale mount or a teleport must require a new measurement");
 
+  std::array<int32_t, 3> eye{};
+  Require(ResolveImmersivePresentationEye(
+              {100, 200, 300}, {102, 202, 304}, {100, 201, 301},
+              {46, 210, 290}, {48, 212, 294}, {47, 211, 292},
+              0.5, eye) && eye == std::array<int32_t, 3>{46, 211, 291},
+          "eye tracks the rendered head with the accepted offsets");
+  Require(!ResolveImmersivePresentationEye(
+              {100, 200, 300}, {102, 202, 304}, {120, 201, 301},
+              {46, 210, 290}, {48, 212, 294}, {47, 211, 292},
+              0.5, eye),
+          "a large discrepancy requires the ordinary camera path");
+
   Require(MatchesImmersiveHeadJoint(1, 0, 3, 76, 5),
           "female head with one braid child must resolve");
   Require(MatchesImmersiveHeadJoint(0, 0, 3, 90, 5),

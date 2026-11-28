@@ -56,6 +56,38 @@ inline bool TranslateRecentImmersiveHeadMount(
   return true;
 }
 
+// Use both accepted eye offsets with the actual rendered head position.
+inline bool ResolveImmersivePresentationEye(
+    const std::array<int32_t, 3>& previous_head,
+    const std::array<int32_t, 3>& current_head,
+    const std::array<int32_t, 3>& midpoint_head,
+    const std::array<int32_t, 3>& previous_eye,
+    const std::array<int32_t, 3>& current_eye,
+    const std::array<int32_t, 3>& midpoint_eye,
+    double phase, std::array<int32_t, 3>& resolved) {
+  std::array<int32_t, 3> candidate{};
+  double correction_squared = 0.0;
+  for (size_t axis = 0; axis < candidate.size(); ++axis) {
+    const double from = static_cast<double>(previous_eye[axis]) - previous_head[axis];
+    const double to = static_cast<double>(current_eye[axis]) - current_head[axis];
+    const auto eye = std::llround(midpoint_head[axis] + from + (to - from) * phase);
+    if (eye < std::numeric_limits<int32_t>::min() ||
+        eye > std::numeric_limits<int32_t>::max()) {
+      return false;
+    }
+    candidate[axis] = static_cast<int32_t>(eye);
+    const double delta = static_cast<double>(eye) - midpoint_eye[axis];
+    correction_squared += delta * delta;
+  }
+  // This only reconciles hierarchy rounding and small arc differences.
+  // Larger offsets belong to the existing camera collision and mode logic.
+  if (correction_squared == 0.0 || correction_squared > 4.0 * 4.0) {
+    return false;
+  }
+  resolved = candidate;
+  return true;
+}
+
 // Straight forward/back movement needs no vector redirection: Dungeon's own
 // W/S path already owns animation root motion, step-up and airborne collision.
 // Keep a small longitudinal cone for real controller sticks so harmless axial

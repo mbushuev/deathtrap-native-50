@@ -18253,6 +18253,8 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
     return false;
   };
 
+  bool head_camera_chord_clear = false;
+  const bool head_view = CustomHeadViewPublished(GetTickCount64());
   std::unordered_map<uintptr_t, MidpointNode> midpoint_nodes;
   midpoint_nodes.reserve(current.nodes.size());
   for (const auto& entry : current.nodes) {
@@ -18275,8 +18277,7 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
       // distance for the complete slowed source interval. Head view has no
       // third-person arm and must never enter this interpolation.
       const auto old_camera = previous.nodes.find(current.camera);
-      if (CustomHeadViewPublished(GetTickCount64()) &&
-          previous.camera == current.camera &&
+      if (head_view && previous.camera == current.camera &&
           old_camera != previous.nodes.end() &&
           old_camera->second.parent == entry.second.parent) {
         const auto& old_world = old_camera->second.world;
@@ -18292,6 +18293,7 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
         // Keep the accepted endpoint if the straight segment is obstructed.
         if (!CameraTemporalChordIntersectsSceneObjects(
                 current, previous, old_eye, new_eye, &hit, &hit_distance)) {
+          head_camera_chord_clear = true;
           const auto eye = InterpolateHeadCameraTranslation(
               {old_eye.x, old_eye.y, old_eye.z},
               {new_eye.x, new_eye.y, new_eye.z}, phase);
@@ -18630,6 +18632,8 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
               static_cast<unsigned long long>(
                   g_camera_temporal_chord_guards));
         }
+      } else {
+        head_camera_chord_clear = head_view;
       }
     }
   }
@@ -18772,6 +18776,44 @@ InterpolationStats ApplyInterpolatedScene(const SceneSnapshot* older,
                                 std::numeric_limits<int32_t>::max()));
       }
       ++stats.player_contact_projection_nodes;
+    }
+  }
+  // Follow the interpolated head after the actor's hierarchy is complete.
+  // The camera's orientation and its exact endpoints keep their own timing.
+  if (head_camera_chord_clear && !authoritative_contact_projection &&
+      !player_contact_bridge_valid &&
+      !current.player_contact_manifold_projection_valid &&
+      current.camera_sector_valid && previous.camera_sector_valid &&
+      current.camera_sector == previous.camera_sector) {
+    const auto& mount = g_immersive_head_mount_sample;
+    const auto head = ResolveKnownImmersiveHeadJoint(current, mount);
+    if (head && ResolveKnownImmersiveHeadJoint(previous, mount) == head &&
+        midpoint_nodes.at(head).world_interpolated) {
+      auto& camera = midpoint_nodes.at(current.camera).world;
+      const auto position = [](const Matrix3x4& world) {
+        return std::array<int32_t, 3>{world.values[9], world.values[10],
+                                      world.values[11]};
+      };
+      const auto start = position(camera);
+      std::array<int32_t, 3> eye{};
+      if (ResolveImmersivePresentationEye(
+              position(previous.nodes.at(head).world),
+              position(current.nodes.at(head).world),
+              position(midpoint_nodes.at(head).world),
+              position(previous.nodes.at(current.camera).world),
+              position(current.nodes.at(current.camera).world), start,
+              phase, eye)) {
+        deathtrap_camera::RoomSweepResult room{};
+        std::array<int32_t, 3> safe{};
+        if (SweepOwnedCameraAgainstRooms(start, eye, current.camera_sector,
+                                         &room, &safe) && safe == eye &&
+            !CameraTemporalChordIntersectsSceneObjects(
+                current, previous,
+                {double(start[0]), double(start[1]), double(start[2])},
+                {double(eye[0]), double(eye[1]), double(eye[2])})) {
+          std::copy(eye.begin(), eye.end(), camera.values.begin() + 9);
+        }
+      }
     }
   }
   for (const auto& entry : midpoint_nodes) {
